@@ -6,4 +6,4 @@ Type=oneshot
 User=tetrax
 Group=tetrax
 WorkingDirectory=/home/tetrax/workspace/upgrade_path
-ExecStart=/usr/bin/python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager
+ExecStart=/usr/bin/python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog

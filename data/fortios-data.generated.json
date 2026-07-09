@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T21:00:26Z",
+  "generatedAt": "2026-07-09T21:38:51Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -972,7 +972,14 @@
                 "resolved",
                 "special",
                 "upgrade"
-              ]
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.0.15/fortios-release-notes",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.0.15/fortios-release-notes/230510/changes-in-default-behavior",
+                "known": "https://docs.fortinet.com/document/fortigate/7.0.15/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.0.15/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.0.15/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.0.16",
@@ -1082,7 +1089,14 @@
                 "resolved",
                 "special",
                 "upgrade"
-              ]
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/230510/changes-in-default-behavior",
+                "known": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.2.11",
@@ -1175,7 +1189,14 @@
                 "resolved",
                 "special",
                 "upgrade"
-              ]
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes/230510/changes-in-default-behavior",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.4.9",
@@ -1200,7 +1221,13 @@
                 "resolved",
                 "special",
                 "upgrade"
-              ]
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.4.12",
@@ -10666,7 +10693,13 @@
                 "resolved",
                 "special",
                 "upgrade"
-              ]
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes",
+                "known": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.4.0",
@@ -10754,14 +10787,32 @@
                 "resolved",
                 "special",
                 "upgrade"
-              ]
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
-              ]
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/230510/changes-in-default-behavior",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.6.0",
@@ -10816,8 +10867,20 @@
               "version": "7.6.7",
               "build": "3704",
               "notes": [
-                "release-notes"
-              ]
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.6.7/fortios-release-notes",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.6.7/fortios-release-notes/230510/changes-in-default-behavior",
+                "known": "https://docs.fortinet.com/document/fortigate/7.6.7/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.6.7/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.6.7/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "8.0.0",
@@ -94547,6 +94610,2572 @@
           ]
         }
       ]
+    },
+    {
+      "id": "forticlient",
+      "label": "FortiClient (Windows/macOS/Linux)",
+      "models": [
+        {
+          "id": "linux",
+          "label": "FortiClient (Linux)",
+          "firmwares": [
+            {
+              "version": "6.0.0",
+              "build": "0029",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.0/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.0.1",
+              "build": "0048",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.0.5",
+              "build": "0106",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.5/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.0.6",
+              "build": "0125",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.6/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.0.8",
+              "build": "0140",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.8/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.2.0",
+              "build": "0243",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.0/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.2.1",
+              "build": "0272",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.1/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.2.2",
+              "build": "0297",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.2/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.2.3",
+              "build": "0324",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.3/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.2.4",
+              "build": "0340",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.4/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.2.6",
+              "build": "0356",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.6/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.2.7",
+              "build": "0379",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.7/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.2.8",
+              "build": "0402",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.8/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.2.9",
+              "build": "0418",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.9/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.4.0",
+              "build": "0851",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.0/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.4.1",
+              "build": "0895",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.1/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.4.2",
+              "build": "0938",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.2/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.4.3",
+              "build": "0959",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.3/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.4.4",
+              "build": "0984",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.4/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.4.7",
+              "build": "1024",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.7/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.4.8",
+              "build": "1056",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.8/linux-release-notes"
+              }
+            },
+            {
+              "version": "6.4.9",
+              "build": "1083",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.9/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.0",
+              "build": "0018",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.0/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.1",
+              "build": "0057",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.1/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.2",
+              "build": "0063",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.2/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.3",
+              "build": "0137",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.3/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.4",
+              "build": "0169",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.4/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.6",
+              "build": "0214",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.6/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.7",
+              "build": "0246",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.7/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.8",
+              "build": "0292",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.8/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.9",
+              "build": "0322",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.9/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.10",
+              "build": "0346",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.10/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.11",
+              "build": "0369",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.11/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.12",
+              "build": "0370",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.12/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.0.13",
+              "build": "0376",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.13/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.0",
+              "build": "0644",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.0/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.1",
+              "build": "0700",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.1/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.2",
+              "build": "0753",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.2/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.3",
+              "build": "0790",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.3/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.4",
+              "build": "0809",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.4/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.5",
+              "build": "0854",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.5/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.6",
+              "build": "0872",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.6/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.7",
+              "build": "0905",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.7/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.8",
+              "build": "0926",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.8/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.9",
+              "build": "0953",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.9/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.10",
+              "build": "0974",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.10/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.11",
+              "build": "0995",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.11/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.12",
+              "build": "1018",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.12/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.13",
+              "build": "1031",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.13/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.2.14",
+              "build": "1042",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.14/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.4.0",
+              "build": "1636",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.0/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.4.1",
+              "build": "1697",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.1/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.4.2",
+              "build": "1698",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.2/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.4.3",
+              "build": "1736",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.3/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.4.5",
+              "build": "1835.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.5/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.4.6",
+              "build": "1867.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.6/linux-release-notes"
+              }
+            },
+            {
+              "version": "7.4.7",
+              "build": "1868.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.7/linux-release-notes"
+              }
+            },
+            {
+              "version": "8.0.0",
+              "build": "0055",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/8.0.0/linux-release-notes"
+              }
+            }
+          ]
+        },
+        {
+          "id": "macos",
+          "label": "FortiClient (macOS)",
+          "firmwares": [
+            {
+              "version": "6.0.1",
+              "build": "0028",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.0.4",
+              "build": "0079",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.4/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.0.5",
+              "build": "0104",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.5/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.0.6",
+              "build": "0132",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.6/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.0.7",
+              "build": "0145",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.7/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.0.8",
+              "build": "0149",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.8/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.0.9",
+              "build": "0162",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.9/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.0.10",
+              "build": "0174",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.10/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.0",
+              "build": "0614",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.0/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.1",
+              "build": "0654",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.1/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.2",
+              "build": "0685",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.2/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.3",
+              "build": "0707",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.3/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.4",
+              "build": "0724",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.4/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.5",
+              "build": "0726",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.5/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.6",
+              "build": "0737",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.6/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.7",
+              "build": "0756",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.7/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.8",
+              "build": "0774",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.8/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.2.9",
+              "build": "0788",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.9/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.0",
+              "build": "1231",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.0/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.1",
+              "build": "1267",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.1/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.2",
+              "build": "1305",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.2/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.3",
+              "build": "1325",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.3/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.4",
+              "build": "1353",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.4/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.5",
+              "build": "1366",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.5/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.6",
+              "build": "1378",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.6/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.7",
+              "build": "1405",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.7/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.8",
+              "build": "1434",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.8/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.9",
+              "build": "1460",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.9/macos-release-notes"
+              }
+            },
+            {
+              "version": "6.4.10",
+              "build": "1481",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.10/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.0",
+              "build": "0022",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.0/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.1",
+              "build": "0060",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.1/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.2",
+              "build": "0069",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.2/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.3",
+              "build": "0131",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.3/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.4",
+              "build": "0165",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.4/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.5",
+              "build": "0166",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.5/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.6",
+              "build": "0208",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.6/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.7",
+              "build": "0245",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.7/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.8",
+              "build": "0308",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.8/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.9",
+              "build": "0360",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.9/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.10",
+              "build": "0396",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.10/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.11",
+              "build": "0433",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.11/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.12",
+              "build": "0437",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.12/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.13",
+              "build": "0451",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.13/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.0.14",
+              "build": "0453",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.14/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.0",
+              "build": "0655",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.0/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.1",
+              "build": "0718",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.1/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.2",
+              "build": "0776",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.2/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.3",
+              "build": "0822",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.3/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.4",
+              "build": "0850",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.4/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.5",
+              "build": "0916",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.5/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.6",
+              "build": "0938",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.6/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.7",
+              "build": "0976",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.7/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.8",
+              "build": "0999",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.8/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.9",
+              "build": "1033",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.9/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.10",
+              "build": "1058",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.10/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.11",
+              "build": "1081",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.11/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.12",
+              "build": "1106",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.12/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.13",
+              "build": "1121",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.13/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.2.14",
+              "build": "1132",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.14/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.4.0",
+              "build": "1645",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.0/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.4.1",
+              "build": "1716",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.1/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.4.2",
+              "build": "1717",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.2/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.4.3",
+              "build": "1761",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.3/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.4.4",
+              "build": "1831.F",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.4/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.4.5",
+              "build": "1888.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.5/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.4.6",
+              "build": "1926.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.6/macos-release-notes"
+              }
+            },
+            {
+              "version": "7.4.7",
+              "build": "1928.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.7/macos-release-notes"
+              }
+            },
+            {
+              "version": "8.0.0",
+              "build": "0078",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/8.0.0/macos-release-notes"
+              }
+            }
+          ]
+        },
+        {
+          "id": "windows",
+          "label": "FortiClient (Windows)",
+          "firmwares": [
+            {
+              "version": "6.0.0",
+              "build": "0067",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.0/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.0.1",
+              "build": "0099",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.0.3",
+              "build": "0155",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.3/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.0.4",
+              "build": "0182",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.4/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.0.5",
+              "build": "0209",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.5/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.0.6",
+              "build": "0242",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.6/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.0.7",
+              "build": "0256",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.7/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.0.8",
+              "build": "0261",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.8/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.0.9",
+              "build": "0277",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.9/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.0.10",
+              "build": "0297",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.10/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.0",
+              "build": "0780",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.0/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.1",
+              "build": "0831",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.1/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.2",
+              "build": "0877",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.2/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.3",
+              "build": "0912",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.3/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.4",
+              "build": "0931",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.4/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.5",
+              "build": "0933",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.5/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.6",
+              "build": "0951",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.6/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.7",
+              "build": "0984",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.7/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.8",
+              "build": "1012",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.8/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.2.9",
+              "build": "1032",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.9/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.0",
+              "build": "1464",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.0/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.1",
+              "build": "1519",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.1/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.2",
+              "build": "1580",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.2/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.3",
+              "build": "1608",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.3/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.4",
+              "build": "1655",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.4/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.5",
+              "build": "1657",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.5/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.6",
+              "build": "1658",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.6/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.7",
+              "build": "1713",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.7/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.8",
+              "build": "1755",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.8/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.9",
+              "build": "1797",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.9/windows-release-notes"
+              }
+            },
+            {
+              "version": "6.4.10",
+              "build": "1821",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.10/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.0",
+              "build": "0029",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.0/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.1",
+              "build": "0083",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.1/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.2",
+              "build": "0090",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.2/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.3",
+              "build": "0193",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.3/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.4",
+              "build": "0236",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.4/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.5",
+              "build": "0238",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.5/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.6",
+              "build": "0290",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.6/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.7",
+              "build": "0345",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.7/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.8",
+              "build": "0427",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.8/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.9",
+              "build": "0493",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.9/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.10",
+              "build": "0538",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.10/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.11",
+              "build": "0569",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.11/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.12",
+              "build": "0572",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.12/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.13",
+              "build": "0577",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.13/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.0.14",
+              "build": "0585",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.14/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.0",
+              "build": "0690",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.0/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.1",
+              "build": "0779",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.1/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.2",
+              "build": "0864",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.2/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.3",
+              "build": "0908",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.3/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.4",
+              "build": "0972",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.4/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.5",
+              "build": "1053",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.5/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.6",
+              "build": "1076",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.6/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.7",
+              "build": "1116",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.7/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.8",
+              "build": "1140",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.8/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.9",
+              "build": "1185",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.9/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.10",
+              "build": "1217",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.10/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.11",
+              "build": "1241",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.11/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.12",
+              "build": "1269",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.12/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.13",
+              "build": "1284",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.13/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.2.14",
+              "build": "1296",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.14/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.4.0",
+              "build": "1658",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.0/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.4.1",
+              "build": "1736",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.1/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.4.2",
+              "build": "1737",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.2/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.4.3",
+              "build": "1790",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.3/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.4.4",
+              "build": "1887.F",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.4/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.4.5",
+              "build": "1949.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.5/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.4.6",
+              "build": "2001.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.6/windows-release-notes"
+              }
+            },
+            {
+              "version": "7.4.7",
+              "build": "2003.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.7/windows-release-notes"
+              }
+            },
+            {
+              "version": "8.0.0",
+              "build": "0103",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/8.0.0/windows-release-notes"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "forticlient-ems",
+      "label": "FortiClient EMS",
+      "models": [
+        {
+          "id": "ems",
+          "label": "FortiClient EMS",
+          "firmwares": [
+            {
+              "version": "6.0.0",
+              "build": "0052",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.0/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.0.1",
+              "build": "0077",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.0.2",
+              "build": "0106",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.2/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.0.3",
+              "build": "0134",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.3/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.0.5",
+              "build": "0182",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.5/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.0.8",
+              "build": "0225",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.8/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.2.1",
+              "build": "0780",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.1/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.2.2",
+              "build": "0833",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.2/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.2.3",
+              "build": "0875",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.3/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.2.4",
+              "build": "0894",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.4/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.2.6",
+              "build": "0910",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.6/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.2.7",
+              "build": "0931",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.7/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.2.8",
+              "build": "0961",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.8/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.2.9",
+              "build": "0979",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.2.9/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.4.0",
+              "build": "1429",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.0/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.4.1",
+              "build": "1498",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.1/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.4.2",
+              "build": "1570",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.2/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.4.3",
+              "build": "1600",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.3/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.4.4",
+              "build": "1658",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.4/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.4.7",
+              "build": "1714",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.7/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.4.8",
+              "build": "1753",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.8/ems-release-notes"
+              }
+            },
+            {
+              "version": "6.4.9",
+              "build": "1784",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/6.4.9/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.0",
+              "build": "0042",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.0/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.1",
+              "build": "103",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.1/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.2",
+              "build": "123",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.2/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.3",
+              "build": "0229",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.3/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.4",
+              "build": "0276",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.4/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.6",
+              "build": "0358",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.6/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.7",
+              "build": "0398",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.7/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.8",
+              "build": "0484",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.8/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.9",
+              "build": "0537",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.9/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.10",
+              "build": "0576",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.10/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.11",
+              "build": "0584",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.11/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.12",
+              "build": "0585",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.12/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.0.13",
+              "build": "0588",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.0.13/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.0",
+              "build": "0689",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.0/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.1",
+              "build": "0793",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.1/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.2",
+              "build": "0879",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.2/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.3",
+              "build": "0949",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.3/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.4",
+              "build": "0983",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.4/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.5",
+              "build": "1061",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.5/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.6",
+              "build": "1083",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.6/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.7",
+              "build": "1125",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.7/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.8",
+              "build": "1152",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.8/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.9",
+              "build": "1193",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.9/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.10",
+              "build": "1222",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.10/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.12",
+              "build": "1251",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.12/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.13",
+              "build": "1268",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.13/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.2.14",
+              "build": "1280",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.2.14/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.4.0",
+              "build": "1793",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.0/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.4.1",
+              "build": "1872",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.1/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.4.3",
+              "build": "1926",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.3/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.4.4",
+              "build": "2034.F",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.4/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.4.5",
+              "build": "2111.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.5/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.4.6",
+              "build": "2170.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.6/ems-release-notes"
+              }
+            },
+            {
+              "version": "7.4.7",
+              "build": "2194.M",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/7.4.7/ems-release-notes"
+              }
+            },
+            {
+              "version": "8.0.0",
+              "build": "0121",
+              "notes": [
+                "release-notes"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/forticlient/8.0.0/ems-release-notes"
+              }
+            }
+          ]
+        }
+      ]
     }
   ],
   "paths": [
@@ -94577,7 +97206,7 @@
         "7.4.11"
       ],
       "source": "Fortinet Upgrade Path Tool public service",
-      "fetchedAt": "2026-07-09T19:43:38Z"
+      "fetchedAt": "2026-07-09T21:33:38Z"
     },
     {
       "id": "path-FGT60F-6.2.4-7.4.11",
@@ -94853,13 +97482,39 @@
       ],
       "source": "Fortinet Upgrade Path Tool public service",
       "fetchedAt": "2026-07-09T20:40:05Z"
+    },
+    {
+      "id": "path-FGT80F-7.2.13-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT80F",
+      "from": "7.2.13",
+      "to": "7.4.12",
+      "hops": [
+        "7.2.13",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T21:03:03Z"
+    },
+    {
+      "id": "path-FGT80F-7.4.11-7.6.7",
+      "product": "fortigate-fortios",
+      "model": "FGT80F",
+      "from": "7.4.11",
+      "to": "7.6.7",
+      "hops": [
+        "7.4.11",
+        "7.6.7"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T21:03:25Z"
     }
   ],
   "advisories": [
     {
       "id": "adv-option-allow-traffic-redirect-v-rifier-0a110869",
       "createdAt": "2026-07-09T15:43:54Z",
-      "updatedAt": "2026-07-09T20:40:50Z",
+      "updatedAt": "2026-07-09T21:04:08Z",
       "product": "fortigate-fortios",
       "severity": "warning",
       "title": "Option allow-traffic-redirect à vérifier",
@@ -94871,13 +97526,14 @@
         "7.4.10"
       ],
       "command": "config system global\n    set allow-traffic-redirect disable\n    set ipv6-allow-traffic-redirect disable\nend",
+      "behaviorChange": true,
       "bugId": "1004258",
       "bugVersion": "7.4.10, 7.6.5, 8.0.0"
     },
     {
       "id": "adv-ssl-connection-is-blocked-cert-probe-failure-0ce06c86",
       "createdAt": "2026-07-09T16:14:25Z",
-      "updatedAt": "2026-07-09T18:58:28Z",
+      "updatedAt": "2026-07-09T21:04:17Z",
       "product": "fortigate-fortios",
       "severity": "warning",
       "title": "SSL connection is blocked (cert-probe-failure)",
@@ -94888,7 +97544,8 @@
         "7.4.5",
         "7.2.11"
       ],
-      "command": "config firewall ssl-ssh-profile\nedit <name>\nconfig https\nset cert-probe-failure allow\nend\nend\nend"
+      "command": "config firewall ssl-ssh-profile\nedit <name>\nconfig https\nset cert-probe-failure allow\nend\nend\nend",
+      "behaviorChange": true
     },
     {
       "id": "adv-log-non-visible-en-gui-fortigate-59e91bd9",
@@ -94904,6 +97561,461 @@
       ],
       "bugId": "1282986",
       "bugVersion": "7.4.12"
+    }
+  ],
+  "compatibilities": [
+    {
+      "id": "compat-official-7.2.0",
+      "emsVersion": "7.2.0",
+      "clientVersions": [
+        "7.2.0"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.1",
+      "emsVersion": "7.2.1",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.2",
+      "emsVersion": "7.2.2",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.3",
+      "emsVersion": "7.2.3",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.4",
+      "emsVersion": "7.2.4",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.5",
+      "emsVersion": "7.2.5",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.6",
+      "emsVersion": "7.2.6",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.7",
+      "emsVersion": "7.2.7",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.8",
+      "emsVersion": "7.2.8",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.9",
+      "emsVersion": "7.2.9",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.10",
+      "emsVersion": "7.2.10",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.12",
+      "emsVersion": "7.2.12",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.13",
+      "emsVersion": "7.2.13",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12",
+        "7.2.13"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.2.14",
+      "emsVersion": "7.2.14",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12",
+        "7.2.13",
+        "7.2.14"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.4.0",
+      "emsVersion": "7.4.0",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12",
+        "7.2.13",
+        "7.2.14",
+        "7.4.0"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.4.1",
+      "emsVersion": "7.4.1",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12",
+        "7.2.13",
+        "7.2.14",
+        "7.4.0",
+        "7.4.1"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.4.3",
+      "emsVersion": "7.4.3",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12",
+        "7.2.13",
+        "7.2.14",
+        "7.4.0",
+        "7.4.1",
+        "7.4.2",
+        "7.4.3"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.4.4",
+      "emsVersion": "7.4.4",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12",
+        "7.2.13",
+        "7.2.14",
+        "7.4.0",
+        "7.4.1",
+        "7.4.2",
+        "7.4.3",
+        "7.4.4"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.4.5",
+      "emsVersion": "7.4.5",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12",
+        "7.2.13",
+        "7.2.14",
+        "7.4.0",
+        "7.4.1",
+        "7.4.2",
+        "7.4.3",
+        "7.4.4",
+        "7.4.5"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.4.6",
+      "emsVersion": "7.4.6",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12",
+        "7.2.13",
+        "7.2.14",
+        "7.4.0",
+        "7.4.1",
+        "7.4.2",
+        "7.4.3",
+        "7.4.4",
+        "7.4.5",
+        "7.4.6"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-7.4.7",
+      "emsVersion": "7.4.7",
+      "clientVersions": [
+        "7.2.0",
+        "7.2.1",
+        "7.2.2",
+        "7.2.3",
+        "7.2.4",
+        "7.2.5",
+        "7.2.6",
+        "7.2.7",
+        "7.2.8",
+        "7.2.9",
+        "7.2.10",
+        "7.2.11",
+        "7.2.12",
+        "7.2.13",
+        "7.2.14",
+        "7.4.0",
+        "7.4.1",
+        "7.4.2",
+        "7.4.3",
+        "7.4.4",
+        "7.4.5",
+        "7.4.6",
+        "7.4.7"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
+    },
+    {
+      "id": "compat-official-8.0.0",
+      "emsVersion": "8.0.0",
+      "clientVersions": [
+        "7.4.0",
+        "7.4.1",
+        "7.4.2",
+        "7.4.3",
+        "7.4.4",
+        "7.4.5",
+        "7.4.6",
+        "7.4.7",
+        "8.0.0"
+      ],
+      "note": "",
+      "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
+      "createdAt": "2026-07-09T21:38:51Z"
     }
   ]
 }

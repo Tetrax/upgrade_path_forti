@@ -44,16 +44,27 @@ DEFAULT_DOCS_MAJOR_VERSIONS = (
     "8.4", "8.2", "8.0", "7.6", "7.4", "7.2", "7.0", "6.4", "6.2", "6.0", "5.6", "5.4", "5.2", "5.0",
 )
 
+FORTICLIENT_PRODUCT_ID = "forticlient"
+FORTICLIENT_EMS_PRODUCT_ID = "forticlient-ems"
+
 # Products supported by Fortinet's public Upgrade Path Tool (docs.fortinet.com/upgrade-tool).
 # FortiClient / FortiClient EMS are intentionally absent: they aren't in that tool's own
-# product list (confirmed by reading its JS), so they can only get internal advisories, no
-# automated recommended-path lookup.
+# product list (confirmed by reading its JS), so they can only get a version catalog and
+# internal advisories, no automated recommended-path lookup — see NO_PATH_PRODUCT_LABELS.
 PRODUCTS = {
     DEFAULT_PRODUCT_ID: {"slug": "fortigate", "label": DEFAULT_PRODUCT_LABEL},
     "fortianalyzer": {"slug": "fortianalyzer", "label": "FortiAnalyzer"},
     "fortimanager": {"slug": "fortimanager", "label": "FortiManager"},
 }
-PRODUCT_LABELS = {product_id: meta["label"] for product_id, meta in PRODUCTS.items()}
+NO_PATH_PRODUCT_LABELS = {
+    FORTICLIENT_PRODUCT_ID: "FortiClient (Windows/macOS/Linux)",
+    FORTICLIENT_EMS_PRODUCT_ID: "FortiClient EMS",
+}
+# Every known product, for validating advisories/catalogs regardless of upgrade-path support.
+PRODUCT_LABELS = {
+    **{product_id: meta["label"] for product_id, meta in PRODUCTS.items()},
+    **NO_PATH_PRODUCT_LABELS,
+}
 RELEASE_NOTES_DOC_SLUGS = {
     DEFAULT_PRODUCT_ID: "fortios-release-notes",
     "fortianalyzer": "release-notes",
@@ -149,6 +160,7 @@ def normalize_state(payload: dict[str, Any] | None) -> dict[str, Any]:
         "products": payload.get("products") if isinstance(payload.get("products"), list) else [],
         "paths": payload.get("paths") if isinstance(payload.get("paths"), list) else [],
         "advisories": payload.get("advisories") if isinstance(payload.get("advisories"), list) else [],
+        "compatibilities": payload.get("compatibilities") if isinstance(payload.get("compatibilities"), list) else [],
     }
 
 
@@ -314,6 +326,105 @@ def collect_docs_catalog(major_versions: tuple[str, ...], timeout: int) -> tuple
     return state, skipped
 
 
+# FortiClient has no hardware "models" — the three OS installers are close enough to that concept
+# (each ships its own build number, tracked in its own release notes) to reuse the same model
+# slot. FortiClient EMS has a single implicit model.
+FORTICLIENT_PLATFORM_DOC_SLUGS = {
+    "windows": "windows-release-notes",
+    "macos": "macos-release-notes",
+    "linux": "linux-release-notes",
+}
+FORTICLIENT_PLATFORM_LABELS = {
+    "windows": "FortiClient (Windows)",
+    "macos": "FortiClient (macOS)",
+    "linux": "FortiClient (Linux)",
+}
+FORTICLIENT_EMS_DOC_SLUG = "ems-release-notes"
+FORTICLIENT_EMS_MODEL_ID = "ems"
+
+
+def discover_forticlient_versions(major_versions: tuple[str, ...], doc_slug: str, timeout: int) -> list[str]:
+    versions: set[str] = set()
+    for major in major_versions:
+        url = f"{FORTINET_DOCS_BASE_URL}/product/forticlient/{major}"
+        raw_html = fetch_text(url, timeout)
+        versions.update(re.findall(rf"/document/forticlient/(\d+\.\d+\.\d+)/{re.escape(doc_slug)}", raw_html))
+    return sorted(versions, key=version_key)
+
+
+def parse_forticlient_build(version: str, doc_slug: str, timeout: int) -> str | None:
+    url = f"{FORTINET_DOCS_BASE_URL}/document/forticlient/{version}/{doc_slug}"
+    raw_html = fetch_text(url, timeout)
+    text = html_to_text(raw_html)
+    match = re.search(rf"{re.escape(version)}\s+build\s+(\S+)\s*[.:]", text, flags=re.IGNORECASE)
+    return match.group(1) if match else None
+
+
+def collect_forticlient_catalog(major_versions: tuple[str, ...], timeout: int) -> tuple[dict[str, Any], list[str]]:
+    """FortiClient (one model per OS) + FortiClient EMS catalogs, scraped from release notes.
+
+    Neither product is in Fortinet's Upgrade Path Tool, so there's no products.json/upgrade-path
+    endpoint to use like collect_tool_catalog does for FortiAnalyzer/FortiManager — this falls
+    back to the same release-notes scraping as collect_docs_catalog, just without a "Supported
+    models" section to parse (the model here is simply which release-notes doc we found it in).
+    """
+    state = normalize_state({})
+    skipped: list[str] = []
+
+    fc_product = ensure_product(state, FORTICLIENT_PRODUCT_ID, PRODUCT_LABELS[FORTICLIENT_PRODUCT_ID])
+    for platform, doc_slug in FORTICLIENT_PLATFORM_DOC_SLUGS.items():
+        if not any(model.get("id") == platform for model in fc_product["models"]):
+            fc_product["models"].append({"id": platform, "label": FORTICLIENT_PLATFORM_LABELS[platform], "firmwares": []})
+
+        for version in discover_forticlient_versions(major_versions, doc_slug, timeout):
+            try:
+                build = parse_forticlient_build(version, doc_slug, timeout)
+            except (urllib.error.URLError, TimeoutError, OSError):
+                build = None
+            if not build:
+                skipped.append(f"forticlient/{platform}/{version}")
+                continue
+            upsert_firmware(
+                state,
+                Firmware(
+                    product=FORTICLIENT_PRODUCT_ID,
+                    model=platform,
+                    version=version,
+                    build=build,
+                    notes=("release-notes",),
+                    links={"release-notes": f"{FORTINET_DOCS_BASE_URL}/document/forticlient/{version}/{doc_slug}"},
+                ),
+            )
+
+    ems_product = ensure_product(state, FORTICLIENT_EMS_PRODUCT_ID, PRODUCT_LABELS[FORTICLIENT_EMS_PRODUCT_ID])
+    if not any(model.get("id") == FORTICLIENT_EMS_MODEL_ID for model in ems_product["models"]):
+        ems_product["models"].append({"id": FORTICLIENT_EMS_MODEL_ID, "label": "FortiClient EMS", "firmwares": []})
+
+    for version in discover_forticlient_versions(major_versions, FORTICLIENT_EMS_DOC_SLUG, timeout):
+        try:
+            build = parse_forticlient_build(version, FORTICLIENT_EMS_DOC_SLUG, timeout)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            build = None
+        if not build:
+            skipped.append(f"forticlient-ems/{version}")
+            continue
+        upsert_firmware(
+            state,
+            Firmware(
+                product=FORTICLIENT_EMS_PRODUCT_ID,
+                model=FORTICLIENT_EMS_MODEL_ID,
+                version=version,
+                build=build,
+                notes=("release-notes",),
+                links={
+                    "release-notes": f"{FORTINET_DOCS_BASE_URL}/document/forticlient/{version}/{FORTICLIENT_EMS_DOC_SLUG}"
+                },
+            ),
+        )
+
+    return state, skipped
+
+
 def official_note_keys(item: dict[str, Any]) -> tuple[str, ...]:
     slug_to_note = {
         "resolved-issues": "resolved",
@@ -414,7 +525,9 @@ def resolve_fortinet_model(product_id: str, model_id: str, timeout: int) -> str:
 
 
 def fetch_official_upgrade_path(requested: OfficialPathRequest, timeout: int) -> tuple[UpgradePath, list[Firmware]] | None:
-    product_slug = PRODUCTS.get(requested.product, PRODUCTS[DEFAULT_PRODUCT_ID])["slug"]
+    if requested.product not in PRODUCTS:
+        return None  # not in Fortinet's Upgrade Path Tool (e.g. FortiClient/EMS) — no path to fetch.
+    product_slug = PRODUCTS[requested.product]["slug"]
     api_model = resolve_fortinet_model(requested.product, requested.model, timeout)
     payload = {
         "product_slug": product_slug,
@@ -561,6 +674,17 @@ def upsert_advisory(state: dict[str, Any], advisory: dict[str, Any]) -> bool:
             state["advisories"][index] = advisory
             return True
     state["advisories"].append(advisory)
+    return True
+
+
+def upsert_compatibility(state: dict[str, Any], item: dict[str, Any]) -> bool:
+    for index, existing in enumerate(state["compatibilities"]):
+        if existing.get("id") == item.get("id"):
+            if existing == item:
+                return False
+            state["compatibilities"][index] = item
+            return True
+    state["compatibilities"].append(item)
     return True
 
 
@@ -766,6 +890,8 @@ def build_report(
     changed_paths: int,
     docs_catalog_enabled: bool = False,
     skipped_docs_versions: list[str] | None = None,
+    forticlient_catalog_enabled: bool = False,
+    skipped_forticlient: list[str] | None = None,
 ) -> str:
     before_versions = all_versions(before)
     after_versions = all_versions(after)
@@ -797,6 +923,16 @@ def build_report(
                 "",
                 "Le catalogue modèles/versions a été enrichi depuis les release notes publiques `docs.fortinet.com`.",
                 f"- Versions non intégrées faute de section modèles exploitable : {', '.join(skipped_docs_versions) if skipped_docs_versions else 'aucune'}",
+                "",
+            ]
+        )
+    if forticlient_catalog_enabled:
+        lines.extend(
+            [
+                "## Catalogue FortiClient / FortiClient EMS",
+                "",
+                "Le catalogue FortiClient (Windows/macOS/Linux) et FortiClient EMS a été enrichi depuis leurs release notes publiques.",
+                f"- Versions non intégrées faute de numéro de build exploitable : {', '.join(skipped_forticlient) if skipped_forticlient else 'aucune'}",
                 "",
             ]
         )
@@ -852,6 +988,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             + ", ".join(PRODUCTS)
         ),
     )
+    parser.add_argument(
+        "--forticlient-catalog",
+        action="store_true",
+        help="Enrichir les catalogues FortiClient (Windows/macOS/Linux) et FortiClient EMS depuis leurs release notes publiques.",
+    )
     parser.add_argument("--timeout", type=int, default=12)
     parser.add_argument("--skip-network", action="store_true")
     return parser.parse_args(argv)
@@ -880,6 +1021,14 @@ def main(argv: list[str]) -> int:
             if product_id not in PRODUCTS:
                 continue
             state = merge_state(state, collect_tool_catalog(product_id, args.timeout))
+
+    skipped_forticlient: list[str] = []
+    if args.forticlient_catalog and not args.skip_network:
+        major_versions = tuple(item.strip() for item in args.docs_major_versions.split(",") if item.strip())
+        forticlient_state, skipped_forticlient = collect_forticlient_catalog(major_versions, args.timeout)
+        state = merge_state(state, forticlient_state)
+    elif args.forticlient_catalog:
+        skipped_forticlient = ["collecte ignorée avec --skip-network"]
 
     for advisory in import_csv_advisories(args.advisories_csv):
         state["advisories"] = [item for item in state["advisories"] if item.get("id") != advisory["id"]]
@@ -923,6 +1072,8 @@ def main(argv: list[str]) -> int:
             changed_paths,
             docs_catalog_enabled=args.docs_catalog,
             skipped_docs_versions=skipped_docs_versions,
+            forticlient_catalog_enabled=args.forticlient_catalog,
+            skipped_forticlient=skipped_forticlient,
         ),
         encoding="utf-8",
     )

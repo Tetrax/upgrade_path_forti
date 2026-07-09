@@ -19,12 +19,14 @@ from typing import Any
 from fortios_watch import (
     DEFAULT_PRODUCT_ID,
     PRODUCTS,
+    PRODUCT_LABELS,
     OfficialPathRequest,
     fetch_official_upgrade_path,
     normalize_state,
     read_json,
     slugify,
     upsert_advisory,
+    upsert_compatibility,
     upsert_firmware,
     upsert_path,
     utc_now,
@@ -33,6 +35,7 @@ from fortios_watch import (
 
 VALID_SEVERITIES = {"critical", "important", "warning", "info"}
 ADVISORIES_PREFIX = "/api/advisories/"
+COMPATIBILITIES_PREFIX = "/api/compatibilities/"
 IMAGE_EXTENSIONS = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -55,7 +58,7 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Indiquer au moins une version, ou au moins un point de départ.")
 
     product = str(payload.get("product") or DEFAULT_PRODUCT_ID).strip()
-    if product not in PRODUCTS:
+    if product not in PRODUCT_LABELS:
         raise ValueError(f"Produit invalide : {product}")
     severity = str(payload.get("severity") or "important").strip()
     if severity not in VALID_SEVERITIES:
@@ -92,6 +95,25 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return fields
 
 
+def parse_compatibility_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    ems_version = str(payload.get("emsVersion") or "").strip()
+    client_versions = [str(item).strip() for item in payload.get("clientVersions") or [] if str(item).strip()]
+    if not ems_version:
+        raise ValueError("La version FortiClient EMS est obligatoire.")
+    if not client_versions:
+        raise ValueError("Indiquer au moins une version FortiClient compatible.")
+
+    note = str(payload.get("note") or "").strip()
+    source = str(payload.get("source") or "Ingénieur SNS").strip()
+
+    return {
+        "emsVersion": ems_version,
+        "clientVersions": client_versions,
+        "note": note,
+        "source": source,
+    }
+
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "fortios-data.generated.json"
 SAMPLE_PATH = ROOT / "data" / "fortios-data.sample.json"
@@ -120,18 +142,24 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.handle_create_advisory()
         elif self.path == "/api/advisory-images":
             self.handle_upload_image()
+        elif self.path == "/api/compatibilities":
+            self.handle_create_compatibility()
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
     def do_PUT(self) -> None:
         if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(ADVISORIES_PREFIX):
             self.handle_update_advisory(self.path[len(ADVISORIES_PREFIX):])
+        elif self.path.startswith(COMPATIBILITIES_PREFIX) and len(self.path) > len(COMPATIBILITIES_PREFIX):
+            self.handle_update_compatibility(self.path[len(COMPATIBILITIES_PREFIX):])
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
     def do_DELETE(self) -> None:
         if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(ADVISORIES_PREFIX):
             self.handle_delete_advisory(self.path[len(ADVISORIES_PREFIX):])
+        elif self.path.startswith(COMPATIBILITIES_PREFIX) and len(self.path) > len(COMPATIBILITIES_PREFIX):
+            self.handle_delete_compatibility(self.path[len(COMPATIBILITIES_PREFIX):])
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
@@ -139,8 +167,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         try:
             payload = self.read_json_body()
             product = str(payload.get("product") or DEFAULT_PRODUCT_ID).strip()
-            if product not in PRODUCTS:
+            if product not in PRODUCT_LABELS:
                 raise ValueError(f"Produit invalide : {product}")
+            if product not in PRODUCTS:
+                raise ValueError(f"{PRODUCT_LABELS[product]} n'a pas de chemin d'upgrade automatique Fortinet.")
             request = OfficialPathRequest(
                 product=product,
                 model=str(payload["model"]).strip(),
@@ -241,6 +271,72 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             state["generatedAt"] = utc_now()
             write_json(DATA_PATH, state)
             delete_referenced_images(target.get("description", ""))
+
+            self.write_json_response({"state": state})
+        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+
+    def handle_create_compatibility(self) -> None:
+        try:
+            payload = self.read_json_body()
+            fields = parse_compatibility_fields(payload)
+            item: dict[str, Any] = {
+                "id": f"compat-{slugify(fields['emsVersion'])}-{secrets.token_hex(4)}",
+                "createdAt": utc_now(),
+                **fields,
+            }
+
+            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+            upsert_compatibility(state, item)
+            state["generatedAt"] = utc_now()
+            write_json(DATA_PATH, state)
+
+            self.write_json_response({"state": state, "compatibility": item})
+        except ValueError as error:
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+
+    def handle_update_compatibility(self, raw_id: str) -> None:
+        try:
+            item_id = urllib.parse.unquote(raw_id)
+            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+            existing = next((item for item in state["compatibilities"] if item.get("id") == item_id), None)
+            if existing is None:
+                self.write_json_response({"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND)
+                return
+
+            payload = self.read_json_body()
+            fields = parse_compatibility_fields(payload)
+            item: dict[str, Any] = {
+                "id": item_id,
+                "createdAt": existing.get("createdAt") or utc_now(),
+                "updatedAt": utc_now(),
+                **fields,
+            }
+
+            upsert_compatibility(state, item)
+            state["generatedAt"] = utc_now()
+            write_json(DATA_PATH, state)
+
+            self.write_json_response({"state": state, "compatibility": item})
+        except ValueError as error:
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+
+    def handle_delete_compatibility(self, raw_id: str) -> None:
+        try:
+            item_id = urllib.parse.unquote(raw_id)
+            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+            remaining = [item for item in state["compatibilities"] if item.get("id") != item_id]
+            if len(remaining) == len(state["compatibilities"]):
+                self.write_json_response({"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND)
+                return
+
+            state["compatibilities"] = remaining
+            state["generatedAt"] = utc_now()
+            write_json(DATA_PATH, state)
 
             self.write_json_response({"state": state})
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.

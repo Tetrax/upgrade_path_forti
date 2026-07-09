@@ -12,11 +12,15 @@ Upgrade_path/
     alerte/
       index.html
       app.js
+    forticlient/
+      index.html
+      app.js
   data/
     fortios-data.sample.json
   scripts/
     fortios_server.py
     fortios_watch.py
+    import_forticlient_compat.py
   docs/
 ```
 
@@ -98,7 +102,7 @@ Important : ce catalogue ne remplace pas l'Upgrade Path Tool. Il sert à connaî
 
 ## FortiAnalyzer et FortiManager
 
-L'outil gère aussi FortiAnalyzer et FortiManager, avec exactement les mêmes fonctionnalités que FortiGate : chemin recommandé Fortinet, catalogue modèles/versions, alertes internes. FortiClient et FortiClient EMS ne sont pas supportés — ils n'existent pas dans l'Upgrade Path Tool public de Fortinet (vérifié dans son propre code), et n'auront donc jamais de chemin recommandé automatique ; seules des alertes internes pourraient être ajoutées pour eux plus tard.
+L'outil gère aussi FortiAnalyzer et FortiManager, avec exactement les mêmes fonctionnalités que FortiGate : chemin recommandé Fortinet, catalogue modèles/versions, alertes internes.
 
 Pour récupérer le catalogue modèles/versions de FortiAnalyzer et FortiManager :
 
@@ -109,6 +113,36 @@ python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --tool-
 Contrairement à FortiGate (scraping des release notes), cette commande utilise directement les endpoints JSON de l'Upgrade Path Tool (`/upgrade-tool/products/<slug>.json` pour la liste des modèles, puis `/upgrade-tool/upgrade-path` pour les versions/builds par modèle) — plus rapide et plus fiable, mais uniquement disponible pour les produits que l'outil connaît.
 
 Dans l'interface (outil principal comme page `/app/alerte/`), un sélecteur **Produit** permet de basculer entre FortiGate/FortiOS, FortiAnalyzer et FortiManager. Chaque alerte interne est rattachée à un seul produit ; la liste des alertes se filtre par produit par défaut (option "Tous les produits" disponible).
+
+## FortiClient et FortiClient EMS
+
+FortiClient (Windows/macOS/Linux) et FortiClient EMS n'existent pas dans l'Upgrade Path Tool public de Fortinet (vérifié dans son propre code) — **pas de chemin recommandé automatique** pour ces deux produits. En revanche, l'outil récupère leur catalogue de versions et permet de leur créer des alertes internes, exactement comme les autres produits (sélecteur **Produit** sur `/app/alerte/`).
+
+Pour récupérer le catalogue FortiClient/EMS :
+
+```bash
+python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --forticlient-catalog
+```
+
+Chaque plateforme FortiClient (Windows, macOS, Linux) est traitée comme un "modèle" du produit `forticlient`, chacune avec ses propres versions/builds (scrapés depuis leurs release notes publiques respectives). FortiClient EMS est un produit séparé (`forticlient-ems`) avec un seul modèle.
+
+### Page `/app/forticlient/` — versions et compatibilité EMS ↔ FortiClient
+
+```text
+http://localhost:8000/app/forticlient/
+```
+
+En plus d'afficher un résumé du catalogue de versions connues, cette page permet d'enregistrer des **combinaisons EMS ↔ FortiClient qui fonctionnent bien** (testées en prod), pour éviter de retester à chaque fois : choisir une version d'EMS, cocher une ou plusieurs versions FortiClient compatibles, ajouter une note et une source. Modifier/supprimer une combinaison fonctionne comme pour les alertes.
+
+La grille de compatibilité **officielle** de Fortinet (publiée en PDF, `FortiClient_ems-compatibility-matrix.pdf`) peut être importée en une fois avec :
+
+```bash
+python3 -m venv /tmp/pdfenv && /tmp/pdfenv/bin/pip install pdfplumber
+/tmp/pdfenv/bin/python3 scripts/import_forticlient_compat.py            # aperçu seulement
+/tmp/pdfenv/bin/python3 scripts/import_forticlient_compat.py --commit   # écrit dans data/fortios-data.generated.json
+```
+
+Ce script n'est pas branché sur le rafraîchissement quotidien automatique : le PDF de Fortinet a des en-têtes de colonnes tournés à 90°, qui ressortent à l'extraction sous forme de texte inversé (ex: "7.2.10" devient "01.2.7") — ça se parse (le script le fait), mais c'est fragile, donc mieux vaut relancer à la main de temps en temps et vérifier l'aperçu avant `--commit`. Les combinaisons importées ainsi ont pour source `"FortiClient EMS Compatibility Matrix (Fortinet, officielle)"`, pour les distinguer des combinaisons testées par l'équipe.
 
 ## Récupérer des chemins officiels Fortinet
 
@@ -265,10 +299,10 @@ Si l'API existe, elle doit alimenter directement le format JSON ci-dessus. Si el
 Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h15 :
 
 ```bash
-python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager
+python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog
 ```
 
-Ce scan détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, ainsi que les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool. Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`.
+Ce scan détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool, ainsi que les nouvelles versions FortiClient/FortiClient EMS via leurs release notes publiques. Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`. La grille de compatibilité officielle EMS ↔ FortiClient n'est PAS rafraîchie automatiquement (voir `scripts/import_forticlient_compat.py`, à relancer à la main).
 
 Important : `--base data/fortios-data.generated.json` est indispensable en tâche planifiée. Sans lui, le script repart de `data/fortios-data.sample.json` (le petit exemple) et écraserait les chemins déjà récupérés via l'interface.
 
