@@ -495,7 +495,7 @@
         ? versionAdvisories.map(item => {
             const label = item.bugId ? `${item.title} · #${item.bugId}` : item.title;
             const tooltip = item.bugId
-              ? `${item.title} — Bug Fortinet ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}`
+              ? `${item.title} — Bug ID ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}`
               : item.title;
             return `<span class="badge ${badgeClass(item.severity)}" title="${escapeAttr(tooltip)}">${escapeHtml(label)}</span>`;
           }).join(" ")

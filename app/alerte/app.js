@@ -497,7 +497,7 @@ function advisoryCard(item) {
   meta.textContent = `${productLabel(item.product)} • Versions : ${versionsLabel} • Boîtiers : ${modelsScope} • Source : ${item.source || "-"}`;
 
   const bugMeta = item.bugId
-    ? el("p", { className: "hint", text: `Bug Fortinet : ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}` })
+    ? el("p", { className: "hint", text: `Bug ID : ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}` })
     : null;
 
   const article = el("article", { className: `advisory-row callout ${calloutClass(item.severity)}` });
