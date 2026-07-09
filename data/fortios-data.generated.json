@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T15:51:24Z",
+  "generatedAt": "2026-07-09T15:56:12Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -8350,7 +8350,11 @@
               "version": "7.0.9",
               "build": "0444",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8364,7 +8368,11 @@
               "version": "7.0.11",
               "build": "0489",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8438,7 +8446,12 @@
               "version": "7.2.6",
               "build": "1575",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8452,7 +8465,12 @@
               "version": "7.2.8",
               "build": "1639",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8466,7 +8484,12 @@
               "version": "7.2.10",
               "build": "1706",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8554,7 +8577,12 @@
               "version": "7.4.8",
               "build": "2795",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8636,7 +8664,11 @@
               "version": "7.6.6",
               "build": "3652",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8650,7 +8682,12 @@
               "version": "8.0.0",
               "build": "0167",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             }
           ]
@@ -78278,32 +78315,38 @@
       ],
       "source": "Fortinet Upgrade Path Tool public service",
       "fetchedAt": "2026-07-09T15:49:06Z"
+    },
+    {
+      "id": "path-FGT71F-7.0.9-8.0.0",
+      "product": "fortigate-fortios",
+      "model": "FGT71F",
+      "from": "7.0.9",
+      "to": "8.0.0",
+      "hops": [
+        "7.0.9",
+        "7.0.11",
+        "7.2.6",
+        "7.2.8",
+        "7.2.10",
+        "7.4.8",
+        "7.6.6",
+        "8.0.0"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T15:56:12Z"
     }
   ],
   "advisories": [
     {
-      "id": "adv-7.4.11-traffic-redirect",
-      "product": "fortigate-fortios",
-      "models": [
-        "FGT90G"
-      ],
-      "version": "7.4.11",
-      "severity": "important",
-      "timing": "post-upgrade",
-      "title": "Option a verifier apres passage en 7.4.11",
-      "description": "Verifier que allow-traffic-redirect est dans l'etat attendu. Si l'upgrade remet l'option en disable sur le parc concerne, l'ingenieur doit la reactiver explicitement.",
-      "command": "config system settings\n  set allow-traffic-redirect enable\nend",
-      "source": "Base interne SNS"
-    },
-    {
       "id": "adv-option-allow-traffic-redirect-v-rifier-0a110869",
+      "createdAt": "2026-07-09T15:43:54Z",
+      "updatedAt": "2026-07-09T15:53:24Z",
       "product": "fortigate-fortios",
       "severity": "important",
       "timing": "post-upgrade",
       "title": "Option allow-traffic-redirect à vérifier",
-      "description": "Le paramètre par défaut de allow-traffic-redirect et ipv6-allow-traffic-redirect a été modifié : il passe de enable à disable.\n\nconfig system global\n    set allow-traffic-redirect disable\n    set ipv6-allow-traffic-redirect disable\nend\n\nLa désactivation de ce paramètre garantit que le trafic arrivant sur une interface et redirigé en sortie sur cette même interface nécessite une règle firewall l’autorisant explicitement.",
+      "description": "Le paramètre par défaut de allow-traffic-redirect et ipv6-allow-traffic-redirect a été modifié : il passe de enable à disable.\n\nLa désactivation de ce paramètre garantit que le trafic arrivant sur une interface et redirigé en sortie sur cette même interface nécessite une règle firewall l’autorisant explicitement.",
       "source": "Ingénieur SNS",
-      "createdAt": "2026-07-09T15:43:54Z",
       "minVersion": "7.4.10",
       "command": "config system global\n    set allow-traffic-redirect disable\n    set ipv6-allow-traffic-redirect disable\nend"
     }
