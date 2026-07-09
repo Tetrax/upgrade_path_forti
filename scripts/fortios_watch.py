@@ -742,7 +742,7 @@ def import_csv_advisories(path: Path) -> list[dict[str, Any]]:
     """Import optional internal advisories from CSV.
 
     Columns:
-    id,product,models,version,from,to,severity,timing,title,description,command,source
+    id,product,models,version,from,to,severity,title,description,command,source
     """
     if not path.exists():
         return []

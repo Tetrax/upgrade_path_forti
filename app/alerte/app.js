@@ -20,7 +20,6 @@ const els = {
   title: document.getElementById("titleInput"),
   description: document.getElementById("descriptionInput"),
   severity: document.getElementById("severitySelect"),
-  timing: document.getElementById("timingSelect"),
   command: document.getElementById("commandInput"),
   bugId: document.getElementById("bugIdInput"),
   bugVersion: document.getElementById("bugVersionInput"),
@@ -313,7 +312,6 @@ async function submitAdvisory() {
         title,
         description,
         severity: els.severity.value,
-        timing: els.timing.value,
         versions,
         minVersions,
         models,
@@ -344,7 +342,6 @@ function startEdit(item) {
   els.description.value = item.description || "";
   renderRichText(els.descriptionPreview, els.description.value);
   els.severity.value = item.severity || "important";
-  els.timing.value = item.timing || "post-upgrade";
   els.command.value = item.command || "";
   els.bugId.value = item.bugId || "";
   els.bugVersion.value = item.bugVersion || "";
@@ -410,7 +407,6 @@ function resetForm() {
   els.bugVersion.value = "";
   els.source.value = "";
   els.severity.value = "important";
-  els.timing.value = "post-upgrade";
   els.versionSearch.value = "";
   els.minVersionSearch.value = "";
   els.modelSearch.value = "";
@@ -483,7 +479,7 @@ function renderAdvisoryList() {
 function advisoryCard(item) {
   const head = el("div", { className: "callout-head" });
   head.appendChild(el("h4", { className: "callout-title", text: item.title }));
-  head.appendChild(el("span", { className: `badge ${badgeClass(item.severity)}`, text: timingLabel(item.timing) }));
+  head.appendChild(el("span", { className: `badge ${badgeClass(item.severity)}`, text: SEVERITY_LABEL[item.severity] || "Info" }));
 
   const description = el("div", { className: "rich-text" });
   renderRichText(description, item.description);
@@ -709,12 +705,4 @@ function badgeClass(severity) {
 
 function calloutClass(severity) {
   return { critical: "danger", important: "danger", warning: "warn", info: "info" }[severity] || "";
-}
-
-function timingLabel(timing) {
-  return {
-    "pre-upgrade": "Avant upgrade",
-    "during-upgrade": "Pendant",
-    "post-upgrade": "Après upgrade"
-  }[timing] || "Info";
 }

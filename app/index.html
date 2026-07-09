@@ -155,7 +155,6 @@
           models: ["FGT90G", "FGT100F"],
           version: "7.4.11",
           severity: "important",
-          timing: "post-upgrade",
           title: "Option à vérifier après passage en 7.4.11",
           description: "Vérifier que allow-traffic-redirect est dans l’état attendu. Si l’upgrade remet l’option en disable sur le parc concerné, l’ingénieur doit la réactiver explicitement.",
           command: "config system settings\n  set allow-traffic-redirect enable\nend",
@@ -167,7 +166,6 @@
           models: ["FGT90G"],
           version: "7.4.8",
           severity: "warning",
-          timing: "pre-upgrade",
           title: "Lire les Known Issues avant validation client",
           description: "Étape intermédiaire recommandée par Fortinet. Contrôler les problèmes connus applicables au modèle avant d’ouvrir la fenêtre de changement.",
           source: "Release notes Fortinet"
@@ -179,7 +177,6 @@
           from: "7.2.10",
           to: "7.4.8",
           severity: "info",
-          timing: "during-upgrade",
           title: "Point de contrôle entre 7.2.10 et 7.4.8",
           description: "Après redémarrage sur 7.4.8, contrôler l’état HA, les tunnels critiques et les routes dynamiques avant de poursuivre vers 7.4.11.",
           source: "Procédure interne"
@@ -618,7 +615,7 @@
             <article class="callout ${calloutClass(item.severity)}">
               <div class="callout-head">
                 <h4 class="callout-title">${escapeHtml(item.title)}</h4>
-                <span class="badge ${badgeClass(item.severity)}">${escapeHtml(timingLabel(item.timing))}</span>
+                <span class="badge ${badgeClass(item.severity)}">${escapeHtml(severityLabel(item.severity))}</span>
               </div>
               <div class="rich-text" data-rich-index="${index}"></div>
               ${item.command ? `
@@ -966,7 +963,6 @@
               `### ${item.title}`,
               `- Portée : ${scope}`,
               `- Sévérité : ${item.severity || "info"}`,
-              `- Moment : ${timingLabel(item.timing)}`,
               `- Source : ${item.source || "non renseignée"}`,
               "",
               item.description || ""
@@ -1109,12 +1105,13 @@
       return { critical: "danger", important: "danger", warning: "warn", info: "info" }[severity] || "";
     }
 
-    function timingLabel(timing) {
+    function severityLabel(severity) {
       return {
-        "pre-upgrade": "Avant upgrade",
-        "during-upgrade": "Pendant",
-        "post-upgrade": "Après upgrade"
-      }[timing] || "Info";
+        critical: "Critique",
+        important: "Importante",
+        warning: "Avertissement",
+        info: "Info"
+      }[severity] || "Info";
     }
 
     function formatDateTime(value) {

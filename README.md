@@ -210,13 +210,13 @@ Comme pour la récupération Fortinet, cette page a besoin de `scripts/fortios_s
 Créer `data/advisories.csv` avec les colonnes suivantes :
 
 ```csv
-id,product,models,version,from,to,severity,timing,title,description,command,source
+id,product,models,version,from,to,severity,title,description,command,source
 ```
 
 Exemple :
 
 ```csv
-adv-7.4.11-traffic-redirect,fortigate-fortios,FGT90G,7.4.11,,,important,post-upgrade,Option a verifier apres passage en 7.4.11,Verifier allow-traffic-redirect apres upgrade,"config system settings
+adv-7.4.11-traffic-redirect,fortigate-fortios,FGT90G,7.4.11,,,important,Option a verifier apres passage en 7.4.11,Verifier allow-traffic-redirect apres upgrade,"config system settings
   set allow-traffic-redirect enable
 end",Base interne SNS
 ```

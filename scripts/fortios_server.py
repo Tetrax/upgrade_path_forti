@@ -32,7 +32,6 @@ from fortios_watch import (
 )
 
 VALID_SEVERITIES = {"critical", "important", "warning", "info"}
-VALID_TIMINGS = {"pre-upgrade", "during-upgrade", "post-upgrade"}
 ADVISORIES_PREFIX = "/api/advisories/"
 IMAGE_EXTENSIONS = {
     "image/png": ".png",
@@ -61,9 +60,6 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     severity = str(payload.get("severity") or "important").strip()
     if severity not in VALID_SEVERITIES:
         raise ValueError(f"Sévérité invalide : {severity}")
-    timing = str(payload.get("timing") or "post-upgrade").strip()
-    if timing not in VALID_TIMINGS:
-        raise ValueError(f"Timing invalide : {timing}")
 
     models = [str(item).strip() for item in payload.get("models") or [] if str(item).strip()]
     command = str(payload.get("command") or "").strip()
@@ -74,7 +70,6 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     fields: dict[str, Any] = {
         "product": product,
         "severity": severity,
-        "timing": timing,
         "title": title,
         "description": description,
         "source": source,
