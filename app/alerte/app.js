@@ -1,7 +1,11 @@
 const GENERATED_DATA_URL = "../../data/fortios-data.generated.json";
 const SEVERITY_ORDER = ["critical", "important", "warning", "info"];
 const SEVERITY_LABEL = { critical: "Critique", important: "Importante", warning: "Avertissement", info: "Info" };
+const ALL_PRODUCTS_VALUE = "";
 
+let products = [];
+let selectedProduct = "";
+let advisoryProductFilter = "";
 let allModels = [];
 let allVersions = [];
 let advisories = [];
@@ -11,6 +15,8 @@ let editingId = null;
 let severityFilter = "all";
 
 const els = {
+  productSelect: document.getElementById("productSelect"),
+  productFilterSelect: document.getElementById("productFilterSelect"),
   title: document.getElementById("titleInput"),
   description: document.getElementById("descriptionInput"),
   severity: document.getElementById("severitySelect"),
@@ -48,6 +54,11 @@ const els = {
 const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
+els.productSelect.addEventListener("change", () => selectProduct(els.productSelect.value));
+els.productFilterSelect.addEventListener("change", () => {
+  advisoryProductFilter = els.productFilterSelect.value;
+  renderAdvisoryList();
+});
 els.scopeAllButton.addEventListener("click", () => setScope("all"));
 els.scopeSomeButton.addEventListener("click", () => setScope("some"));
 els.versionModeExactButton.addEventListener("click", () => setVersionMode("exact"));
@@ -111,7 +122,47 @@ function setText(container, text, className) {
 }
 
 function loadState(state) {
-  const product = (state.products || [])[0] || { models: [] };
+  products = Array.isArray(state.products) ? state.products : [];
+  advisories = Array.isArray(state.advisories) ? state.advisories : [];
+
+  populateProductSelects();
+  selectProduct(products[0]?.id || "");
+  advisoryProductFilter = products[0]?.id || ALL_PRODUCTS_VALUE;
+  els.productFilterSelect.value = advisoryProductFilter;
+  renderAdvisoryList();
+}
+
+function populateProductSelects() {
+  els.productSelect.replaceChildren();
+  for (const product of products) {
+    const option = document.createElement("option");
+    option.value = product.id;
+    option.textContent = product.label || product.id;
+    els.productSelect.appendChild(option);
+  }
+
+  els.productFilterSelect.replaceChildren();
+  const allOption = document.createElement("option");
+  allOption.value = ALL_PRODUCTS_VALUE;
+  allOption.textContent = "Tous les produits";
+  els.productFilterSelect.appendChild(allOption);
+  for (const product of products) {
+    const option = document.createElement("option");
+    option.value = product.id;
+    option.textContent = product.label || product.id;
+    els.productFilterSelect.appendChild(option);
+  }
+}
+
+function productLabel(productId) {
+  return products.find(product => product.id === productId)?.label || productId || "-";
+}
+
+function selectProduct(productId) {
+  selectedProduct = productId;
+  els.productSelect.value = productId;
+
+  const product = products.find(item => item.id === productId) || { models: [] };
   allModels = (product.models || [])
     .map(model => ({ id: model.id, label: model.label || model.id }))
     .sort((a, b) => a.id.localeCompare(b.id));
@@ -124,12 +175,14 @@ function loadState(state) {
   }
   allVersions = Array.from(versionSet).sort(compareVersions).reverse();
 
-  advisories = Array.isArray(state.advisories) ? state.advisories : [];
-
+  setScope("all");
+  setVersionMode("exact");
+  els.versionSearch.value = "";
+  els.minVersionSearch.value = "";
+  els.modelSearch.value = "";
   renderVersionList();
-  renderModelList();
   renderMinVersionList();
-  renderAdvisoryList();
+  renderModelList();
 }
 
 function setScope(scope) {
@@ -254,6 +307,7 @@ async function submitAdvisory() {
       method: isEdit ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        product: selectedProduct,
         title,
         description,
         severity: els.severity.value,
@@ -281,6 +335,7 @@ async function submitAdvisory() {
 
 function startEdit(item) {
   editingId = item.id;
+  selectProduct(item.product || products[0]?.id || "");
   els.title.value = item.title || "";
   els.description.value = item.description || "";
   renderRichText(els.descriptionPreview, els.description.value);
@@ -363,6 +418,7 @@ function resetForm() {
 function filteredAdvisories() {
   const query = normalizeSearch(els.advisorySearch.value);
   return advisories.filter(item => {
+    if (advisoryProductFilter && (item.product || "") !== advisoryProductFilter) return false;
     if (severityFilter !== "all" && item.severity !== severityFilter) return false;
     if (!query) return true;
 
@@ -428,7 +484,7 @@ function advisoryCard(item) {
     : advisoryVersions(item).join(", ") || "-";
   const modelsScope = Array.isArray(item.models) && item.models.length ? item.models.join(", ") : "Tous";
   const meta = el("p", { className: "hint" });
-  meta.textContent = `Versions : ${versionsLabel} • Boîtiers : ${modelsScope} • Source : ${item.source || "-"}`;
+  meta.textContent = `${productLabel(item.product)} • Versions : ${versionsLabel} • Boîtiers : ${modelsScope} • Source : ${item.source || "-"}`;
 
   const article = el("article", { className: `advisory-row callout ${calloutClass(item.severity)}` });
   article.appendChild(head);

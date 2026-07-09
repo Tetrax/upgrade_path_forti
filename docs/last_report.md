@@ -1,6 +1,6 @@
 # Rapport FortiOS Upgrade Intelligence
 
-- Généré le : 2026-07-09T15:09:54Z
+- Généré le : 2026-07-09T19:43:39Z
 - Modèles FortiGate/FortiWiFi dans la base : 233
 - Versions FortiOS dans la base : 107
 - Nouvelles versions dans la base : aucune
@@ -11,8 +11,3 @@
 
 Le script accepte déjà un export JSON authentifié via `--forticare-json` ou `FORTICARE_FIRMWARE_JSON`.
 Quand le mécanisme d'authentification FortiCare/FNDN sera confirmé, il faudra remplacer cet export par un connecteur API documenté, ou par une automatisation navigateur contrôlée si aucune API n'existe.
-
-## Catalogue public Fortinet Docs
-
-Le catalogue modèles/versions a été enrichi depuis les release notes publiques `docs.fortinet.com`.
-- Versions non intégrées faute de section modèles exploitable : 5.0.2, 5.0.3, 5.0.4, 5.0.5, 5.0.6, 5.0.7, 5.0.8, 5.0.9, 5.0.10, 5.0.11, 5.0.12, 5.2.0, 5.2.1, 5.2.2, 5.2.3, 5.2.4, 5.2.5, 5.2.6, 5.2.7, 5.2.8, 5.2.9, 5.2.10, 5.2.11, 5.2.12, 5.2.13, 5.2.14, 5.2.15, 5.4.0, 5.4.1, 5.4.2, 5.4.3, 5.4.4, 5.4.5, 5.4.6, 5.4.7, 5.4.8, 5.4.9, 5.4.10, 5.4.11, 5.4.12, 5.4.13, 5.6.0, 5.6.1, 5.6.2, 5.6.3, 5.6.4, 5.6.5, 5.6.6, 5.6.7, 5.6.8, 5.6.9, 5.6.10, 5.6.11, 5.6.12, 5.6.13, 5.6.14, 6.0.0, 6.0.1, 6.0.2

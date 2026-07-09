@@ -96,6 +96,20 @@ Les très anciennes branches peuvent ne pas exposer la section modèles dans le 
 
 Important : ce catalogue ne remplace pas l'Upgrade Path Tool. Il sert à connaître les versions disponibles par modèle.
 
+## FortiAnalyzer et FortiManager
+
+L'outil gère aussi FortiAnalyzer et FortiManager, avec exactement les mêmes fonctionnalités que FortiGate : chemin recommandé Fortinet, catalogue modèles/versions, alertes internes. FortiClient et FortiClient EMS ne sont pas supportés — ils n'existent pas dans l'Upgrade Path Tool public de Fortinet (vérifié dans son propre code), et n'auront donc jamais de chemin recommandé automatique ; seules des alertes internes pourraient être ajoutées pour eux plus tard.
+
+Pour récupérer le catalogue modèles/versions de FortiAnalyzer et FortiManager :
+
+```bash
+python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --tool-products fortianalyzer,fortimanager
+```
+
+Contrairement à FortiGate (scraping des release notes), cette commande utilise directement les endpoints JSON de l'Upgrade Path Tool (`/upgrade-tool/products/<slug>.json` pour la liste des modèles, puis `/upgrade-tool/upgrade-path` pour les versions/builds par modèle) — plus rapide et plus fiable, mais uniquement disponible pour les produits que l'outil connaît.
+
+Dans l'interface (outil principal comme page `/app/alerte/`), un sélecteur **Produit** permet de basculer entre FortiGate/FortiOS, FortiAnalyzer et FortiManager. Chaque alerte interne est rattachée à un seul produit ; la liste des alertes se filtre par produit par défaut (option "Tous les produits" disponible).
+
 ## Récupérer des chemins officiels Fortinet
 
 Le script peut appeler le service public utilisé par l'Upgrade Path Tool Fortinet :
@@ -243,10 +257,10 @@ Si l'API existe, elle doit alimenter directement le format JSON ci-dessus. Si el
 Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h15 :
 
 ```bash
-python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog
+python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager
 ```
 
-Ce scan détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`. Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`.
+Ce scan détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, ainsi que les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool. Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`.
 
 Important : `--base data/fortios-data.generated.json` est indispensable en tâche planifiée. Sans lui, le script repart de `data/fortios-data.sample.json` (le petit exemple) et écraserait les chemins déjà récupérés via l'interface.
 

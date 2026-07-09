@@ -815,6 +815,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            product: selection.product,
             model: selection.model,
             from: selection.current,
             to: selection.target

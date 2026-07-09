@@ -18,6 +18,7 @@ from typing import Any
 
 from fortios_watch import (
     DEFAULT_PRODUCT_ID,
+    PRODUCTS,
     OfficialPathRequest,
     fetch_official_upgrade_path,
     normalize_state,
@@ -54,6 +55,9 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     if not versions and not min_versions:
         raise ValueError("Indiquer au moins une version, ou au moins un point de départ.")
 
+    product = str(payload.get("product") or DEFAULT_PRODUCT_ID).strip()
+    if product not in PRODUCTS:
+        raise ValueError(f"Produit invalide : {product}")
     severity = str(payload.get("severity") or "important").strip()
     if severity not in VALID_SEVERITIES:
         raise ValueError(f"Sévérité invalide : {severity}")
@@ -66,7 +70,7 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     source = str(payload.get("source") or "Ingénieur SNS").strip()
 
     fields: dict[str, Any] = {
-        "product": DEFAULT_PRODUCT_ID,
+        "product": product,
         "severity": severity,
         "timing": timing,
         "title": title,
@@ -130,7 +134,11 @@ class FortiosHandler(SimpleHTTPRequestHandler):
     def handle_official_path(self) -> None:
         try:
             payload = self.read_json_body()
+            product = str(payload.get("product") or DEFAULT_PRODUCT_ID).strip()
+            if product not in PRODUCTS:
+                raise ValueError(f"Produit invalide : {product}")
             request = OfficialPathRequest(
+                product=product,
                 model=str(payload["model"]).strip(),
                 from_version=str(payload["from"]).strip(),
                 to_version=str(payload["to"]).strip(),
@@ -154,12 +162,14 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             path_payload = next(
                 path
                 for path in state["paths"]
-                if path.get("product") == DEFAULT_PRODUCT_ID
+                if path.get("product") == request.product
                 and path.get("model") == request.model
                 and path.get("from") == request.from_version
                 and path.get("to") == request.to_version
             )
             self.write_json_response({"state": state, "path": path_payload})
+        except ValueError as error:
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except KeyError as error:
             self.write_json_response({"error": f"Champ manquant : {error.args[0]}"}, HTTPStatus.BAD_REQUEST)
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.

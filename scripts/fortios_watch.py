@@ -44,6 +44,17 @@ DEFAULT_DOCS_MAJOR_VERSIONS = (
     "8.4", "8.2", "8.0", "7.6", "7.4", "7.2", "7.0", "6.4", "6.2", "6.0", "5.6", "5.4", "5.2", "5.0",
 )
 
+# Products supported by Fortinet's public Upgrade Path Tool (docs.fortinet.com/upgrade-tool).
+# FortiClient / FortiClient EMS are intentionally absent: they aren't in that tool's own
+# product list (confirmed by reading its JS), so they can only get internal advisories, no
+# automated recommended-path lookup.
+PRODUCTS = {
+    DEFAULT_PRODUCT_ID: {"slug": "fortigate", "label": DEFAULT_PRODUCT_LABEL},
+    "fortianalyzer": {"slug": "fortianalyzer", "label": "FortiAnalyzer"},
+    "fortimanager": {"slug": "fortimanager", "label": "FortiManager"},
+}
+PRODUCT_LABELS = {product_id: meta["label"] for product_id, meta in PRODUCTS.items()}
+
 
 @dataclass(frozen=True)
 class Firmware:
@@ -69,6 +80,7 @@ class OfficialPathRequest:
     model: str
     from_version: str
     to_version: str
+    product: str = DEFAULT_PRODUCT_ID
 
 
 @dataclass(frozen=True)
@@ -147,7 +159,7 @@ def ensure_product(state: dict[str, Any], product_id: str, label: str) -> dict[s
 
 
 def ensure_model(state: dict[str, Any], product_id: str, model_id: str) -> dict[str, Any]:
-    product = ensure_product(state, product_id, DEFAULT_PRODUCT_LABEL)
+    product = ensure_product(state, product_id, PRODUCT_LABELS.get(product_id, DEFAULT_PRODUCT_LABEL))
     for model in product["models"]:
         if model.get("id") == model_id:
             model.setdefault("label", model_id)
@@ -309,6 +321,7 @@ def official_note_keys(item: dict[str, Any]) -> tuple[str, ...]:
 
 
 def post_official_upgrade_tool(payload: dict[str, str], timeout: int) -> dict[str, Any]:
+    product_slug = payload.get("product_slug", "fortigate")
     body = urllib.parse.urlencode(payload).encode("utf-8")
     request = urllib.request.Request(
         FORTINET_UPGRADE_PATH_URL,
@@ -317,7 +330,7 @@ def post_official_upgrade_tool(payload: dict[str, str], timeout: int) -> dict[st
             "User-Agent": "sns-fortios-upgrade-watch/0.1",
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Origin": FORTINET_DOCS_BASE_URL,
-            "Referer": f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/fortigate",
+            "Referer": f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/{product_slug}",
         },
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -325,8 +338,9 @@ def post_official_upgrade_tool(payload: dict[str, str], timeout: int) -> dict[st
 
 
 def fetch_official_upgrade_path(requested: OfficialPathRequest, timeout: int) -> tuple[UpgradePath, list[Firmware]] | None:
+    product_slug = PRODUCTS.get(requested.product, PRODUCTS[DEFAULT_PRODUCT_ID])["slug"]
     payload = {
-        "product_slug": "fortigate",
+        "product_slug": product_slug,
         "model": requested.model,
         "current_version": requested.from_version,
         "target_version": requested.to_version,
@@ -343,7 +357,7 @@ def fetch_official_upgrade_path(requested: OfficialPathRequest, timeout: int) ->
         return None
 
     path = UpgradePath(
-        product=DEFAULT_PRODUCT_ID,
+        product=requested.product,
         model=requested.model,
         from_version=requested.from_version,
         to_version=requested.to_version,
@@ -352,7 +366,7 @@ def fetch_official_upgrade_path(requested: OfficialPathRequest, timeout: int) ->
     )
     firmwares = [
         Firmware(
-            product=DEFAULT_PRODUCT_ID,
+            product=requested.product,
             model=requested.model,
             version=item["version"],
             build=item.get("build_number") or "-",
@@ -362,6 +376,68 @@ def fetch_official_upgrade_path(requested: OfficialPathRequest, timeout: int) ->
         if item.get("version")
     ]
     return path, firmwares
+
+
+def fetch_product_models(product_slug: str, timeout: int) -> list[dict[str, str]]:
+    """List of {product_name, hardware_model_name} the Upgrade Path Tool knows for this product.
+
+    This is the same JSON the tool's own product dropdown fetches on selection change, so it's a
+    more reliable model source than scraping release notes for a "Supported models" section (which
+    FortiAnalyzer/FortiManager release notes don't reliably have in the same format as FortiOS).
+    """
+    url = f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/products/{product_slug}.json"
+    request = urllib.request.Request(url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8", errors="ignore"))
+    return data.get("products", [])
+
+
+def fetch_model_firmwares(product_slug: str, hardware_model_name: str, timeout: int) -> list[dict[str, str]]:
+    """Version/build catalog for one model, from the tool's own available_from/to_extended lists."""
+    payload_json = post_official_upgrade_tool(
+        {"product_slug": product_slug, "model": hardware_model_name}, timeout
+    )
+    result = payload_json.get("result")
+    if not isinstance(result, dict):
+        return []
+
+    by_version: dict[str, dict[str, str]] = {}
+    for item in (result.get("available_from_extended") or []) + (result.get("available_to_extended") or []):
+        version = item.get("version")
+        if version:
+            by_version[version] = item
+    return list(by_version.values())
+
+
+def collect_tool_catalog(product_id: str, timeout: int) -> dict[str, Any]:
+    """Model + version/build catalog for a product, sourced from the Upgrade Path Tool itself."""
+    meta = PRODUCTS[product_id]
+    state = normalize_state({})
+    product = ensure_product(state, product_id, meta["label"])
+
+    for entry in fetch_product_models(meta["slug"], timeout):
+        model_id = entry.get("hardware_model_name")
+        if not model_id:
+            continue
+        model_label_value = entry.get("product_name") or model_id
+        model = next((item for item in product["models"] if item.get("id") == model_id), None)
+        if model is None:
+            model = {"id": model_id, "label": model_label_value, "firmwares": []}
+            product["models"].append(model)
+
+        for firmware_info in fetch_model_firmwares(meta["slug"], model_id, timeout):
+            upsert_firmware(
+                state,
+                Firmware(
+                    product=product_id,
+                    model=model_id,
+                    version=firmware_info["version"],
+                    build=firmware_info.get("build_number") or "-",
+                ),
+            )
+
+    product["models"].sort(key=lambda item: model_sort_key(item.get("id", "")))
+    return state
 
 
 def parse_official_path_spec(spec: str) -> OfficialPathRequest:
@@ -688,6 +764,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=",".join(DEFAULT_DOCS_MAJOR_VERSIONS),
         help="Trains FortiOS à parcourir sur docs.fortinet.com, séparés par des virgules.",
     )
+    parser.add_argument(
+        "--tool-products",
+        default="",
+        help=(
+            "Produits (séparés par des virgules) à enrichir depuis les endpoints publics de "
+            "l'Upgrade Path Tool Fortinet, ex: fortianalyzer,fortimanager. Identifiants valides : "
+            + ", ".join(PRODUCTS)
+        ),
+    )
     parser.add_argument("--timeout", type=int, default=12)
     parser.add_argument("--skip-network", action="store_true")
     return parser.parse_args(argv)
@@ -709,6 +794,13 @@ def main(argv: list[str]) -> int:
         state = merge_state(state, docs_state)
     elif args.docs_catalog:
         skipped_docs_versions = ["collecte ignorée avec --skip-network"]
+
+    tool_products = [item.strip() for item in args.tool_products.split(",") if item.strip()]
+    if tool_products and not args.skip_network:
+        for product_id in tool_products:
+            if product_id not in PRODUCTS:
+                continue
+            state = merge_state(state, collect_tool_catalog(product_id, args.timeout))
 
     for advisory in import_csv_advisories(args.advisories_csv):
         state["advisories"] = [item for item in state["advisories"] if item.get("id") != advisory["id"]]
