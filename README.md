@@ -8,6 +8,10 @@ Outil interne pour afficher le chemin de mise à niveau FortiOS recommandé par 
 Upgrade_path/
   app/
     index.html
+    shared.css
+    alerte/
+      index.html
+      app.js
   data/
     fortios-data.sample.json
   scripts/
@@ -163,6 +167,18 @@ devient un chemin recommandé stocké pour le modèle `FGT90G`.
 
 ## Ajouter des alertes internes
 
+### Depuis l'interface (recommandé)
+
+```text
+http://localhost:8000/app/alerte/
+```
+
+Cette page permet à un ingénieur de déclarer une alerte interne (titre, description, sévérité, moment) en cochant une ou plusieurs versions FortiOS concernées, et en choisissant si elle s'applique à tous les boîtiers ou à une sélection précise. L'alerte est envoyée à l'endpoint local `POST /api/advisories`, qui l'ajoute dans `data/fortios-data.generated.json`. Elle s'affiche ensuite automatiquement dans l'outil principal dès qu'un chemin d'upgrade passe par une des versions concernées, pour un modèle concerné.
+
+Comme pour la récupération Fortinet, cette page a besoin de `scripts/fortios_server.py` pour fonctionner (pas d'un simple serveur statique).
+
+### Depuis un CSV (import en masse)
+
 Créer `data/advisories.csv` avec les colonnes suivantes :
 
 ```csv
@@ -176,6 +192,8 @@ adv-7.4.11-traffic-redirect,fortigate-fortios,FGT90G,7.4.11,,,important,post-upg
   set allow-traffic-redirect enable
 end",Base interne SNS
 ```
+
+Puis lancer `python3 scripts/fortios_watch.py --base data/fortios-data.generated.json`. La colonne `version` ne prend qu'une seule version par ligne ; pour cibler plusieurs versions avec la même alerte, passer par la page `/app/alerte/` (colonne `versions`, tableau) ou dupliquer la ligne CSV.
 
 ## Automatisation FortiCare / FNDN
 

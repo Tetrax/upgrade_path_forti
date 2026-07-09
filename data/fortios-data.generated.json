@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T15:09:54Z",
+  "generatedAt": "2026-07-09T15:22:42Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -10459,7 +10459,11 @@
               "version": "7.0.19",
               "build": "0696",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -10557,7 +10561,11 @@
               "version": "7.2.13",
               "build": "1762",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -10641,7 +10649,11 @@
               "version": "7.4.11",
               "build": "2878",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -78198,6 +78210,20 @@
       ],
       "source": "Fortinet Upgrade Path Tool public service",
       "fetchedAt": "2026-07-09T14:59:29Z"
+    },
+    {
+      "id": "path-FGT80F-7.0.19-7.4.11",
+      "product": "fortigate-fortios",
+      "model": "FGT80F",
+      "from": "7.0.19",
+      "to": "7.4.11",
+      "hops": [
+        "7.0.19",
+        "7.2.13",
+        "7.4.11"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T15:15:13Z"
     }
   ],
   "advisories": [

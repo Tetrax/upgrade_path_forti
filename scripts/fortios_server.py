@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import sys
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -17,11 +18,16 @@ from fortios_watch import (
     fetch_official_upgrade_path,
     normalize_state,
     read_json,
+    slugify,
+    upsert_advisory,
     upsert_firmware,
     upsert_path,
     utc_now,
     write_json,
 )
+
+VALID_SEVERITIES = {"critical", "important", "warning", "info"}
+VALID_TIMINGS = {"pre-upgrade", "during-upgrade", "post-upgrade"}
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,10 +41,14 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def do_POST(self) -> None:
-        if self.path != "/api/official-path":
+        if self.path == "/api/official-path":
+            self.handle_official_path()
+        elif self.path == "/api/advisories":
+            self.handle_create_advisory()
+        else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
-            return
 
+    def handle_official_path(self) -> None:
         try:
             payload = self.read_json_body()
             request = OfficialPathRequest(
@@ -73,6 +83,53 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.write_json_response({"state": state, "path": path_payload})
         except KeyError as error:
             self.write_json_response({"error": f"Champ manquant : {error.args[0]}"}, HTTPStatus.BAD_REQUEST)
+        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+
+    def handle_create_advisory(self) -> None:
+        try:
+            payload = self.read_json_body()
+            title = str(payload.get("title", "")).strip()
+            description = str(payload.get("description", "")).strip()
+            versions = [str(item).strip() for item in payload.get("versions") or [] if str(item).strip()]
+            if not title or not description or not versions:
+                raise ValueError("Titre, description et au moins une version sont obligatoires.")
+
+            severity = str(payload.get("severity") or "important").strip()
+            if severity not in VALID_SEVERITIES:
+                raise ValueError(f"Sévérité invalide : {severity}")
+            timing = str(payload.get("timing") or "post-upgrade").strip()
+            if timing not in VALID_TIMINGS:
+                raise ValueError(f"Timing invalide : {timing}")
+
+            models = [str(item).strip() for item in payload.get("models") or [] if str(item).strip()]
+            command = str(payload.get("command") or "").strip()
+            source = str(payload.get("source") or "Ingénieur SNS").strip()
+
+            advisory: dict[str, Any] = {
+                "id": f"adv-{slugify(title)}-{secrets.token_hex(4)}",
+                "product": DEFAULT_PRODUCT_ID,
+                "versions": versions,
+                "severity": severity,
+                "timing": timing,
+                "title": title,
+                "description": description,
+                "source": source,
+                "createdAt": utc_now(),
+            }
+            if models:
+                advisory["models"] = models
+            if command:
+                advisory["command"] = command
+
+            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+            upsert_advisory(state, advisory)
+            state["generatedAt"] = utc_now()
+            write_json(DATA_PATH, state)
+
+            self.write_json_response({"state": state, "advisory": advisory})
+        except ValueError as error:
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 

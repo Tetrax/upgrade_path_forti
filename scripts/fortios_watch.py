@@ -393,6 +393,22 @@ def read_official_path_requests(path: Path) -> list[OfficialPathRequest]:
     return requests
 
 
+def slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "advisory"
+
+
+def upsert_advisory(state: dict[str, Any], advisory: dict[str, Any]) -> bool:
+    for index, existing in enumerate(state["advisories"]):
+        if existing.get("id") == advisory.get("id"):
+            if existing == advisory:
+                return False
+            state["advisories"][index] = advisory
+            return True
+    state["advisories"].append(advisory)
+    return True
+
+
 def upsert_path(state: dict[str, Any], item: UpgradePath) -> bool:
     path_id = f"path-{item.model}-{item.from_version}-{item.to_version}"
     next_path = {

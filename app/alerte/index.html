@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Alertes internes — FortiOS Upgrade Intelligence</title>
+  <link rel="stylesheet" href="../shared.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="mark">F</div>
+        <div>
+          <h1>Alertes internes</h1>
+          <p class="subtitle">Déclarer un problème rencontré sur une ou plusieurs versions FortiOS, pour tous les boîtiers ou certains seulement.</p>
+        </div>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="../" title="Retour à l'outil de chemin d'upgrade">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+          Retour à l'outil
+        </a>
+      </div>
+    </header>
+
+    <section class="grid">
+      <aside class="panel">
+        <div class="panel-header">
+          <p class="eyebrow">Nouvelle alerte</p>
+          <h2 class="panel-title">Déclarer une alerte interne</h2>
+        </div>
+        <div class="panel-body">
+          <div class="field">
+            <label for="titleInput">Titre</label>
+            <input type="text" id="titleInput" placeholder="Ex: Option allow-traffic-redirect à vérifier" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="descriptionInput">Description</label>
+            <textarea id="descriptionInput" placeholder="Décrire le comportement observé et l'action à effectuer."></textarea>
+          </div>
+          <div class="version-row">
+            <div class="field">
+              <label for="severitySelect">Sévérité</label>
+              <select id="severitySelect">
+                <option value="critical">Critique</option>
+                <option value="important" selected>Importante</option>
+                <option value="warning">Avertissement</option>
+                <option value="info">Info</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="timingSelect">Moment</label>
+              <select id="timingSelect">
+                <option value="pre-upgrade">Avant upgrade</option>
+                <option value="during-upgrade">Pendant l'upgrade</option>
+                <option value="post-upgrade" selected>Après upgrade</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Versions FortiOS concernées</label>
+            <input type="text" id="versionSearch" placeholder="Filtrer, ex: 7.4" autocomplete="off" />
+            <div class="check-list" id="versionList"></div>
+            <p class="hint">Cocher une ou plusieurs versions. L'alerte s'affichera pour tout chemin d'upgrade qui passe par une de ces versions.</p>
+          </div>
+
+          <div class="field">
+            <label>Boîtiers concernés</label>
+            <div class="toggle-group">
+              <button type="button" class="btn active" id="scopeAllButton">Tous les boîtiers</button>
+              <button type="button" class="btn" id="scopeSomeButton">Boîtiers spécifiques</button>
+            </div>
+            <div class="field hidden" id="modelPickerField" style="margin-top: 10px;">
+              <input type="text" id="modelSearch" placeholder="Filtrer, ex: 90G, 100F..." autocomplete="off" />
+              <div class="check-list" id="modelList"></div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="commandInput">Commande à vérifier (optionnel)</label>
+            <textarea id="commandInput" placeholder="config system settings&#10;  set allow-traffic-redirect enable&#10;end"></textarea>
+          </div>
+
+          <div class="field">
+            <label for="sourceInput">Source</label>
+            <input type="text" id="sourceInput" placeholder="Ingénieur SNS" autocomplete="off" />
+          </div>
+
+          <button class="btn primary" id="submitButton">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L14.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+            Publier l'alerte
+          </button>
+          <p class="message" id="formMessage"></p>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="panel-header">
+          <p class="eyebrow">Base interne</p>
+          <h2 class="panel-title">Alertes déjà publiées</h2>
+        </div>
+        <div class="content-band" id="advisoryList"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
