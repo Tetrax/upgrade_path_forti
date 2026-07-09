@@ -629,8 +629,7 @@
         if (advisory.product && advisory.product !== path.product) continue;
         if (Array.isArray(advisory.models) && !advisory.models.includes(path.model)) continue;
 
-        const versions = advisoryVersions(advisory);
-        const versionMatch = versions.some(version => path.hops.includes(version));
+        const versionMatch = path.hops.some(version => advisoryMatchesVersion(advisory, version));
         const hopMatch = advisory.from && advisory.to && hopPairs(path).some(pair => pair.from === advisory.from && pair.to === advisory.to);
         if (versionMatch || hopMatch) items.push(advisory);
       }
@@ -638,7 +637,12 @@
     }
 
     function advisoriesForVersion(path, version) {
-      return advisoriesForPath(path).filter(item => advisoryVersions(item).includes(version));
+      return advisoriesForPath(path).filter(item => advisoryMatchesVersion(item, version));
+    }
+
+    function advisoryMatchesVersion(advisory, version) {
+      if (advisory.minVersion) return compareVersions(version, advisory.minVersion) >= 0;
+      return advisoryVersions(advisory).includes(version);
     }
 
     function advisoryVersions(advisory) {

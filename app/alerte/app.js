@@ -3,6 +3,7 @@ let allModels = [];
 let allVersions = [];
 let advisories = [];
 let modelScope = "all";
+let versionMode = "exact";
 
 const els = {
   title: document.getElementById("titleInput"),
@@ -11,8 +12,13 @@ const els = {
   timing: document.getElementById("timingSelect"),
   command: document.getElementById("commandInput"),
   source: document.getElementById("sourceInput"),
+  versionModeExactButton: document.getElementById("versionModeExactButton"),
+  versionModeFromButton: document.getElementById("versionModeFromButton"),
+  versionExactField: document.getElementById("versionExactField"),
+  versionFromField: document.getElementById("versionFromField"),
   versionSearch: document.getElementById("versionSearch"),
   versionList: document.getElementById("versionList"),
+  minVersionSelect: document.getElementById("minVersionSelect"),
   scopeAllButton: document.getElementById("scopeAllButton"),
   scopeSomeButton: document.getElementById("scopeSomeButton"),
   modelPickerField: document.getElementById("modelPickerField"),
@@ -25,6 +31,8 @@ const els = {
 
 els.scopeAllButton.addEventListener("click", () => setScope("all"));
 els.scopeSomeButton.addEventListener("click", () => setScope("some"));
+els.versionModeExactButton.addEventListener("click", () => setVersionMode("exact"));
+els.versionModeFromButton.addEventListener("click", () => setVersionMode("from"));
 els.versionSearch.addEventListener("input", () => renderVersionList());
 els.modelSearch.addEventListener("input", () => renderModelList());
 els.submitButton.addEventListener("click", submitAdvisory);
@@ -72,6 +80,7 @@ function loadState(state) {
 
   renderVersionList();
   renderModelList();
+  renderMinVersionOptions();
   renderAdvisoryList();
 }
 
@@ -80,6 +89,25 @@ function setScope(scope) {
   els.scopeAllButton.classList.toggle("active", scope === "all");
   els.scopeSomeButton.classList.toggle("active", scope === "some");
   els.modelPickerField.classList.toggle("hidden", scope === "all");
+}
+
+function setVersionMode(mode) {
+  versionMode = mode;
+  els.versionModeExactButton.classList.toggle("active", mode === "exact");
+  els.versionModeFromButton.classList.toggle("active", mode === "from");
+  els.versionExactField.classList.toggle("hidden", mode !== "exact");
+  els.versionFromField.classList.toggle("hidden", mode !== "from");
+}
+
+function renderMinVersionOptions() {
+  els.minVersionSelect.replaceChildren();
+  const versionsAscending = [...allVersions].sort(compareVersions);
+  for (const version of versionsAscending) {
+    const option = document.createElement("option");
+    option.value = version;
+    option.textContent = version;
+    els.minVersionSelect.appendChild(option);
+  }
 }
 
 function renderVersionList() {
@@ -113,10 +141,11 @@ function renderModelList() {
 }
 
 function checkboxRow(value, labelText, checked) {
-  const checkbox = el("input", { type: "checkbox" });
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
   checkbox.value = value;
   checkbox.checked = checked;
-  const label = el("label", {});
+  const label = document.createElement("label");
   label.appendChild(checkbox);
   label.appendChild(document.createTextNode(" " + labelText));
   return label;
@@ -129,15 +158,20 @@ function getCheckedValues(container) {
 async function submitAdvisory() {
   const title = els.title.value.trim();
   const description = els.description.value.trim();
-  const versions = getCheckedValues(els.versionList);
+  const versions = versionMode === "exact" ? getCheckedValues(els.versionList) : [];
+  const minVersion = versionMode === "from" ? els.minVersionSelect.value : "";
   const models = modelScope === "some" ? getCheckedValues(els.modelList) : [];
 
   if (!title || !description) {
     els.formMessage.textContent = "Titre et description sont obligatoires.";
     return;
   }
-  if (!versions.length) {
+  if (versionMode === "exact" && !versions.length) {
     els.formMessage.textContent = "Cocher au moins une version FortiOS concernée.";
+    return;
+  }
+  if (versionMode === "from" && !minVersion) {
+    els.formMessage.textContent = "Choisir la version de départ.";
     return;
   }
   if (modelScope === "some" && !models.length) {
@@ -157,6 +191,7 @@ async function submitAdvisory() {
         severity: els.severity.value,
         timing: els.timing.value,
         versions,
+        minVersion,
         models,
         command: els.command.value.trim(),
         source: els.source.value.trim()
@@ -185,6 +220,7 @@ function resetForm() {
   els.versionSearch.value = "";
   els.modelSearch.value = "";
   setScope("all");
+  setVersionMode("exact");
   renderVersionList();
   renderModelList();
 }
@@ -209,10 +245,12 @@ function advisoryCard(item) {
 
   const description = el("p", { text: item.description });
 
-  const versions = advisoryVersions(item);
+  const versionsLabel = item.minVersion
+    ? `${item.minVersion} et ultérieures`
+    : advisoryVersions(item).join(", ") || "-";
   const modelsScope = Array.isArray(item.models) && item.models.length ? item.models.join(", ") : "Tous";
   const meta = el("p", { className: "hint" });
-  meta.textContent = `Versions : ${versions.join(", ") || "-"} • Boîtiers : ${modelsScope} • Source : ${item.source || "-"}`;
+  meta.textContent = `Versions : ${versionsLabel} • Boîtiers : ${modelsScope} • Source : ${item.source || "-"}`;
 
   const article = el("article", { className: `advisory-row callout ${calloutClass(item.severity)}` });
   article.appendChild(head);

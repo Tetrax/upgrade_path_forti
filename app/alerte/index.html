@@ -61,9 +61,22 @@
 
           <div class="field">
             <label>Versions FortiOS concernées</label>
-            <input type="text" id="versionSearch" placeholder="Filtrer, ex: 7.4" autocomplete="off" />
-            <div class="check-list" id="versionList"></div>
-            <p class="hint">Cocher une ou plusieurs versions. L'alerte s'affichera pour tout chemin d'upgrade qui passe par une de ces versions.</p>
+            <div class="toggle-group">
+              <button type="button" class="btn active" id="versionModeExactButton">Versions précises</button>
+              <button type="button" class="btn" id="versionModeFromButton">À partir d'une version</button>
+            </div>
+
+            <div id="versionExactField" style="margin-top: 10px;">
+              <input type="text" id="versionSearch" placeholder="Filtrer, ex: 7.4" autocomplete="off" />
+              <div class="check-list" id="versionList"></div>
+              <p class="hint">Cocher une ou plusieurs versions. L'alerte s'affichera pour tout chemin d'upgrade qui passe par une de ces versions.</p>
+            </div>
+
+            <div class="field hidden" id="versionFromField" style="margin-top: 10px;">
+              <label for="minVersionSelect">À partir de la version (incluse)</label>
+              <select id="minVersionSelect"></select>
+              <p class="hint">L'alerte s'affichera pour cette version et toute version FortiOS ultérieure (ex: 7.4.10 déclenche aussi sur 7.4.11, 7.4.12, 7.6.x...).</p>
+            </div>
           </div>
 
           <div class="field">

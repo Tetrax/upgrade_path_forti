@@ -92,8 +92,11 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             title = str(payload.get("title", "")).strip()
             description = str(payload.get("description", "")).strip()
             versions = [str(item).strip() for item in payload.get("versions") or [] if str(item).strip()]
-            if not title or not description or not versions:
-                raise ValueError("Titre, description et au moins une version sont obligatoires.")
+            min_version = str(payload.get("minVersion") or "").strip()
+            if not title or not description:
+                raise ValueError("Titre et description sont obligatoires.")
+            if not versions and not min_version:
+                raise ValueError("Indiquer au moins une version, ou une version de départ.")
 
             severity = str(payload.get("severity") or "important").strip()
             if severity not in VALID_SEVERITIES:
@@ -109,7 +112,6 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             advisory: dict[str, Any] = {
                 "id": f"adv-{slugify(title)}-{secrets.token_hex(4)}",
                 "product": DEFAULT_PRODUCT_ID,
-                "versions": versions,
                 "severity": severity,
                 "timing": timing,
                 "title": title,
@@ -117,6 +119,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 "source": source,
                 "createdAt": utc_now(),
             }
+            if min_version:
+                advisory["minVersion"] = min_version
+            else:
+                advisory["versions"] = versions
             if models:
                 advisory["models"] = models
             if command:
