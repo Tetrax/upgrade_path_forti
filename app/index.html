@@ -641,8 +641,17 @@
     }
 
     function advisoryMatchesVersion(advisory, version) {
+      if (Array.isArray(advisory.minVersions) && advisory.minVersions.length) {
+        return advisory.minVersions.some(threshold => sameTrain(version, threshold) && compareVersions(version, threshold) >= 0);
+      }
+      // Legacy single-threshold advisories predate per-train scoping and were meant to apply
+      // forever once the change shipped, so they intentionally stay open across later trains too.
       if (advisory.minVersion) return compareVersions(version, advisory.minVersion) >= 0;
       return advisoryVersions(advisory).includes(version);
+    }
+
+    function sameTrain(a, b) {
+      return a.split(".").slice(0, 2).join(".") === b.split(".").slice(0, 2).join(".");
     }
 
     function advisoryVersions(advisory) {

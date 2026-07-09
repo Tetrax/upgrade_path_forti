@@ -23,7 +23,8 @@ const els = {
   versionFromField: document.getElementById("versionFromField"),
   versionSearch: document.getElementById("versionSearch"),
   versionList: document.getElementById("versionList"),
-  minVersionSelect: document.getElementById("minVersionSelect"),
+  minVersionSearch: document.getElementById("minVersionSearch"),
+  minVersionList: document.getElementById("minVersionList"),
   scopeAllButton: document.getElementById("scopeAllButton"),
   scopeSomeButton: document.getElementById("scopeSomeButton"),
   modelPickerField: document.getElementById("modelPickerField"),
@@ -43,6 +44,7 @@ els.scopeSomeButton.addEventListener("click", () => setScope("some"));
 els.versionModeExactButton.addEventListener("click", () => setVersionMode("exact"));
 els.versionModeFromButton.addEventListener("click", () => setVersionMode("from"));
 els.versionSearch.addEventListener("input", () => renderVersionList());
+els.minVersionSearch.addEventListener("input", () => renderMinVersionList());
 els.modelSearch.addEventListener("input", () => renderModelList());
 els.submitButton.addEventListener("click", submitAdvisory);
 els.cancelEditButton.addEventListener("click", cancelEdit);
@@ -94,7 +96,7 @@ function loadState(state) {
 
   renderVersionList();
   renderModelList();
-  renderMinVersionOptions();
+  renderMinVersionList();
   renderAdvisoryList();
 }
 
@@ -121,14 +123,18 @@ function setSeverityFilter(severity) {
   renderAdvisoryList();
 }
 
-function renderMinVersionOptions() {
-  els.minVersionSelect.replaceChildren();
-  const versionsAscending = [...allVersions].sort(compareVersions);
-  for (const version of versionsAscending) {
-    const option = document.createElement("option");
-    option.value = version;
-    option.textContent = version;
-    els.minVersionSelect.appendChild(option);
+function renderMinVersionList() {
+  const filter = normalizeSearch(els.minVersionSearch.value);
+  const checked = new Set(getCheckedValues(els.minVersionList));
+  const visible = allVersions.filter(version => !filter || normalizeSearch(version).includes(filter));
+
+  els.minVersionList.replaceChildren();
+  if (!visible.length) {
+    els.minVersionList.appendChild(el("span", { className: "hint", text: "Aucune version ne correspond au filtre." }));
+    return;
+  }
+  for (const version of visible) {
+    els.minVersionList.appendChild(checkboxRow(version, version, checked.has(version)));
   }
 }
 
@@ -188,7 +194,7 @@ async function submitAdvisory() {
   const title = els.title.value.trim();
   const description = els.description.value.trim();
   const versions = versionMode === "exact" ? getCheckedValues(els.versionList) : [];
-  const minVersion = versionMode === "from" ? els.minVersionSelect.value : "";
+  const minVersions = versionMode === "from" ? getCheckedValues(els.minVersionList) : [];
   const models = modelScope === "some" ? getCheckedValues(els.modelList) : [];
 
   if (!title || !description) {
@@ -199,8 +205,8 @@ async function submitAdvisory() {
     els.formMessage.textContent = "Cocher au moins une version FortiOS concernée.";
     return;
   }
-  if (versionMode === "from" && !minVersion) {
-    els.formMessage.textContent = "Choisir la version de départ.";
+  if (versionMode === "from" && !minVersions.length) {
+    els.formMessage.textContent = "Cocher au moins un point de départ.";
     return;
   }
   if (modelScope === "some" && !models.length) {
@@ -221,7 +227,7 @@ async function submitAdvisory() {
         severity: els.severity.value,
         timing: els.timing.value,
         versions,
-        minVersion,
+        minVersions,
         models,
         command: els.command.value.trim(),
         source: els.source.value.trim()
@@ -250,9 +256,12 @@ function startEdit(item) {
   els.command.value = item.command || "";
   els.source.value = item.source || "";
 
-  if (item.minVersion) {
+  const minVersions = advisoryMinVersions(item);
+  if (minVersions.length) {
     setVersionMode("from");
-    els.minVersionSelect.value = item.minVersion;
+    els.minVersionSearch.value = "";
+    renderMinVersionList();
+    setCheckedValues(els.minVersionList, minVersions);
   } else {
     setVersionMode("exact");
     els.versionSearch.value = "";
@@ -306,10 +315,12 @@ function resetForm() {
   els.severity.value = "important";
   els.timing.value = "post-upgrade";
   els.versionSearch.value = "";
+  els.minVersionSearch.value = "";
   els.modelSearch.value = "";
   setScope("all");
   setVersionMode("exact");
   renderVersionList();
+  renderMinVersionList();
   renderModelList();
   els.submitButtonLabel.textContent = "Publier l'alerte";
   els.cancelEditButton.classList.add("hidden");
@@ -325,8 +336,8 @@ function filteredAdvisories() {
       [
         item.title,
         item.description,
-        item.minVersion,
         ...advisoryVersions(item),
+        ...advisoryMinVersions(item),
         ...(Array.isArray(item.models) ? item.models : [])
       ]
         .filter(Boolean)
@@ -376,8 +387,9 @@ function advisoryCard(item) {
 
   const description = el("p", { text: item.description });
 
-  const versionsLabel = item.minVersion
-    ? `${item.minVersion} et ultérieures`
+  const minVersions = advisoryMinVersions(item);
+  const versionsLabel = minVersions.length
+    ? minVersions.map(version => `${version}+`).join(", ")
     : advisoryVersions(item).join(", ") || "-";
   const modelsScope = Array.isArray(item.models) && item.models.length ? item.models.join(", ") : "Tous";
   const meta = el("p", { className: "hint" });
@@ -412,6 +424,11 @@ function advisoryCard(item) {
 function advisoryVersions(advisory) {
   if (Array.isArray(advisory.versions)) return advisory.versions;
   return advisory.version ? [advisory.version] : [];
+}
+
+function advisoryMinVersions(advisory) {
+  if (Array.isArray(advisory.minVersions)) return advisory.minVersions;
+  return advisory.minVersion ? [advisory.minVersion] : [];
 }
 
 function el(tag, options) {

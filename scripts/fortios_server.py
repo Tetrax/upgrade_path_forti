@@ -36,11 +36,11 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     title = str(payload.get("title", "")).strip()
     description = str(payload.get("description", "")).strip()
     versions = [str(item).strip() for item in payload.get("versions") or [] if str(item).strip()]
-    min_version = str(payload.get("minVersion") or "").strip()
+    min_versions = [str(item).strip() for item in payload.get("minVersions") or [] if str(item).strip()]
     if not title or not description:
         raise ValueError("Titre et description sont obligatoires.")
-    if not versions and not min_version:
-        raise ValueError("Indiquer au moins une version, ou une version de départ.")
+    if not versions and not min_versions:
+        raise ValueError("Indiquer au moins une version, ou au moins un point de départ.")
 
     severity = str(payload.get("severity") or "important").strip()
     if severity not in VALID_SEVERITIES:
@@ -61,8 +61,8 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "description": description,
         "source": source,
     }
-    if min_version:
-        fields["minVersion"] = min_version
+    if min_versions:
+        fields["minVersions"] = min_versions
     else:
         fields["versions"] = versions
     if models:

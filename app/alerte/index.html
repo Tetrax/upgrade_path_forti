@@ -63,7 +63,7 @@
             <label>Versions FortiOS concernées</label>
             <div class="toggle-group">
               <button type="button" class="btn active" id="versionModeExactButton">Versions précises</button>
-              <button type="button" class="btn" id="versionModeFromButton">À partir d'une version</button>
+              <button type="button" class="btn" id="versionModeFromButton">À partir de versions</button>
             </div>
 
             <div id="versionExactField" style="margin-top: 10px;">
@@ -73,9 +73,10 @@
             </div>
 
             <div class="field hidden" id="versionFromField" style="margin-top: 10px;">
-              <label for="minVersionSelect">À partir de la version (incluse)</label>
-              <select id="minVersionSelect"></select>
-              <p class="hint">L'alerte s'affichera pour cette version et toute version FortiOS ultérieure (ex: 7.4.10 déclenche aussi sur 7.4.11, 7.4.12, 7.6.x...).</p>
+              <label>À partir de (une par branche concernée)</label>
+              <input type="text" id="minVersionSearch" placeholder="Filtrer, ex: 7.4" autocomplete="off" />
+              <div class="check-list" id="minVersionList"></div>
+              <p class="hint">Cocher un point de départ par branche concernée (ex: 7.2.11 et 7.4.5 et 7.6.1 pour un correctif backporté dans ces trois branches). L'alerte s'affiche pour cette version et les versions suivantes de la même branche (7.4.5 déclenche sur 7.4.5+, mais pas sur 7.2.x ni 7.6.x sauf si cochées aussi).</p>
             </div>
           </div>
 
