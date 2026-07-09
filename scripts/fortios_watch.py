@@ -330,7 +330,9 @@ def fetch_official_upgrade_path(requested: OfficialPathRequest, timeout: int) ->
         "target_version": requested.to_version,
     }
     payload_json = post_official_upgrade_tool(payload, timeout)
-    path_items = payload_json.get("result", {}).get("path") or []
+    result = payload_json.get("result")
+    path_items = result.get("path") if isinstance(result, dict) else None
+    path_items = path_items or []
     if len(path_items) < 2:
         return None
 

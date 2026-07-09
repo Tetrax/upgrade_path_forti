@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T13:59:49Z",
+  "generatedAt": "2026-07-09T14:59:29Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -5790,7 +5790,11 @@
               "version": "6.2.4",
               "build": "1112",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -5804,7 +5808,11 @@
               "version": "6.2.6",
               "build": "1175",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -5825,7 +5833,11 @@
               "version": "6.2.9",
               "build": "1234",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -5839,7 +5851,11 @@
               "version": "6.2.11",
               "build": "1303",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -5951,7 +5967,11 @@
               "version": "6.4.11",
               "build": "2030",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6077,7 +6097,11 @@
               "version": "7.0.12",
               "build": "0523",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6091,14 +6115,23 @@
               "version": "7.0.14",
               "build": "0601",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
               "version": "7.0.15",
               "build": "0632",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6203,7 +6236,12 @@
               "version": "7.2.10",
               "build": "1706",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6287,7 +6325,12 @@
               "version": "7.4.8",
               "build": "2795",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6308,7 +6351,11 @@
               "version": "7.4.11",
               "build": "2878",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -10459,7 +10506,11 @@
               "version": "7.0.19",
               "build": "0696",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -10557,7 +10608,11 @@
               "version": "7.2.13",
               "build": "1762",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -10648,7 +10703,12 @@
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -78147,7 +78207,57 @@
         "7.4.11"
       ],
       "source": "Fortinet Upgrade Path Tool public service",
-      "fetchedAt": "2026-07-09T13:59:49Z"
+      "fetchedAt": "2026-07-09T14:35:18Z"
+    },
+    {
+      "id": "path-FGT60F-6.2.4-7.4.11",
+      "product": "fortigate-fortios",
+      "model": "FGT60F",
+      "from": "6.2.4",
+      "to": "7.4.11",
+      "hops": [
+        "6.2.4",
+        "6.2.6",
+        "6.2.9",
+        "6.2.11",
+        "6.4.11",
+        "7.0.12",
+        "7.0.14",
+        "7.2.10",
+        "7.4.8",
+        "7.4.11"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T14:52:15Z"
+    },
+    {
+      "id": "path-FGT60F-7.0.15-7.4.11",
+      "product": "fortigate-fortios",
+      "model": "FGT60F",
+      "from": "7.0.15",
+      "to": "7.4.11",
+      "hops": [
+        "7.0.15",
+        "7.2.10",
+        "7.4.8",
+        "7.4.11"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T14:52:49Z"
+    },
+    {
+      "id": "path-FGT80F-7.0.19-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT80F",
+      "from": "7.0.19",
+      "to": "7.4.12",
+      "hops": [
+        "7.0.19",
+        "7.2.13",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T14:59:29Z"
     }
   ],
   "advisories": [

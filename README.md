@@ -18,7 +18,7 @@ Upgrade_path/
 
 ## Lancer l'interface
 
-Pour utiliser le bouton **Récupérer Fortinet**, lancer le serveur local depuis la racine :
+Pour que **Afficher le chemin** puisse récupérer automatiquement la recommandation Fortinet quand rien n'est en cache, lancer le serveur local depuis la racine :
 
 ```bash
 python3 scripts/fortios_server.py --port 8000
@@ -30,7 +30,7 @@ Puis ouvrir :
 http://localhost:8000/app/
 ```
 
-Ce serveur sert l'interface et ajoute l'endpoint local `POST /api/official-path`. Quand on clique sur **Récupérer Fortinet**, l'interface lui envoie le modèle, la version actuelle et la version cible. Le serveur interroge alors le service public Fortinet Upgrade Path Tool, ajoute le chemin officiel dans `data/fortios-data.generated.json`, puis rafraîchit l'affichage.
+Ce serveur sert l'interface et ajoute l'endpoint local `POST /api/official-path`. Quand on clique sur **Afficher le chemin** et qu'aucun chemin n'est stocké pour la combinaison demandée, l'interface envoie automatiquement le modèle, la version actuelle et la version cible à cet endpoint. Le serveur interroge alors le service public Fortinet Upgrade Path Tool, ajoute le chemin officiel dans `data/fortios-data.generated.json`, puis rafraîchit l'affichage. Si un chemin est déjà stocké, il est affiché immédiatement sans appel réseau ; un bouton **Fortinet** reste disponible à côté du chemin affiché pour forcer une actualisation.
 
 Il reste possible d'ouvrir directement :
 
@@ -44,7 +44,7 @@ Ou de lancer un serveur statique :
 python3 -m http.server 8000
 ```
 
-Dans ces deux modes, l'interface reste consultable, mais le bouton **Récupérer Fortinet** ne peut pas fonctionner car aucun endpoint local ne relaie la requête vers Fortinet. Si la page est ouverte directement depuis le fichier HTML, le navigateur peut aussi bloquer le chargement automatique du JSON. Dans ce cas, utiliser **Importer** et sélectionner `data/fortios-data.generated.json`.
+Dans ces deux modes, l'interface reste consultable, mais la récupération automatique depuis Fortinet ne peut pas fonctionner car aucun endpoint local ne relaie la requête. Si la page est ouverte directement depuis le fichier HTML, le navigateur peut aussi bloquer le chargement automatique du JSON. Dans ce cas, utiliser **Importer** et sélectionner `data/fortios-data.generated.json`.
 
 ## Rapport d'intervention
 
@@ -129,7 +129,7 @@ python3 scripts/fortios_watch.py --official-path FGT40F:7.0.15:7.4.11
 
 Ces chemins sont affichés comme **Recommended path** dans l'interface avec la source `Fortinet Upgrade Path Tool public service`.
 
-Depuis l'interface, le même appel est disponible directement avec le bouton **Récupérer Fortinet** si l'application a été lancée avec :
+Depuis l'interface, le même appel se fait automatiquement en cliquant sur **Afficher le chemin** si l'application a été lancée avec :
 
 ```bash
 python3 scripts/fortios_server.py --port 8000
