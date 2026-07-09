@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T20:27:51Z",
+  "generatedAt": "2026-07-09T20:37:00Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -19966,8 +19966,20 @@
               "version": "7.2.9",
               "build": "1688",
               "notes": [
-                "release-notes"
-              ]
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.9/fortios-release-notes",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.2.9/fortios-release-notes/230510/changes-in-default-behavior",
+                "known": "https://docs.fortinet.com/document/fortigate/7.2.9/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.2.9/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.9/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.2.10",
@@ -19980,8 +19992,20 @@
               "version": "7.2.11",
               "build": "1740",
               "notes": [
-                "release-notes"
-              ]
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.11/fortios-release-notes",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.2.11/fortios-release-notes/230510/changes-in-default-behavior",
+                "known": "https://docs.fortinet.com/document/fortigate/7.2.11/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.2.11/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.11/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.2.12",
@@ -20043,15 +20067,37 @@
               "version": "7.4.11",
               "build": "2878",
               "notes": [
-                "release-notes"
-              ]
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
-              ]
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/230510/changes-in-default-behavior",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.6.1",
@@ -94547,7 +94593,7 @@
         "7.4.12"
       ],
       "source": "Fortinet Upgrade Path Tool public service",
-      "fetchedAt": "2026-07-09T20:20:37Z"
+      "fetchedAt": "2026-07-09T20:36:53Z"
     },
     {
       "id": "path-FGT100F-7.0.11-7.4.12",
@@ -94565,13 +94611,28 @@
       ],
       "source": "Fortinet Upgrade Path Tool public service",
       "fetchedAt": "2026-07-09T20:22:00Z"
+    },
+    {
+      "id": "path-FGT120G-7.2.9-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT120G",
+      "from": "7.2.9",
+      "to": "7.4.12",
+      "hops": [
+        "7.2.9",
+        "7.2.11",
+        "7.4.11",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T20:32:17Z"
     }
   ],
   "advisories": [
     {
       "id": "adv-option-allow-traffic-redirect-v-rifier-0a110869",
       "createdAt": "2026-07-09T15:43:54Z",
-      "updatedAt": "2026-07-09T16:15:49Z",
+      "updatedAt": "2026-07-09T20:32:01Z",
       "product": "fortigate-fortios",
       "severity": "warning",
       "timing": "post-upgrade",
@@ -94583,7 +94644,9 @@
         "7.6.5",
         "7.4.10"
       ],
-      "command": "config system global\n    set allow-traffic-redirect disable\n    set ipv6-allow-traffic-redirect disable\nend"
+      "command": "config system global\n    set allow-traffic-redirect disable\n    set ipv6-allow-traffic-redirect disable\nend",
+      "bugId": "1004258",
+      "bugVersion": "7.4.10+, 7.6.5+, 8.0.0+"
     },
     {
       "id": "adv-ssl-connection-is-blocked-cert-probe-failure-0ce06c86",
@@ -94605,6 +94668,7 @@
     {
       "id": "adv-log-non-visible-en-gui-fortigate-59e91bd9",
       "createdAt": "2026-07-09T19:55:05Z",
+      "updatedAt": "2026-07-09T20:30:15Z",
       "product": "fortigate-fortios",
       "severity": "info",
       "timing": "post-upgrade",
@@ -94613,7 +94677,9 @@
       "source": "Ingénieur SNS",
       "versions": [
         "7.4.12"
-      ]
+      ],
+      "bugId": "1282986",
+      "bugVersion": "7.4.12"
     }
   ]
 }

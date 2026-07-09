@@ -492,7 +492,13 @@
       const versionAdvisories = advisoriesForVersion(path, version);
       const rowClass = index === path.hops.length - 1 ? "target-row" : "";
       const badges = versionAdvisories.length
-        ? versionAdvisories.map(item => `<span class="badge ${badgeClass(item.severity)}">${escapeHtml(item.title)}</span>`).join(" ")
+        ? versionAdvisories.map(item => {
+            const label = item.bugId ? `${item.title} · #${item.bugId}` : item.title;
+            const tooltip = item.bugId
+              ? `${item.title} — Bug Fortinet ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}`
+              : item.title;
+            return `<span class="badge ${badgeClass(item.severity)}" title="${escapeAttr(tooltip)}">${escapeHtml(label)}</span>`;
+          }).join(" ")
         : `<span class="badge ok">Aucune alerte interne</span>`;
 
       return `
