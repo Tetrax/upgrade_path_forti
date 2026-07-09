@@ -175,6 +175,15 @@ http://localhost:8000/app/alerte/
 
 Cette page permet à un ingénieur de déclarer une alerte interne (titre, description, sévérité, moment) en cochant une ou plusieurs versions FortiOS concernées, et en choisissant si elle s'applique à tous les boîtiers ou à une sélection précise. L'alerte est envoyée à l'endpoint local `POST /api/advisories`, qui l'ajoute dans `data/fortios-data.generated.json`. Elle s'affiche ensuite automatiquement dans l'outil principal dès qu'un chemin d'upgrade passe par une des versions concernées, pour un modèle concerné.
 
+Le champ description accepte une mise en forme légère, avec aperçu en direct et boutons dédiés dans la page :
+
+- `**texte**` pour du **gras**
+- `__texte__` pour du souligné
+- une ligne commençant par `- ` pour une puce de liste
+- une ligne vide pour démarrer un nouveau paragraphe
+
+Le rendu (dans `/app/alerte/` comme dans l'outil principal) est toujours construit en DOM à partir de ce texte brut, jamais en interprétant du HTML — les captures d'écran ne sont pas encore supportées.
+
 Comme pour la récupération Fortinet, cette page a besoin de `scripts/fortios_server.py` pour fonctionner (pas d'un simple serveur statique).
 
 ### Depuis un CSV (import en masse)

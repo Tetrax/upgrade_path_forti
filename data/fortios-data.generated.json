@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T16:08:01Z",
+  "generatedAt": "2026-07-09T18:56:14Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -15339,7 +15339,12 @@
               "version": "7.2.9",
               "build": "1688",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -15354,7 +15359,12 @@
               "version": "7.2.11",
               "build": "1740",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -15375,7 +15385,12 @@
               "version": "7.4.5",
               "build": "2702",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -15418,14 +15433,23 @@
               "build": "2878",
               "target": true,
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -78334,21 +78358,70 @@
       ],
       "source": "Fortinet Upgrade Path Tool public service",
       "fetchedAt": "2026-07-09T15:56:12Z"
+    },
+    {
+      "id": "path-FGT90G-7.2.9-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT90G",
+      "from": "7.2.9",
+      "to": "7.4.12",
+      "hops": [
+        "7.2.9",
+        "7.2.11",
+        "7.4.11",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T16:16:12Z"
+    },
+    {
+      "id": "path-FGT90G-7.2.9-7.4.5",
+      "product": "fortigate-fortios",
+      "model": "FGT90G",
+      "from": "7.2.9",
+      "to": "7.4.5",
+      "hops": [
+        "7.2.9",
+        "7.4.5"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T16:17:25Z"
     }
   ],
   "advisories": [
     {
       "id": "adv-option-allow-traffic-redirect-v-rifier-0a110869",
       "createdAt": "2026-07-09T15:43:54Z",
-      "updatedAt": "2026-07-09T15:53:24Z",
+      "updatedAt": "2026-07-09T16:15:49Z",
       "product": "fortigate-fortios",
-      "severity": "important",
+      "severity": "warning",
       "timing": "post-upgrade",
       "title": "Option allow-traffic-redirect à vérifier",
       "description": "Le paramètre par défaut de allow-traffic-redirect et ipv6-allow-traffic-redirect a été modifié : il passe de enable à disable.\n\nLa désactivation de ce paramètre garantit que le trafic arrivant sur une interface et redirigé en sortie sur cette même interface nécessite une règle firewall l’autorisant explicitement.",
       "source": "Ingénieur SNS",
-      "minVersion": "7.4.10",
+      "minVersions": [
+        "8.0.0",
+        "7.6.5",
+        "7.4.10"
+      ],
       "command": "config system global\n    set allow-traffic-redirect disable\n    set ipv6-allow-traffic-redirect disable\nend"
+    },
+    {
+      "id": "adv-ssl-connection-is-blocked-cert-probe-failure-0ce06c86",
+      "createdAt": "2026-07-09T16:14:25Z",
+      "updatedAt": "2026-07-09T16:18:00Z",
+      "product": "fortigate-fortios",
+      "severity": "warning",
+      "timing": "post-upgrade",
+      "title": "SSL connection is blocked (cert-probe-failure)",
+      "description": "Changement dans le fonctionnement de l'inspection SSL sur les profils par défaut. \n\nCréer un nouveau profil ssl en clonant le profil par défaut utilisé et modifier en cli",
+      "source": "Ingénieur SNS",
+      "minVersions": [
+        "7.6.1",
+        "7.4.5",
+        "7.2.11"
+      ],
+      "command": "config firewall ssl-ssh-profile\nedit <name>\nconfig https\nset cert-probe-failure allow\nend\nend\nend"
     }
   ]
 }

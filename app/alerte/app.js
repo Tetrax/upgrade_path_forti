@@ -36,7 +36,11 @@ const els = {
   formMessage: document.getElementById("formMessage"),
   advisorySearch: document.getElementById("advisorySearch"),
   severityFilterGroup: document.getElementById("severityFilterGroup"),
-  advisoryList: document.getElementById("advisoryList")
+  advisoryList: document.getElementById("advisoryList"),
+  boldButton: document.getElementById("boldButton"),
+  underlineButton: document.getElementById("underlineButton"),
+  bulletButton: document.getElementById("bulletButton"),
+  descriptionPreview: document.getElementById("descriptionPreview")
 };
 
 els.scopeAllButton.addEventListener("click", () => setScope("all"));
@@ -49,6 +53,10 @@ els.modelSearch.addEventListener("input", () => renderModelList());
 els.submitButton.addEventListener("click", submitAdvisory);
 els.cancelEditButton.addEventListener("click", cancelEdit);
 els.advisorySearch.addEventListener("input", () => renderAdvisoryList());
+els.boldButton.addEventListener("click", () => wrapSelection(els.description, "**", "**"));
+els.underlineButton.addEventListener("click", () => wrapSelection(els.description, "__", "__"));
+els.bulletButton.addEventListener("click", () => toggleBulletLines(els.description));
+els.description.addEventListener("input", () => renderRichText(els.descriptionPreview, els.description.value));
 for (const button of els.severityFilterGroup.querySelectorAll("[data-severity-filter]")) {
   button.addEventListener("click", () => setSeverityFilter(button.dataset.severityFilter));
 }
@@ -251,6 +259,7 @@ function startEdit(item) {
   editingId = item.id;
   els.title.value = item.title || "";
   els.description.value = item.description || "";
+  renderRichText(els.descriptionPreview, els.description.value);
   els.severity.value = item.severity || "important";
   els.timing.value = item.timing || "post-upgrade";
   els.command.value = item.command || "";
@@ -310,6 +319,7 @@ function resetForm() {
   editingId = null;
   els.title.value = "";
   els.description.value = "";
+  renderRichText(els.descriptionPreview, "");
   els.command.value = "";
   els.source.value = "";
   els.severity.value = "important";
@@ -385,7 +395,8 @@ function advisoryCard(item) {
   head.appendChild(el("h4", { className: "callout-title", text: item.title }));
   head.appendChild(el("span", { className: `badge ${badgeClass(item.severity)}`, text: timingLabel(item.timing) }));
 
-  const description = el("p", { text: item.description });
+  const description = el("div", { className: "rich-text" });
+  renderRichText(description, item.description);
 
   const minVersions = advisoryMinVersions(item);
   const versionsLabel = minVersions.length
@@ -429,6 +440,86 @@ function advisoryVersions(advisory) {
 function advisoryMinVersions(advisory) {
   if (Array.isArray(advisory.minVersions)) return advisory.minVersions;
   return advisory.minVersion ? [advisory.minVersion] : [];
+}
+
+function wrapSelection(textarea, before, after) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const value = textarea.value;
+  const selected = value.slice(start, end) || "texte";
+  textarea.value = value.slice(0, start) + before + selected + after + value.slice(end);
+  const cursorStart = start + before.length;
+  textarea.focus();
+  textarea.setSelectionRange(cursorStart, cursorStart + selected.length);
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function toggleBulletLines(textarea) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const value = textarea.value;
+  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+  const nextBreak = value.indexOf("\n", end);
+  const lineEnd = nextBreak === -1 ? value.length : nextBreak;
+  const lines = value.slice(lineStart, lineEnd).split("\n");
+  const allBulleted = lines.every(line => line.startsWith("- ") || line.trim() === "");
+  const transformed = lines
+    .map(line => {
+      if (line.trim() === "") return line;
+      return allBulleted ? line.replace(/^- /, "") : `- ${line}`;
+    })
+    .join("\n");
+  textarea.value = value.slice(0, lineStart) + transformed + value.slice(lineEnd);
+  textarea.focus();
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+// Lightweight formatting markup: **bold**, __underline__, "- " bullet lines, blank line = new
+// paragraph. Always builds real DOM nodes (never innerHTML) so rendering stays safe by construction.
+function renderRichText(container, text) {
+  container.replaceChildren();
+  if (!text) return;
+  const lines = String(text).split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i].trim() === "") {
+      i += 1;
+      continue;
+    }
+    if (lines[i].startsWith("- ")) {
+      const list = document.createElement("ul");
+      while (i < lines.length && lines[i].startsWith("- ")) {
+        const item = document.createElement("li");
+        appendInlineRich(item, lines[i].slice(2));
+        list.appendChild(item);
+        i += 1;
+      }
+      container.appendChild(list);
+      continue;
+    }
+    const paragraph = document.createElement("p");
+    let first = true;
+    while (i < lines.length && lines[i].trim() !== "" && !lines[i].startsWith("- ")) {
+      if (!first) paragraph.appendChild(document.createElement("br"));
+      appendInlineRich(paragraph, lines[i]);
+      first = false;
+      i += 1;
+    }
+    container.appendChild(paragraph);
+  }
+}
+
+function appendInlineRich(parent, text) {
+  const pattern = /\*\*(.+?)\*\*|__(.+?)__/g;
+  let lastIndex = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    const node = document.createElement(match[1] !== undefined ? "strong" : "u");
+    node.textContent = match[1] !== undefined ? match[1] : match[2];
+    parent.appendChild(node);
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) parent.appendChild(document.createTextNode(text.slice(lastIndex)));
 }
 
 function el(tag, options) {

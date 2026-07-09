@@ -469,6 +469,7 @@
         </div>
       `;
 
+      hydrateRichText(els.result, hopAdvisories);
       els.sideMessage.textContent = `${path.hops.join(" > ")} affiché avec ${hopAdvisories.length} information(s) ingénieur.`;
     }
 
@@ -602,13 +603,13 @@
 
       return `
         <div class="callouts">
-          ${advisories.map(item => `
+          ${advisories.map((item, index) => `
             <article class="callout ${calloutClass(item.severity)}">
               <div class="callout-head">
                 <h4 class="callout-title">${escapeHtml(item.title)}</h4>
                 <span class="badge ${badgeClass(item.severity)}">${escapeHtml(timingLabel(item.timing))}</span>
               </div>
-              <p>${escapeHtml(item.description)}</p>
+              <div class="rich-text" data-rich-index="${index}"></div>
               ${item.command ? `
                 <div class="codebox">
                   <pre>${escapeHtml(item.command)}</pre>
@@ -621,6 +622,61 @@
           `).join("")}
         </div>
       `;
+    }
+
+    function hydrateRichText(root, advisories) {
+      for (const container of root.querySelectorAll("[data-rich-index]")) {
+        const advisory = advisories[Number(container.dataset.richIndex)];
+        if (advisory) renderRichText(container, advisory.description);
+      }
+    }
+
+    // Lightweight formatting markup: **bold**, __underline__, "- " bullet lines, blank line = new
+    // paragraph. Always builds real DOM nodes (never innerHTML) so rendering stays safe by construction.
+    function renderRichText(container, text) {
+      container.replaceChildren();
+      if (!text) return;
+      const lines = String(text).split("\n");
+      let i = 0;
+      while (i < lines.length) {
+        if (lines[i].trim() === "") {
+          i += 1;
+          continue;
+        }
+        if (lines[i].startsWith("- ")) {
+          const list = document.createElement("ul");
+          while (i < lines.length && lines[i].startsWith("- ")) {
+            const item = document.createElement("li");
+            appendInlineRich(item, lines[i].slice(2));
+            list.appendChild(item);
+            i += 1;
+          }
+          container.appendChild(list);
+          continue;
+        }
+        const paragraph = document.createElement("p");
+        let first = true;
+        while (i < lines.length && lines[i].trim() !== "" && !lines[i].startsWith("- ")) {
+          if (!first) paragraph.appendChild(document.createElement("br"));
+          appendInlineRich(paragraph, lines[i]);
+          first = false;
+          i += 1;
+        }
+        container.appendChild(paragraph);
+      }
+    }
+
+    function appendInlineRich(parent, text) {
+      const pattern = /\*\*(.+?)\*\*|__(.+?)__/g;
+      let lastIndex = 0;
+      for (const match of text.matchAll(pattern)) {
+        if (match.index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+        const node = document.createElement(match[1] !== undefined ? "strong" : "u");
+        node.textContent = match[1] !== undefined ? match[1] : match[2];
+        parent.appendChild(node);
+        lastIndex = match.index + match[0].length;
+      }
+      if (lastIndex < text.length) parent.appendChild(document.createTextNode(text.slice(lastIndex)));
     }
 
     function advisoriesForPath(path) {

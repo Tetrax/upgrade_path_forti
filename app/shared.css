@@ -594,6 +594,50 @@ pre {
 
 .advisory-row .callout-head { margin-bottom: 4px; }
 
+.rich-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.rich-toolbar .mini.active {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.rich-preview {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px dashed #cfd6e2;
+  border-radius: 6px;
+  background: #fbfcfe;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.rich-preview:empty::before {
+  content: "Aperçu...";
+  color: var(--muted);
+}
+
+.rich-text p {
+  margin: 0 0 8px;
+  color: #465165;
+  line-height: 1.45;
+}
+
+.rich-text p:last-child { margin-bottom: 0; }
+
+.rich-text ul {
+  margin: 0 0 8px 18px;
+  padding: 0;
+  color: #465165;
+}
+
+.rich-text ul:last-child { margin-bottom: 0; }
+.rich-text li { margin-bottom: 2px; }
+
 @media (max-width: 920px) {
   .grid {
     grid-template-columns: 1fr;

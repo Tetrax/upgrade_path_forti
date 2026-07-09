@@ -37,7 +37,14 @@
           </div>
           <div class="field">
             <label for="descriptionInput">Description</label>
+            <div class="rich-toolbar">
+              <button type="button" class="mini" id="boldButton" title="Gras (**texte**)"><b>G</b></button>
+              <button type="button" class="mini" id="underlineButton" title="Souligné (__texte__)"><u>S</u></button>
+              <button type="button" class="mini" id="bulletButton" title="Liste à puces">• Liste</button>
+            </div>
             <textarea id="descriptionInput" placeholder="Décrire le comportement observé et l'action à effectuer."></textarea>
+            <p class="hint">Mise en forme : **gras**, __souligné__, une ligne commençant par "- " pour une puce, ligne vide pour un nouveau paragraphe.</p>
+            <div class="rich-preview rich-text" id="descriptionPreview"></div>
           </div>
           <div class="version-row">
             <div class="field">
