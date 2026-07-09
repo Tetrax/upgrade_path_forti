@@ -20,6 +20,7 @@ const els = {
   title: document.getElementById("titleInput"),
   description: document.getElementById("descriptionInput"),
   severity: document.getElementById("severitySelect"),
+  behaviorChange: document.getElementById("behaviorChangeInput"),
   command: document.getElementById("commandInput"),
   bugId: document.getElementById("bugIdInput"),
   bugVersion: document.getElementById("bugVersionInput"),
@@ -312,6 +313,7 @@ async function submitAdvisory() {
         title,
         description,
         severity: els.severity.value,
+        behaviorChange: els.behaviorChange.checked,
         versions,
         minVersions,
         models,
@@ -342,6 +344,7 @@ function startEdit(item) {
   els.description.value = item.description || "";
   renderRichText(els.descriptionPreview, els.description.value);
   els.severity.value = item.severity || "important";
+  els.behaviorChange.checked = Boolean(item.behaviorChange);
   els.command.value = item.command || "";
   els.bugId.value = item.bugId || "";
   els.bugVersion.value = item.bugVersion || "";
@@ -407,6 +410,7 @@ function resetForm() {
   els.bugVersion.value = "";
   els.source.value = "";
   els.severity.value = "important";
+  els.behaviorChange.checked = false;
   els.versionSearch.value = "";
   els.minVersionSearch.value = "";
   els.modelSearch.value = "";
@@ -480,6 +484,9 @@ function advisoryCard(item) {
   const head = el("div", { className: "callout-head" });
   head.appendChild(el("h4", { className: "callout-title", text: item.title }));
   head.appendChild(el("span", { className: `badge ${badgeClass(item.severity)}`, text: SEVERITY_LABEL[item.severity] || "Info" }));
+  if (item.behaviorChange) {
+    head.appendChild(el("span", { className: "badge info", text: "⚙ Comportement par défaut" }));
+  }
 
   const description = el("div", { className: "rich-text" });
   renderRichText(description, item.description);

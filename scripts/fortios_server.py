@@ -65,6 +65,7 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     command = str(payload.get("command") or "").strip()
     bug_id = str(payload.get("bugId") or "").strip()
     bug_version = str(payload.get("bugVersion") or "").strip()
+    behavior_change = bool(payload.get("behaviorChange"))
     source = str(payload.get("source") or "Ingénieur SNS").strip()
 
     fields: dict[str, Any] = {
@@ -82,6 +83,8 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
         fields["models"] = models
     if command:
         fields["command"] = command
+    if behavior_change:
+        fields["behaviorChange"] = True
     if bug_id:
         fields["bugId"] = bug_id
     if bug_version:

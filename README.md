@@ -203,6 +203,12 @@ Les images sont envoyées à `POST /api/advisory-images`, stockées dans `data/a
 
 Deux champs optionnels, **Bug ID / Change Fortinet** et **Version où identifié**, permettent de noter le numéro de bug/change interne Fortinet et la ou les versions où il a été vu (ex: `1004258` / `7.2.11, 7.4.5, 7.6.1`), pour le retrouver facilement plus tard dans les sections Resolved/Known issues des release notes. Purement informatif : ces champs n'influencent pas le déclenchement de l'alerte, contrairement aux versions concernées.
 
+La case **Changement de comportement par défaut (pas un bug)** ajoute un badge distinct (⚙) sur l'alerte, pour la distinguer d'un coup d'œil d'un vrai bug — utile pour les cas type "Changes in default behavior" des release notes Fortinet, où le comportement change intentionnellement plutôt que d'être corrigé.
+
+### Comportement du mode "à partir de versions"
+
+Pour une alerte en mode "à partir de versions" (`minVersions` ou l'ancien `minVersion`), le déclenchement suit la logique suivante : une fois le changement en place, il est considéré comme définitif (il ne revient pas en arrière dans une version ultérieure). En conséquence, l'alerte ne s'affiche que si **cette upgrade précise** fait franchir le seuil — si la version de départ a déjà dépassé un des seuils renseignés, l'alerte ne s'affiche pas (le changement a déjà eu lieu lors d'une upgrade précédente, ce n'est pas le cas ici). Exemple : seuils `7.4.10`, `7.6.5`, `8.0.0` — un upgrade de `7.4.11` vers `7.6.7` ne déclenche pas l'alerte (déjà en 7.4.11, donc déjà après le seuil 7.4.10), mais un upgrade de `7.2.13` vers `7.4.12` la déclenche bien.
+
 Comme pour la récupération Fortinet, cette page a besoin de `scripts/fortios_server.py` pour fonctionner (pas d'un simple serveur statique).
 
 ### Depuis un CSV (import en masse)

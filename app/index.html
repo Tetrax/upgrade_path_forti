@@ -490,10 +490,12 @@
       const rowClass = index === path.hops.length - 1 ? "target-row" : "";
       const badges = versionAdvisories.length
         ? versionAdvisories.map(item => {
-            const label = item.bugId ? `${item.title} · #${item.bugId}` : item.title;
+            const prefix = item.behaviorChange ? "⚙ " : "";
+            const label = prefix + (item.bugId ? `${item.title} · #${item.bugId}` : item.title);
+            const tooltipBase = item.behaviorChange ? `${item.title} (changement de comportement par défaut, pas un bug)` : item.title;
             const tooltip = item.bugId
-              ? `${item.title} — Bug ID ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}`
-              : item.title;
+              ? `${tooltipBase} — Bug ID ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}`
+              : tooltipBase;
             return `<span class="badge ${badgeClass(item.severity)}" title="${escapeAttr(tooltip)}">${escapeHtml(label)}</span>`;
           }).join(" ")
         : `<span class="badge ok">Aucune alerte interne</span>`;
@@ -616,6 +618,7 @@
               <div class="callout-head">
                 <h4 class="callout-title">${escapeHtml(item.title)}</h4>
                 <span class="badge ${badgeClass(item.severity)}">${escapeHtml(severityLabel(item.severity))}</span>
+                ${item.behaviorChange ? `<span class="badge info">⚙ Comportement par défaut</span>` : ""}
               </div>
               <div class="rich-text" data-rich-index="${index}"></div>
               ${item.command ? `
@@ -706,7 +709,7 @@
         if (advisory.product && advisory.product !== path.product) continue;
         if (Array.isArray(advisory.models) && !advisory.models.includes(path.model)) continue;
 
-        const versionMatch = path.hops.some(version => advisoryMatchesVersion(advisory, version));
+        const versionMatch = path.hops.some(version => advisoryMatchesVersion(advisory, version, path));
         const hopMatch = advisory.from && advisory.to && hopPairs(path).some(pair => pair.from === advisory.from && pair.to === advisory.to);
         if (versionMatch || hopMatch) items.push(advisory);
       }
@@ -714,21 +717,43 @@
     }
 
     function advisoriesForVersion(path, version) {
-      return advisoriesForPath(path).filter(item => advisoryMatchesVersion(item, version));
+      return advisoriesForPath(path).filter(item => advisoryMatchesVersion(item, version, path));
     }
 
-    function advisoryMatchesVersion(advisory, version) {
-      if (Array.isArray(advisory.minVersions) && advisory.minVersions.length) {
-        return advisory.minVersions.some(threshold => sameTrain(version, threshold) && compareVersions(version, threshold) >= 0);
+    // Threshold-based advisories (minVersions/minVersion) describe a change that, once it has
+    // shipped, stays in effect forever after. If the path's starting version already has it, this
+    // particular upgrade doesn't cause the transition — the alert would just be noise — so it's
+    // only relevant when "from" hasn't crossed the threshold yet but this path reaches it.
+    function advisoryMatchesVersion(advisory, version, path) {
+      const thresholds = advisoryThresholds(advisory);
+      if (thresholds.length) {
+        if (path && hasChangeByVersion(path.from, thresholds)) return false;
+        return hasChangeByVersion(version, thresholds);
       }
-      // Legacy single-threshold advisories predate per-train scoping and were meant to apply
-      // forever once the change shipped, so they intentionally stay open across later trains too.
-      if (advisory.minVersion) return compareVersions(version, advisory.minVersion) >= 0;
       return advisoryVersions(advisory).includes(version);
     }
 
+    function advisoryThresholds(advisory) {
+      if (Array.isArray(advisory.minVersions) && advisory.minVersions.length) return advisory.minVersions;
+      if (advisory.minVersion) return [advisory.minVersion];
+      return [];
+    }
+
+    function hasChangeByVersion(version, thresholds) {
+      return thresholds.some(threshold => {
+        if (sameTrain(version, threshold)) return compareVersions(version, threshold) >= 0;
+        // Different train: the change already happened earlier in the chain if this version's
+        // train comes chronologically after the threshold's train (7.6.x is always past 7.4.10).
+        return compareVersions(branchOf(version), branchOf(threshold)) > 0;
+      });
+    }
+
+    function branchOf(version) {
+      return version.split(".").slice(0, 2).join(".");
+    }
+
     function sameTrain(a, b) {
-      return a.split(".").slice(0, 2).join(".") === b.split(".").slice(0, 2).join(".");
+      return branchOf(a) === branchOf(b);
     }
 
     function advisoryVersions(advisory) {
