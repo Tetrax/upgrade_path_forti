@@ -337,11 +337,52 @@ def post_official_upgrade_tool(payload: dict[str, str], timeout: int) -> dict[st
         return json.loads(response.read().decode("utf-8", errors="ignore"))
 
 
+_FORTINET_MODEL_ALIASES: dict[str, dict[str, str]] = {}
+
+
+def normalize_model_key(value: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", value.upper())
+
+
+def fortinet_model_alias_map(product_slug: str, timeout: int) -> dict[str, str]:
+    """Normalized product_name -> hardware_model_name for one Fortinet product.
+
+    Our own FortiGate catalog builds model ids from a hand-rolled prefix
+    convention (FGT/FWF/FGR/FFW + suffix) derived from release-notes scraping,
+    which only coincidentally matches the id the Upgrade Path Tool actually
+    expects (its own hardware_model_name) for simple models like FGT60F. As
+    soon as a model has a qualifier (POE, DSL, SFP, BP, 3G4G...), Fortinet's
+    real id uses its own abbreviation (e.g. FortiGate-100F is FG100F, not
+    FGT100F) and the coincidence breaks — silently returning no path. This
+    resolves our id through the tool's own product list instead of guessing.
+    """
+    if product_slug not in _FORTINET_MODEL_ALIASES:
+        alias_map: dict[str, str] = {}
+        for entry in fetch_product_models(product_slug, timeout):
+            name = entry.get("product_name")
+            hardware_model_name = entry.get("hardware_model_name")
+            if name and hardware_model_name:
+                alias_map[normalize_model_key(name)] = hardware_model_name
+        _FORTINET_MODEL_ALIASES[product_slug] = alias_map
+    return _FORTINET_MODEL_ALIASES[product_slug]
+
+
+def resolve_fortinet_model(product_id: str, model_id: str, timeout: int) -> str:
+    if product_id != DEFAULT_PRODUCT_ID:
+        return model_id
+    try:
+        alias_map = fortinet_model_alias_map(PRODUCTS[product_id]["slug"], timeout)
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return model_id
+    return alias_map.get(normalize_model_key(model_label(model_id)), model_id)
+
+
 def fetch_official_upgrade_path(requested: OfficialPathRequest, timeout: int) -> tuple[UpgradePath, list[Firmware]] | None:
     product_slug = PRODUCTS.get(requested.product, PRODUCTS[DEFAULT_PRODUCT_ID])["slug"]
+    api_model = resolve_fortinet_model(requested.product, requested.model, timeout)
     payload = {
         "product_slug": product_slug,
-        "model": requested.model,
+        "model": api_model,
         "current_version": requested.from_version,
         "target_version": requested.to_version,
     }

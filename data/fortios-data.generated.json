@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T19:50:13Z",
+  "generatedAt": "2026-07-09T20:07:31Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -1102,7 +1102,11 @@
               "version": "7.2.13",
               "build": "1762",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -1202,7 +1206,12 @@
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6098,7 +6107,12 @@
               "version": "7.0.15",
               "build": "0632",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6203,7 +6217,12 @@
               "version": "7.2.10",
               "build": "1706",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6224,7 +6243,11 @@
               "version": "7.2.13",
               "build": "1762",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6287,7 +6310,12 @@
               "version": "7.4.8",
               "build": "2795",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -6308,14 +6336,23 @@
               "version": "7.4.11",
               "build": "2878",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -18520,7 +18557,11 @@
               "version": "7.2.13",
               "build": "1762",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -18611,7 +18652,12 @@
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -94274,7 +94320,7 @@
         "7.4.11"
       ],
       "source": "Fortinet Upgrade Path Tool public service",
-      "fetchedAt": "2026-07-09T14:52:49Z"
+      "fetchedAt": "2026-07-09T19:58:13Z"
     },
     {
       "id": "path-FGT80F-7.0.19-7.4.12",
@@ -94390,7 +94436,46 @@
         "7.2.12"
       ],
       "source": "Fortinet Upgrade Path Tool public service",
-      "fetchedAt": "2026-07-09T19:48:40Z"
+      "fetchedAt": "2026-07-09T20:07:31Z"
+    },
+    {
+      "id": "path-FGT60F-7.2.13-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT60F",
+      "from": "7.2.13",
+      "to": "7.4.12",
+      "hops": [
+        "7.2.13",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T19:58:44Z"
+    },
+    {
+      "id": "path-FGT40F-7.2.13-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT40F",
+      "from": "7.2.13",
+      "to": "7.4.12",
+      "hops": [
+        "7.2.13",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T19:58:44Z"
+    },
+    {
+      "id": "path-FGT70F-7.2.13-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT70F",
+      "from": "7.2.13",
+      "to": "7.4.12",
+      "hops": [
+        "7.2.13",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T19:58:45Z"
     }
   ],
   "advisories": [
@@ -94427,6 +94512,19 @@
         "7.2.11"
       ],
       "command": "config firewall ssl-ssh-profile\nedit <name>\nconfig https\nset cert-probe-failure allow\nend\nend\nend"
+    },
+    {
+      "id": "adv-log-non-visible-en-gui-fortigate-59e91bd9",
+      "createdAt": "2026-07-09T19:55:05Z",
+      "product": "fortigate-fortios",
+      "severity": "info",
+      "timing": "post-upgrade",
+      "title": "Log non visible en GUI Fortigate",
+      "description": "Avec un FAZ en 7.4.11 il n'est pas possible de voir les logs en GUI dans log & report",
+      "source": "Ingénieur SNS",
+      "versions": [
+        "7.4.12"
+      ]
     }
   ]
 }
