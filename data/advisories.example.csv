@@ -1,0 +1,4 @@
+id,product,models,version,from,to,severity,timing,title,description,command,source
+adv-7.4.11-traffic-redirect,fortigate-fortios,FGT90G,7.4.11,,,important,post-upgrade,Option a verifier apres passage en 7.4.11,Verifier que allow-traffic-redirect est dans l'etat attendu apres upgrade,"config system settings
+  set allow-traffic-redirect enable
+end",Base interne SNS

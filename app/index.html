@@ -1,0 +1,1631 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FortiOS Upgrade Intelligence</title>
+  <style>
+    :root {
+      --bg: #f4f6f9;
+      --panel: #ffffff;
+      --text: #1c2533;
+      --muted: #687386;
+      --line: #d9dee8;
+      --soft-line: #edf0f5;
+      --brand: #e7352d;
+      --brand-dark: #b92721;
+      --ink: #132033;
+      --info: #1769aa;
+      --warn: #b26a00;
+      --danger: #b3261e;
+      --ok: #18734b;
+      --soft-red: #fff1f0;
+      --soft-blue: #eef6ff;
+      --soft-yellow: #fff7e8;
+      --soft-green: #eefaf3;
+      --shadow: 0 12px 28px rgba(19, 32, 51, 0.08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    button, input, select, textarea {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    .shell {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 20px 0 32px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .brand-block {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .mark {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--brand);
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      min-height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .btn svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 2;
+    }
+
+    .btn.primary {
+      border-color: var(--ink);
+      background: var(--ink);
+      color: #fff;
+    }
+
+    .btn.danger {
+      border-color: #ffcdc9;
+      color: var(--brand-dark);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 380px minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      padding: 18px 18px 12px;
+      border-bottom: 1px solid var(--soft-line);
+    }
+
+    .eyebrow {
+      margin: 0 0 6px;
+      color: var(--brand);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    .panel-body {
+      padding: 16px 18px 18px;
+    }
+
+    .field {
+      margin-bottom: 14px;
+    }
+
+    label {
+      display: block;
+      color: #4f5b6e;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    select, textarea, input[type="text"] {
+      width: 100%;
+      border: 1px solid #cfd6e2;
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      min-height: 40px;
+      padding: 0 10px;
+      outline: none;
+    }
+
+    textarea {
+      padding: 10px;
+      min-height: 92px;
+      resize: vertical;
+      line-height: 1.45;
+    }
+
+    select:focus, textarea:focus, input[type="text"]:focus {
+      border-color: var(--info);
+      box-shadow: 0 0 0 3px rgba(23, 105, 170, 0.12);
+    }
+
+    .version-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .hint {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-line {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--soft-line);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ok);
+      flex: 0 0 auto;
+    }
+
+    .path-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 18px;
+      border-bottom: 1px solid var(--soft-line);
+    }
+
+    .path-title {
+      margin: 4px 0 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 28px;
+      line-height: 1.1;
+      letter-spacing: 0;
+      font-weight: 800;
+    }
+
+    .path-title .from { color: var(--brand); }
+    .path-title .arrow { color: #7b8597; font-weight: 500; }
+    .path-title .to { color: var(--ink); }
+
+    .path-meta {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: #eef1f5;
+      color: #465165;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .badge.warn { background: var(--soft-yellow); color: var(--warn); }
+    .badge.danger { background: var(--soft-red); color: var(--danger); }
+    .badge.ok { background: var(--soft-green); color: var(--ok); }
+    .badge.info { background: var(--soft-blue); color: var(--info); }
+
+    .steps {
+      padding: 26px 18px 18px;
+      border-bottom: 1px solid var(--soft-line);
+      overflow-x: auto;
+    }
+
+    .step-track {
+      display: flex;
+      align-items: center;
+      min-width: max-content;
+    }
+
+    .step {
+      min-width: 112px;
+      text-align: center;
+      position: relative;
+    }
+
+    .step-label {
+      color: #7a8496;
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      margin-bottom: 7px;
+    }
+
+    .step-box {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 78px;
+      min-height: 36px;
+      border: 1px solid #bec7d5;
+      border-radius: 4px;
+      background: #fff;
+      color: var(--ink);
+      font-weight: 800;
+      font-size: 13px;
+    }
+
+    .step.target .step-box {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #fff;
+    }
+
+    .connector {
+      width: 52px;
+      height: 1px;
+      background: #bcc5d3;
+      position: relative;
+      margin: 18px -9px 0;
+      flex: 0 0 auto;
+    }
+
+    .connector::after {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: -4px;
+      border-left: 7px solid #bcc5d3;
+      border-top: 4px solid transparent;
+      border-bottom: 4px solid transparent;
+    }
+
+    .content-band {
+      padding: 18px;
+    }
+
+    .section-title {
+      margin: 0 0 12px;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    .table-wrap {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 620px;
+      background: #fff;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 12px 13px;
+      border-bottom: 1px solid var(--soft-line);
+      vertical-align: top;
+    }
+
+    th {
+      color: #687386;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      background: #fafbfc;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+    tr.target-row { background: var(--soft-red); }
+
+    .version-cell {
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .notes {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .note-token {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: inline-grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+      border: 1px solid #d5dbe6;
+      color: #4d596b;
+      background: #fff;
+    }
+
+    .note-token.active {
+      border-color: #2d5b8f;
+      background: #eef6ff;
+      color: #174d86;
+    }
+
+    .callouts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .callout {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      background: #fff;
+    }
+
+    .callout.warn {
+      border-color: #ffdca5;
+      background: var(--soft-yellow);
+    }
+
+    .callout.danger {
+      border-color: #ffc8c3;
+      background: var(--soft-red);
+    }
+
+    .callout.info {
+      border-color: #bfddfa;
+      background: var(--soft-blue);
+    }
+
+    .callout-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 7px;
+    }
+
+    .callout-title {
+      margin: 0;
+      font-weight: 800;
+      line-height: 1.25;
+    }
+
+    .callout p {
+      margin: 0;
+      color: #465165;
+      line-height: 1.45;
+    }
+
+    .codebox {
+      margin-top: 10px;
+      border: 1px solid #d8dee9;
+      background: #fbfcfe;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    pre {
+      margin: 0;
+      padding: 10px;
+      overflow: auto;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .code-actions {
+      display: flex;
+      justify-content: flex-end;
+      border-top: 1px solid #e3e7ef;
+      padding: 6px;
+      background: #fff;
+    }
+
+    .mini {
+      min-height: 28px;
+      padding: 0 8px;
+      border-radius: 5px;
+      background: #fff;
+      border: 1px solid var(--line);
+      color: var(--ink);
+      font-size: 12px;
+    }
+
+    .empty {
+      border: 1px dashed #c8d0dd;
+      border-radius: 8px;
+      padding: 22px;
+      text-align: center;
+      color: var(--muted);
+      background: #fbfcfe;
+    }
+
+    .drawer {
+      margin-top: 16px;
+      border-top: 1px solid var(--soft-line);
+      padding-top: 16px;
+    }
+
+    .hidden { display: none !important; }
+
+    .import-box {
+      display: grid;
+      gap: 10px;
+    }
+
+    .message {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      min-height: 18px;
+    }
+
+    .file-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    @media (max-width: 920px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .toolbar {
+        justify-content: flex-start;
+      }
+
+      .callouts {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .shell {
+        width: min(100vw - 20px, 1180px);
+        padding-top: 10px;
+      }
+
+      .version-row {
+        grid-template-columns: 1fr;
+      }
+
+      .path-head {
+        flex-direction: column;
+      }
+
+      .path-title {
+        font-size: 23px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="mark">F</div>
+        <div>
+          <h1>FortiOS Upgrade Intelligence</h1>
+          <p class="subtitle">Chemin recommandé Fortinet, impacts connus et actions à ne pas oublier.</p>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button class="btn" id="importDataButton" title="Importer un JSON généré automatiquement">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          Importer
+        </button>
+        <button class="btn" id="exportDataButton" title="Exporter la base locale">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>
+          Exporter
+        </button>
+        <button class="btn danger" id="resetButton" title="Restaurer l'exemple de départ">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v6h6"/></svg>
+          Exemple
+        </button>
+      </div>
+      <input class="file-input" id="importFile" type="file" accept="application/json,.json" />
+    </header>
+
+    <section class="grid">
+      <aside class="panel">
+        <div class="panel-header">
+          <p class="eyebrow">Tools & resources</p>
+          <h2 class="panel-title">Upgrade Path Tool</h2>
+        </div>
+        <div class="panel-body">
+          <div class="field">
+            <label for="productSelect">Produit</label>
+            <select id="productSelect"></select>
+          </div>
+          <div class="field">
+            <label for="modelSearch">Modèle FortiGate</label>
+            <input type="text" id="modelSearch" placeholder="Rechercher FGT90G, 100F, VM64..." autocomplete="off" />
+            <p class="hint" id="modelSearchHint">Tous les modèles sont affichés.</p>
+            <select id="modelSelect"></select>
+            <p class="hint">Le modèle est obligatoire, car Fortinet recommande un chemin différent selon le matériel.</p>
+          </div>
+          <div class="version-row">
+            <div class="field">
+              <label for="currentSelect">Version actuelle</label>
+              <select id="currentSelect"></select>
+            </div>
+            <div class="field">
+              <label for="targetSelect">Version cible</label>
+              <select id="targetSelect"></select>
+            </div>
+          </div>
+          <button class="btn primary" id="goButton">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+            Afficher le chemin
+          </button>
+          <div class="status-line">
+            <span class="status-dot"></span>
+            <span id="dataStatus">Données locales chargées.</span>
+          </div>
+
+          <div class="drawer" id="manualDrawer">
+            <p class="section-title">Ajouter un chemin Fortinet</p>
+            <div class="import-box">
+              <textarea id="pathPaste" placeholder="Coller ici l’export CSV/TSV/JSON Fortinet ou le texte contenant les versions. Exemple : 7.2.10 > 7.4.8 > 7.4.11"></textarea>
+              <button class="btn" id="savePathButton">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>
+                Sauvegarder ce chemin
+              </button>
+            </div>
+          </div>
+          <p class="message" id="sideMessage"></p>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div id="result"></div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const STORAGE_KEY = "fortios-upgrade-intelligence-v1";
+    const GENERATED_DATA_URL = "../data/fortios-data.generated.json";
+
+    const sampleState = {
+      generatedAt: "2026-07-09T08:00:00Z",
+      products: [
+        {
+          id: "fortigate-fortios",
+          label: "FortiGate / FortiOS",
+          models: [
+            {
+              id: "FGT90G",
+              label: "FortiGate-90G",
+              firmwares: [
+                { version: "7.2.10", build: "1786", current: true, notes: ["resolved", "known", "upgrade"] },
+                { version: "7.4.8", build: "2795", notes: ["resolved", "known", "upgrade"] },
+                { version: "7.4.11", build: "2878", notes: ["resolved", "known", "upgrade", "behavior"], target: true }
+              ]
+            },
+            {
+              id: "FGT100F",
+              label: "FortiGate-100F",
+              firmwares: [
+                { version: "7.2.9", build: "1688", notes: ["resolved", "known", "upgrade"] },
+                { version: "7.4.7", build: "2731", notes: ["resolved", "known", "upgrade"] },
+                { version: "7.4.11", build: "2878", notes: ["resolved", "known", "upgrade", "behavior"] }
+              ]
+            }
+          ]
+        }
+      ],
+      paths: [
+        {
+          id: "path-FGT90G-7.2.10-7.4.11",
+          product: "fortigate-fortios",
+          model: "FGT90G",
+          from: "7.2.10",
+          to: "7.4.11",
+          hops: ["7.2.10", "7.4.8", "7.4.11"],
+          source: "Fortinet Upgrade Path Tool",
+          fetchedAt: "2026-07-09T08:00:00Z"
+        },
+        {
+          id: "path-FGT100F-7.2.9-7.4.11",
+          product: "fortigate-fortios",
+          model: "FGT100F",
+          from: "7.2.9",
+          to: "7.4.11",
+          hops: ["7.2.9", "7.4.7", "7.4.11"],
+          source: "Fortinet Upgrade Path Tool",
+          fetchedAt: "2026-07-09T08:00:00Z"
+        }
+      ],
+      advisories: [
+        {
+          id: "adv-7.4.11-traffic-redirect",
+          product: "fortigate-fortios",
+          models: ["FGT90G", "FGT100F"],
+          version: "7.4.11",
+          severity: "important",
+          timing: "post-upgrade",
+          title: "Option à vérifier après passage en 7.4.11",
+          description: "Vérifier que allow-traffic-redirect est dans l’état attendu. Si l’upgrade remet l’option en disable sur le parc concerné, l’ingénieur doit la réactiver explicitement.",
+          command: "config system settings\n  set allow-traffic-redirect enable\nend",
+          source: "Base interne SNS"
+        },
+        {
+          id: "adv-7.4.8-known-issues",
+          product: "fortigate-fortios",
+          models: ["FGT90G"],
+          version: "7.4.8",
+          severity: "warning",
+          timing: "pre-upgrade",
+          title: "Lire les Known Issues avant validation client",
+          description: "Étape intermédiaire recommandée par Fortinet. Contrôler les problèmes connus applicables au modèle avant d’ouvrir la fenêtre de changement.",
+          source: "Release notes Fortinet"
+        },
+        {
+          id: "adv-hop-7.2.10-7.4.8",
+          product: "fortigate-fortios",
+          models: ["FGT90G"],
+          from: "7.2.10",
+          to: "7.4.8",
+          severity: "info",
+          timing: "during-upgrade",
+          title: "Point de contrôle entre 7.2.10 et 7.4.8",
+          description: "Après redémarrage sur 7.4.8, contrôler l’état HA, les tunnels critiques et les routes dynamiques avant de poursuivre vers 7.4.11.",
+          source: "Procédure interne"
+        }
+      ]
+    };
+
+    let state = loadState();
+
+    const els = {
+      product: document.getElementById("productSelect"),
+      modelSearch: document.getElementById("modelSearch"),
+      modelSearchHint: document.getElementById("modelSearchHint"),
+      model: document.getElementById("modelSelect"),
+      current: document.getElementById("currentSelect"),
+      target: document.getElementById("targetSelect"),
+      result: document.getElementById("result"),
+      dataStatus: document.getElementById("dataStatus"),
+      sideMessage: document.getElementById("sideMessage"),
+      pathPaste: document.getElementById("pathPaste"),
+      importFile: document.getElementById("importFile")
+    };
+
+    document.getElementById("goButton").addEventListener("click", renderResult);
+    document.getElementById("savePathButton").addEventListener("click", savePastedPath);
+    document.getElementById("importDataButton").addEventListener("click", () => els.importFile.click());
+    document.getElementById("exportDataButton").addEventListener("click", exportData);
+    document.getElementById("resetButton").addEventListener("click", resetExample);
+    els.importFile.addEventListener("change", importData);
+    els.product.addEventListener("change", () => {
+      els.modelSearch.value = "";
+      populateModels();
+      populateVersions();
+      renderResult();
+    });
+    els.modelSearch.addEventListener("input", () => {
+      populateModels();
+      populateVersions();
+      renderResult();
+    });
+    els.model.addEventListener("change", () => {
+      populateVersions();
+      renderResult();
+    });
+    els.current.addEventListener("change", renderResult);
+    els.target.addEventListener("change", renderResult);
+
+    init();
+
+    function init() {
+      populateProducts();
+      populateModels();
+      populateVersions();
+      renderResult();
+      autoLoadGeneratedData();
+    }
+
+    function loadState() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        return raw ? normalizeState(JSON.parse(raw)) : structuredClone(sampleState);
+      } catch {
+        return structuredClone(sampleState);
+      }
+    }
+
+    function saveState() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state, null, 2));
+    }
+
+    function normalizeState(nextState) {
+      const products = Array.isArray(nextState.products) && nextState.products.length
+        ? nextState.products
+        : sampleState.products;
+      return {
+        generatedAt: nextState.generatedAt || new Date().toISOString(),
+        products,
+        paths: Array.isArray(nextState.paths) ? nextState.paths : [],
+        advisories: Array.isArray(nextState.advisories) ? nextState.advisories : []
+      };
+    }
+
+    async function autoLoadGeneratedData() {
+      try {
+        const response = await fetch(GENERATED_DATA_URL, { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        const incoming = normalizeState(await response.json());
+        state = mergeState(state, incoming);
+        saveState();
+        populateProducts();
+        populateModels();
+        populateVersions();
+        renderResult();
+        const stats = catalogStats(state);
+        els.dataStatus.textContent = `JSON généré chargé : ${formatDateTime(incoming.generatedAt)} • ${stats.models} modèles • ${stats.versions} versions FortiOS.`;
+      } catch {
+        els.dataStatus.textContent = "Données locales chargées. Import manuel disponible si le navigateur bloque le JSON généré.";
+      }
+    }
+
+    function populateProducts() {
+      els.product.innerHTML = state.products.map(product => option(product.id, product.label)).join("");
+    }
+
+    function populateModels() {
+      const product = currentProduct();
+      const previousValue = els.model.value;
+      const models = filteredModels(product);
+      els.model.innerHTML = models.length
+        ? models.map(model => option(model.id, model.label)).join("")
+        : `<option value="">Aucun modèle trouvé</option>`;
+      els.model.disabled = models.length === 0;
+
+      if (models.some(model => model.id === previousValue)) {
+        els.model.value = previousValue;
+      } else if (models.length) {
+        els.model.value = models[0].id;
+      }
+
+      els.modelSearchHint.textContent = models.length === product.models.length
+        ? `${models.length} modèles affichés.`
+        : `${models.length} modèle(s) trouvé(s) sur ${product.models.length}.`;
+    }
+
+    function populateVersions() {
+      const model = currentModel();
+      if (!model) {
+        els.current.innerHTML = "";
+        els.target.innerHTML = "";
+        return;
+      }
+      const versions = model.firmwares.map(item => item.version);
+      els.current.innerHTML = versions.map(version => option(version, version)).join("");
+      els.target.innerHTML = versions.map(version => option(version, version)).join("");
+
+      const defaultCurrent = model.firmwares.find(item => item.current)?.version || versions[0];
+      const defaultTarget = model.firmwares.find(item => item.target)?.version || versions[versions.length - 1];
+      els.current.value = defaultCurrent;
+      els.target.value = defaultTarget;
+    }
+
+    function option(value, label) {
+      return `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`;
+    }
+
+    function currentProduct() {
+      return state.products.find(product => product.id === els.product.value) || state.products[0];
+    }
+
+    function currentModel() {
+      const product = currentProduct();
+      if (els.model.disabled || !els.model.value) return null;
+      return product.models.find(model => model.id === els.model.value) || product.models[0];
+    }
+
+    function filteredModels(product) {
+      const query = normalizeSearch(els.modelSearch.value);
+      if (!query) return product.models;
+      return product.models.filter(model => {
+        const haystack = normalizeSearch(`${model.id} ${model.label}`);
+        return haystack.includes(query);
+      });
+    }
+
+    function currentPath() {
+      return state.paths.find(path =>
+        path.product === els.product.value &&
+        path.model === els.model.value &&
+        path.from === els.current.value &&
+        path.to === els.target.value
+      );
+    }
+
+    function renderResult() {
+      const product = currentProduct();
+      const model = currentModel();
+      if (!model) {
+        els.result.innerHTML = `
+          <div class="content-band">
+            <div class="empty">Aucun modèle ne correspond à la recherche.</div>
+          </div>
+        `;
+        els.sideMessage.textContent = "Aucun modèle trouvé avec ce filtre.";
+        return;
+      }
+      const path = currentPath();
+
+      if (!path) {
+        els.result.innerHTML = `
+          <div class="path-head">
+            <div>
+              <p class="eyebrow">Chemin non stocké</p>
+              <div class="path-title"><span class="from">${escapeHtml(els.current.value)}</span><span class="arrow">→</span><span class="to">${escapeHtml(els.target.value)}</span></div>
+              <div class="path-meta">
+                <span>${escapeHtml(product.label)}</span>
+                <span>•</span>
+                <span>${escapeHtml(model.label)}</span>
+                <span>•</span>
+                <span>Catalogue versions seulement</span>
+              </div>
+            </div>
+            <div class="toolbar">
+              <button class="btn primary" data-official-path-button onclick="fetchOfficialPath()" title="Récupérer le chemin officiel Fortinet">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 12a9 9 0 0 1-9 9 9.8 9.8 0 0 1-6.7-2.7"/><path d="M3 12a9 9 0 0 1 9-9 9.8 9.8 0 0 1 6.7 2.7"/><path d="M3 21v-6h6"/><path d="M21 3v6h-6"/></svg>
+                Récupérer Fortinet
+              </button>
+            </div>
+          </div>
+          <div class="content-band">
+            <div class="empty">
+              Aucun chemin recommandé n’est stocké pour ce modèle et ce couple de versions. Le tableau ci-dessous n’est pas un ordre d’upgrade : il liste seulement les versions FortiOS connues dans la plage demandée.
+            </div>
+            ${renderEstimatedPath(model, els.current.value, els.target.value)}
+            ${renderModelCatalog(model, els.current.value, els.target.value)}
+          </div>
+        `;
+        els.sideMessage.textContent = "Chemin absent : il faut récupérer la recommandation Fortinet pour ce modèle.";
+        return;
+      }
+
+      const hopAdvisories = advisoriesForPath(path);
+      const firmwareRows = path.hops.map(version => firmwareFor(model, version));
+
+      els.result.innerHTML = `
+        <div class="path-head">
+          <div>
+            <p class="eyebrow">Recommended path</p>
+            <div class="path-title">
+              <span class="from">${escapeHtml(path.from)}</span>
+              <span class="arrow">→</span>
+              <span class="to">${escapeHtml(path.to)}</span>
+            </div>
+            <div class="path-meta">
+              <span>${escapeHtml(product.label)}</span>
+              <span>•</span>
+              <span>${escapeHtml(model.label)}</span>
+              <span>•</span>
+              <span>${path.hops.length} étapes</span>
+              <span>•</span>
+              <span>Source : ${escapeHtml(path.source || "Fortinet")}</span>
+            </div>
+          </div>
+          <div class="toolbar">
+            <button class="btn" data-official-path-button onclick="fetchOfficialPath()" title="Actualiser le chemin depuis Fortinet">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 12a9 9 0 0 1-9 9 9.8 9.8 0 0 1-6.7-2.7"/><path d="M3 12a9 9 0 0 1 9-9 9.8 9.8 0 0 1 6.7 2.7"/><path d="M3 21v-6h6"/><path d="M21 3v6h-6"/></svg>
+              Fortinet
+            </button>
+            <button class="btn" onclick="copyPath(${jsArg(path.id)})" title="Copier le chemin recommandé">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              Copier
+            </button>
+            <button class="btn" onclick="copyReport(${jsArg(path.id)})" title="Copier le rapport d’intervention">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M8 13h8"/><path d="M8 17h6"/></svg>
+              Rapport
+            </button>
+            <button class="btn" onclick="downloadReport(${jsArg(path.id)})" title="Télécharger le rapport d’intervention">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+              Markdown
+            </button>
+          </div>
+        </div>
+        <div class="steps">
+          <div class="step-track">
+            ${renderSteps(path.hops)}
+          </div>
+        </div>
+        <div class="content-band">
+          <h3 class="section-title">Recommended Upgrade Path</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Version</th>
+                  <th>Build</th>
+                  <th>Release notes</th>
+                  <th>Infos ingénieur</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${firmwareRows.map((firmware, index) => renderFirmwareRow(firmware, path, index)).join("")}
+              </tbody>
+            </table>
+          </div>
+          ${renderCallouts(hopAdvisories)}
+        </div>
+      `;
+
+      els.sideMessage.textContent = `${path.hops.join(" > ")} affiché avec ${hopAdvisories.length} information(s) ingénieur.`;
+    }
+
+    function renderSteps(hops) {
+      return hops.map((version, index) => {
+        const label = index === 0 ? "Current" : index === hops.length - 1 ? "Target" : `Hop ${index}`;
+        const targetClass = index === hops.length - 1 ? " target" : "";
+        const step = `
+          <div class="step${targetClass}">
+            <div class="step-label">${label}</div>
+            <div class="step-box">${escapeHtml(version)}</div>
+          </div>
+        `;
+        return index < hops.length - 1 ? step + `<div class="connector"></div>` : step;
+      }).join("");
+    }
+
+    function renderFirmwareRow(firmware, path, index) {
+      const version = firmware?.version || path.hops[index];
+      const versionAdvisories = advisoriesForVersion(path, version);
+      const rowClass = index === path.hops.length - 1 ? "target-row" : "";
+      const badges = versionAdvisories.length
+        ? versionAdvisories.map(item => `<span class="badge ${badgeClass(item.severity)}">${escapeHtml(item.title)}</span>`).join(" ")
+        : `<span class="badge ok">Aucune alerte interne</span>`;
+
+      return `
+        <tr class="${rowClass}">
+          <td class="version-cell">${escapeHtml(version)} ${index === 0 ? `<span class="badge">Current</span>` : ""} ${index === path.hops.length - 1 ? `<span class="badge danger">Target</span>` : ""}</td>
+          <td>${escapeHtml(firmware?.build || "-")}</td>
+          <td><div class="notes">${renderNoteTokens(firmware?.notes || [])}</div></td>
+          <td>${badges}</td>
+        </tr>
+      `;
+    }
+
+    function renderNoteTokens(notes) {
+      const all = [
+        ["resolved", "R", "Resolved issues"],
+        ["known", "K", "Known issues"],
+        ["upgrade", "U", "Upgrade information"],
+        ["behavior", "B", "Changes in default behavior"],
+        ["release-notes", "D", "Public Fortinet docs"]
+      ];
+      return all.map(([key, label, title]) => {
+        const active = notes.includes(key) ? " active" : "";
+        return `<span class="note-token${active}" title="${escapeAttr(title)}">${label}</span>`;
+      }).join("");
+    }
+
+    function renderModelCatalog(model, fromVersion, toVersion) {
+      if (!model.firmwares?.length) return "";
+      const firmwares = versionsInRange(model.firmwares, fromVersion, toVersion);
+      if (!firmwares.length) {
+        return `
+          <h3 class="section-title">Versions FortiOS connues dans la plage demandée</h3>
+          <div class="empty">Aucune version connue pour ce modèle entre ${escapeHtml(fromVersion)} et ${escapeHtml(toVersion)}.</div>
+        `;
+      }
+
+      const rows = firmwares
+        .sort((a, b) => compareVersions(a.version, b.version))
+        .map(firmware => `
+          <tr>
+            <td class="version-cell">${escapeHtml(firmware.version)}</td>
+            <td>${escapeHtml(firmware.build || "-")}</td>
+            <td><div class="notes">${renderNoteTokens(firmware.notes || [])}</div></td>
+          </tr>
+        `).join("");
+
+      return `
+        <h3 class="section-title">Versions FortiOS connues dans la plage demandée</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Version</th>
+                <th>Build</th>
+                <th>Source</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderEstimatedPath(model, fromVersion, toVersion) {
+      const path = estimatePath(model, fromVersion, toVersion);
+      if (path.length < 2) return "";
+
+      return `
+        <div class="callouts">
+          <article class="callout warn">
+            <div class="callout-head">
+              <h4 class="callout-title">Chemin indicatif à confirmer</h4>
+              <span class="badge warn">Non Fortinet</span>
+            </div>
+            <p>Ce chemin est calculé localement avec les versions publiques connues du modèle. Il sert de repère, mais le chemin officiel doit venir de Fortinet Upgrade Path Tool.</p>
+            <div class="steps">
+              <div class="step-track">${renderSteps(path)}</div>
+            </div>
+          </article>
+        </div>
+      `;
+    }
+
+    function estimatePath(model, fromVersion, toVersion) {
+      const versions = versionsInRange(model.firmwares || [], fromVersion, toVersion)
+        .map(firmware => firmware.version)
+        .sort(compareVersions);
+      if (!versions.includes(fromVersion) || !versions.includes(toVersion)) return [];
+
+      const byTrain = new Map();
+      for (const version of versions) {
+        const train = version.split(".").slice(0, 2).join(".");
+        byTrain.set(train, version);
+      }
+
+      const estimated = [fromVersion];
+      for (const version of byTrain.values()) {
+        if (version !== fromVersion && version !== toVersion) estimated.push(version);
+      }
+      estimated.push(toVersion);
+      return estimated.filter(uniqueInOrder).sort(compareVersions);
+    }
+
+    function renderCallouts(advisories) {
+      if (!advisories.length) {
+        return `<div class="callouts"><div class="callout"><p>Aucune action obligatoire connue dans la base interne pour ce chemin.</p></div></div>`;
+      }
+
+      return `
+        <div class="callouts">
+          ${advisories.map(item => `
+            <article class="callout ${calloutClass(item.severity)}">
+              <div class="callout-head">
+                <h4 class="callout-title">${escapeHtml(item.title)}</h4>
+                <span class="badge ${badgeClass(item.severity)}">${escapeHtml(timingLabel(item.timing))}</span>
+              </div>
+              <p>${escapeHtml(item.description)}</p>
+              ${item.command ? `
+                <div class="codebox">
+                  <pre>${escapeHtml(item.command)}</pre>
+                  <div class="code-actions">
+                    <button class="mini" onclick="copyText(${jsArg(item.command)})">Copier commande</button>
+                  </div>
+                </div>
+              ` : ""}
+            </article>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function advisoriesForPath(path) {
+      const items = [];
+      for (const advisory of state.advisories) {
+        if (advisory.product && advisory.product !== path.product) continue;
+        if (Array.isArray(advisory.models) && !advisory.models.includes(path.model)) continue;
+
+        const versionMatch = advisory.version && path.hops.includes(advisory.version);
+        const hopMatch = advisory.from && advisory.to && hopPairs(path).some(pair => pair.from === advisory.from && pair.to === advisory.to);
+        if (versionMatch || hopMatch) items.push(advisory);
+      }
+      return items.sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+    }
+
+    function advisoriesForVersion(path, version) {
+      return advisoriesForPath(path).filter(item => item.version === version);
+    }
+
+    function hopPairs(path) {
+      return path.hops.slice(0, -1).map((from, index) => ({ from, to: path.hops[index + 1] }));
+    }
+
+    function firmwareFor(model, version) {
+      return model.firmwares.find(item => item.version === version) || { version, build: "-", notes: [] };
+    }
+
+    function savePastedPath() {
+      const versions = (els.pathPaste.value.match(/\d+\.\d+\.\d+(?:\.\d+)?/g) || []).filter(uniqueInOrder);
+      if (versions.length < 2) {
+        els.sideMessage.textContent = "Impossible de trouver au moins deux versions dans le texte collé.";
+        return;
+      }
+
+      const path = {
+        id: `path-${els.model.value}-${versions[0]}-${versions[versions.length - 1]}-${Date.now()}`,
+        product: els.product.value,
+        model: els.model.value,
+        from: versions[0],
+        to: versions[versions.length - 1],
+        hops: versions,
+        source: "Collage export Fortinet",
+        fetchedAt: new Date().toISOString()
+      };
+
+      state.paths = state.paths.filter(item => !(item.product === path.product && item.model === path.model && item.from === path.from && item.to === path.to));
+      state.paths.push(path);
+      ensureFirmwares(path);
+      saveState();
+      populateVersions();
+      els.current.value = path.from;
+      els.target.value = path.to;
+      els.pathPaste.value = "";
+      renderResult();
+    }
+
+    function ensureFirmwares(path) {
+      const model = currentModel();
+      const existing = new Set(model.firmwares.map(item => item.version));
+      for (const version of path.hops) {
+        if (!existing.has(version)) model.firmwares.push({ version, build: "-", notes: [] });
+      }
+      model.firmwares.sort((a, b) => compareVersions(a.version, b.version));
+    }
+
+    function importData(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const incoming = normalizeState(JSON.parse(reader.result));
+          state = mergeState(state, incoming);
+          saveState();
+          populateProducts();
+          populateModels();
+          populateVersions();
+          renderResult();
+          els.dataStatus.textContent = `Import appliqué : ${new Date().toLocaleString("fr-FR")}.`;
+        } catch (error) {
+          els.sideMessage.textContent = "Import impossible : le JSON n’a pas le format attendu.";
+        } finally {
+          event.target.value = "";
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    async function fetchOfficialPath() {
+      const model = currentModel();
+      if (!model) return;
+
+      const selection = {
+        product: els.product.value,
+        model: els.model.value,
+        current: els.current.value,
+        target: els.target.value
+      };
+
+      els.sideMessage.textContent = "Interrogation du service Fortinet...";
+      setOfficialButtonsDisabled(true);
+      try {
+        const response = await fetch("/api/official-path", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: selection.model,
+            from: selection.current,
+            to: selection.target
+          })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || "Service local indisponible.");
+
+        state = mergeState(state, normalizeState(payload.state));
+        saveState();
+        restoreSelection(selection);
+        renderResult();
+        els.dataStatus.textContent = `Chemin Fortinet récupéré : ${new Date().toLocaleString("fr-FR")}.`;
+        els.sideMessage.textContent = `${payload.path.hops.join(" > ")} récupéré depuis Fortinet.`;
+      } catch (error) {
+        els.sideMessage.textContent = `Récupération Fortinet impossible : ${error.message}. Lancer l'interface avec scripts/fortios_server.py.`;
+      } finally {
+        setOfficialButtonsDisabled(false);
+      }
+    }
+
+    function restoreSelection(selection) {
+      els.product.value = selection.product;
+      populateModels();
+      els.model.value = selection.model;
+      populateVersions();
+      els.current.value = selection.current;
+      els.target.value = selection.target;
+    }
+
+    function setOfficialButtonsDisabled(disabled) {
+      for (const button of document.querySelectorAll("[data-official-path-button]")) {
+        button.disabled = disabled;
+      }
+    }
+
+    function mergeState(base, incoming) {
+      const merged = structuredClone(base);
+      const productById = new Map(merged.products.map(product => [product.id, product]));
+
+      for (const product of incoming.products) {
+        if (!productById.has(product.id)) {
+          merged.products.push(product);
+          productById.set(product.id, product);
+          continue;
+        }
+
+        const targetProduct = productById.get(product.id);
+        const modelById = new Map(targetProduct.models.map(model => [model.id, model]));
+        for (const model of product.models || []) {
+          if (!modelById.has(model.id)) {
+            targetProduct.models.push(model);
+            continue;
+          }
+          const targetModel = modelById.get(model.id);
+          const firmwareByVersion = new Map(targetModel.firmwares.map(firmware => [firmware.version, firmware]));
+          for (const firmware of model.firmwares || []) {
+            firmwareByVersion.set(firmware.version, { ...(firmwareByVersion.get(firmware.version) || {}), ...firmware });
+          }
+          targetModel.firmwares = Array.from(firmwareByVersion.values()).sort((a, b) => compareVersions(a.version, b.version));
+        }
+        targetProduct.models.sort((a, b) => compareModelIds(a.id, b.id));
+      }
+
+      merged.paths = upsertByKey(merged.paths, incoming.paths, item => `${item.product}|${item.model}|${item.from}|${item.to}`);
+      merged.advisories = upsertByKey(merged.advisories, incoming.advisories, item => item.id);
+      merged.generatedAt = incoming.generatedAt || new Date().toISOString();
+      return merged;
+    }
+
+    function upsertByKey(baseItems, incomingItems, keyFn) {
+      const map = new Map(baseItems.map(item => [keyFn(item), item]));
+      for (const item of incomingItems) map.set(keyFn(item), item);
+      return Array.from(map.values());
+    }
+
+    function exportData() {
+      downloadText(
+        `fortios-upgrade-data-${new Date().toISOString().slice(0, 10)}.json`,
+        JSON.stringify(state, null, 2),
+        "application/json"
+      );
+    }
+
+    function resetExample() {
+      state = structuredClone(sampleState);
+      saveState();
+      populateProducts();
+      populateModels();
+      populateVersions();
+      renderResult();
+      els.dataStatus.textContent = "Exemple restauré.";
+    }
+
+    function copyPath(pathId) {
+      const path = state.paths.find(item => item.id === pathId);
+      if (path) copyText(path.hops.join(" > "));
+    }
+
+    function copyReport(pathId) {
+      const report = reportForPath(pathId);
+      if (report) copyText(report);
+    }
+
+    function downloadReport(pathId) {
+      const path = state.paths.find(item => item.id === pathId);
+      const report = reportForPath(pathId);
+      if (!path || !report) return;
+
+      downloadText(
+        `fortios-upgrade-report-${safeFilePart(path.model)}-${safeFilePart(path.from)}-${safeFilePart(path.to)}.md`,
+        report,
+        "text/markdown"
+      );
+      els.sideMessage.textContent = "Rapport Markdown téléchargé.";
+    }
+
+    function reportForPath(pathId) {
+      const path = state.paths.find(item => item.id === pathId);
+      if (!path) return "";
+
+      const product = state.products.find(item => item.id === path.product) || currentProduct();
+      const model = (product.models || []).find(item => item.id === path.model) || currentModel();
+      const advisories = advisoriesForPath(path);
+      const firmwareLines = path.hops.map((version, index) => {
+        const firmware = firmwareFor(model, version);
+        const label = index === 0 ? "actuelle" : index === path.hops.length - 1 ? "cible" : `saut ${index}`;
+        return `- ${version} (${label}) - build ${firmware.build || "-"}`;
+      });
+
+      const advisoryLines = advisories.length
+        ? advisories.flatMap(item => {
+            const scope = item.version ? `version ${item.version}` : `${item.from} > ${item.to}`;
+            const lines = [
+              `### ${item.title}`,
+              `- Portée : ${scope}`,
+              `- Sévérité : ${item.severity || "info"}`,
+              `- Moment : ${timingLabel(item.timing)}`,
+              `- Source : ${item.source || "non renseignée"}`,
+              "",
+              item.description || ""
+            ];
+            if (item.command) lines.push("", "```shell", item.command, "```");
+            return lines.concat("");
+          })
+        : ["Aucune action obligatoire connue dans la base interne pour ce chemin.", ""];
+
+      return [
+        `# Rapport d’intervention FortiOS - ${path.model} ${path.from} vers ${path.to}`,
+        "",
+        `- Produit : ${product.label || path.product}`,
+        `- Modèle : ${model.label || path.model}`,
+        `- Chemin recommandé : ${path.hops.join(" > ")}`,
+        `- Source : ${path.source || "Fortinet"}`,
+        `- Données générées : ${formatDateTime(state.generatedAt)}`,
+        "",
+        "## Étapes",
+        "",
+        ...firmwareLines,
+        "",
+        "## Alertes ingénieur",
+        "",
+        ...advisoryLines
+      ].join("\n");
+    }
+
+    async function copyText(text) {
+      if (fallbackCopyText(text)) {
+        els.sideMessage.textContent = "Copié dans le presse-papiers.";
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(text);
+        els.sideMessage.textContent = "Copié dans le presse-papiers.";
+      } catch {
+        els.sideMessage.textContent = "Copie bloquée par le navigateur. Utiliser le téléchargement Markdown.";
+      }
+    }
+
+    function fallbackCopyText(text) {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+
+      try {
+        return document.execCommand("copy");
+      } catch {
+        return false;
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+
+    function downloadText(filename, text, type) {
+      const blob = new Blob([text], { type });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    function uniqueInOrder(value, index, array) {
+      return array.indexOf(value) === index;
+    }
+
+    function compareVersions(a, b) {
+      const left = a.split(".").map(Number);
+      const right = b.split(".").map(Number);
+      for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+        const diff = (left[i] || 0) - (right[i] || 0);
+        if (diff !== 0) return diff;
+      }
+      return 0;
+    }
+
+    function versionsInRange(firmwares, fromVersion, toVersion) {
+      const low = compareVersions(fromVersion, toVersion) <= 0 ? fromVersion : toVersion;
+      const high = compareVersions(fromVersion, toVersion) <= 0 ? toVersion : fromVersion;
+      return firmwares.filter(firmware =>
+        compareVersions(firmware.version, low) >= 0 &&
+        compareVersions(firmware.version, high) <= 0
+      );
+    }
+
+    function compareModelIds(a, b) {
+      const left = modelSortParts(a);
+      const right = modelSortParts(b);
+      return left.familyRank.localeCompare(right.familyRank)
+        || compareNumberLists(left.numbers, right.numbers)
+        || left.value.localeCompare(right.value);
+    }
+
+    function modelSortParts(value) {
+      const family = String(value || "").match(/^[A-Z]+/)?.[0] || "";
+      const familyRank = { FGT: "0", FWF: "1", FGR: "2", FFW: "3" }[family] || "9";
+      return {
+        value: String(value || ""),
+        familyRank,
+        numbers: (String(value || "").match(/\d+/g) || []).map(Number)
+      };
+    }
+
+    function compareNumberLists(left, right) {
+      for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+        const diff = (left[i] || 0) - (right[i] || 0);
+        if (diff !== 0) return diff;
+      }
+      return 0;
+    }
+
+    function normalizeSearch(value) {
+      return String(value || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, "");
+    }
+
+    function severityRank(severity) {
+      return { important: 3, critical: 4, warning: 2, info: 1 }[severity] || 0;
+    }
+
+    function badgeClass(severity) {
+      return { critical: "danger", important: "danger", warning: "warn", info: "info" }[severity] || "ok";
+    }
+
+    function calloutClass(severity) {
+      return { critical: "danger", important: "danger", warning: "warn", info: "info" }[severity] || "";
+    }
+
+    function timingLabel(timing) {
+      return {
+        "pre-upgrade": "Avant upgrade",
+        "during-upgrade": "Pendant",
+        "post-upgrade": "Après upgrade"
+      }[timing] || "Info";
+    }
+
+    function formatDateTime(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value || "-";
+      return date.toLocaleString("fr-FR");
+    }
+
+    function safeFilePart(value) {
+      return String(value || "unknown").replace(/[^a-z0-9._-]+/gi, "-");
+    }
+
+    function catalogStats(nextState) {
+      const models = [];
+      const versions = new Set();
+      for (const product of nextState.products || []) {
+        for (const model of product.models || []) {
+          models.push(model);
+          for (const firmware of model.firmwares || []) {
+            if (firmware.version) versions.add(firmware.version);
+          }
+        }
+      }
+      return { models: models.length, versions: versions.size };
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value).replace(/`/g, "&#096;");
+    }
+
+    function jsArg(value) {
+      return escapeAttr(JSON.stringify(value));
+    }
+  </script>
+</body>
+</html>

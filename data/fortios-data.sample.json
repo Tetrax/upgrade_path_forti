@@ -1,0 +1,60 @@
+{
+  "generatedAt": "2026-07-09T08:00:00Z",
+  "products": [
+    {
+      "id": "fortigate-fortios",
+      "label": "FortiGate / FortiOS",
+      "models": [
+        {
+          "id": "FGT90G",
+          "label": "FortiGate-90G",
+          "firmwares": [
+            {
+              "version": "7.2.10",
+              "build": "1786",
+              "current": true,
+              "notes": ["resolved", "known", "upgrade"]
+            },
+            {
+              "version": "7.4.8",
+              "build": "2795",
+              "notes": ["resolved", "known", "upgrade"]
+            },
+            {
+              "version": "7.4.11",
+              "build": "2878",
+              "target": true,
+              "notes": ["resolved", "known", "upgrade", "behavior"]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "paths": [
+    {
+      "id": "path-FGT90G-7.2.10-7.4.11",
+      "product": "fortigate-fortios",
+      "model": "FGT90G",
+      "from": "7.2.10",
+      "to": "7.4.11",
+      "hops": ["7.2.10", "7.4.8", "7.4.11"],
+      "source": "Fortinet Upgrade Path Tool",
+      "fetchedAt": "2026-07-09T08:00:00Z"
+    }
+  ],
+  "advisories": [
+    {
+      "id": "adv-7.4.11-traffic-redirect",
+      "product": "fortigate-fortios",
+      "models": ["FGT90G"],
+      "version": "7.4.11",
+      "severity": "important",
+      "timing": "post-upgrade",
+      "title": "Option a verifier apres passage en 7.4.11",
+      "description": "Verifier que allow-traffic-redirect est dans l'etat attendu. Si l'upgrade remet l'option en disable sur le parc concerne, l'ingenieur doit la reactiver explicitement.",
+      "command": "config system settings\n  set allow-traffic-redirect enable\nend",
+      "source": "Base interne SNS"
+    }
+  ]
+}
