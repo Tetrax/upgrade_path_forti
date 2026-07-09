@@ -128,8 +128,14 @@ function loadState(state) {
   advisories = Array.isArray(state.advisories) ? state.advisories : [];
 
   populateProductSelects();
-  selectProduct(products[0]?.id || "");
-  advisoryProductFilter = products[0]?.id || ALL_PRODUCTS_VALUE;
+
+  const requestedProduct = new URLSearchParams(window.location.search).get("product");
+  const initialProduct = products.some(product => product.id === requestedProduct)
+    ? requestedProduct
+    : products[0]?.id || "";
+
+  selectProduct(initialProduct);
+  advisoryProductFilter = initialProduct || ALL_PRODUCTS_VALUE;
   els.productFilterSelect.value = advisoryProductFilter;
   renderAdvisoryList();
 }

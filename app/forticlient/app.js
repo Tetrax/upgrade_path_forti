@@ -1,9 +1,13 @@
 const GENERATED_DATA_URL = "../../data/fortios-data.generated.json";
 const CLIENT_PLATFORM_IDS = ["windows", "macos", "linux"];
+const FORTICLIENT_PRODUCT_IDS = ["forticlient", "forticlient-ems"];
+const SEVERITY_LABEL = { critical: "Critique", important: "Importante", warning: "Avertissement", info: "Info" };
 
 let emsVersions = [];
 let clientVersions = [];
 let compatibilities = [];
+let advisories = [];
+let productLabels = {};
 let editingId = null;
 
 const els = {
@@ -18,6 +22,7 @@ const els = {
   formMessage: document.getElementById("formMessage"),
   compatSearch: document.getElementById("compatSearch"),
   compatList: document.getElementById("compatList"),
+  advisoryList: document.getElementById("advisoryList"),
   windowsVersionSummary: document.getElementById("windowsVersionSummary"),
   macosVersionSummary: document.getElementById("macosVersionSummary"),
   linuxVersionSummary: document.getElementById("linuxVersionSummary"),
@@ -56,6 +61,7 @@ function setText(container, text, className) {
 
 function loadState(state) {
   const products = Array.isArray(state.products) ? state.products : [];
+  productLabels = Object.fromEntries(products.map(product => [product.id, product.label || product.id]));
   const fortclient = products.find(p => p.id === "forticlient") || { models: [] };
   const fortclientEms = products.find(p => p.id === "forticlient-ems") || { models: [] };
 
@@ -75,10 +81,13 @@ function loadState(state) {
     .reverse();
 
   compatibilities = Array.isArray(state.compatibilities) ? state.compatibilities : [];
+  advisories = (Array.isArray(state.advisories) ? state.advisories : [])
+    .filter(item => FORTICLIENT_PRODUCT_IDS.includes(item.product));
 
   populateEmsVersionSelect();
   renderClientVersionList();
   renderCompatList();
+  renderAdvisoryList();
   renderVersionSummaries(fortclient, emsModel);
 }
 
@@ -293,6 +302,143 @@ function compatCard(item) {
   article.appendChild(actions);
 
   return article;
+}
+
+function renderAdvisoryList() {
+  els.advisoryList.replaceChildren();
+  if (!advisories.length) {
+    els.advisoryList.appendChild(el("div", { className: "empty", text: "Aucune alerte interne pour FortiClient / FortiClient EMS pour l'instant." }));
+    return;
+  }
+
+  const sorted = [...advisories].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  for (const item of sorted) {
+    els.advisoryList.appendChild(advisoryCard(item));
+  }
+}
+
+function advisoryCard(item) {
+  const head = el("div", { className: "callout-head" });
+  head.appendChild(el("h4", { className: "callout-title", text: item.title }));
+  head.appendChild(el("span", { className: `badge ${badgeClass(item.severity)}`, text: SEVERITY_LABEL[item.severity] || "Info" }));
+  if (item.behaviorChange) {
+    head.appendChild(el("span", { className: "badge info", text: "⚙ Comportement par défaut" }));
+  }
+
+  const description = el("div", { className: "rich-text" });
+  renderRichText(description, item.description);
+
+  const minVersions = advisoryMinVersions(item);
+  const versionsLabel = minVersions.length
+    ? minVersions.map(version => `${version}+`).join(", ")
+    : advisoryVersions(item).join(", ") || "-";
+  const modelsScope = Array.isArray(item.models) && item.models.length ? item.models.join(", ") : "Tous";
+  const meta = el("p", { className: "hint" });
+  meta.textContent = `${productLabels[item.product] || item.product} • Versions : ${versionsLabel} • Boîtiers : ${modelsScope} • Source : ${item.source || "-"}`;
+
+  const article = el("article", { className: `advisory-row callout ${calloutClass(item.severity)}` });
+  article.appendChild(head);
+  article.appendChild(description);
+  article.appendChild(meta);
+
+  if (item.bugId) {
+    article.appendChild(el("p", { className: "hint", text: `Bug ID : ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}` }));
+  }
+  if (item.command) {
+    const pre = el("pre", { text: item.command });
+    const codebox = el("div", { className: "codebox" });
+    codebox.appendChild(pre);
+    article.appendChild(codebox);
+  }
+
+  const actions = el("div", { className: "code-actions" });
+  const manageLink = document.createElement("a");
+  manageLink.className = "mini";
+  manageLink.href = `../alerte/?product=${encodeURIComponent(item.product)}`;
+  manageLink.textContent = "Modifier dans Alertes internes";
+  actions.appendChild(manageLink);
+  article.appendChild(actions);
+
+  return article;
+}
+
+function advisoryVersions(advisory) {
+  if (Array.isArray(advisory.versions)) return advisory.versions;
+  return advisory.version ? [advisory.version] : [];
+}
+
+function advisoryMinVersions(advisory) {
+  if (Array.isArray(advisory.minVersions)) return advisory.minVersions;
+  return advisory.minVersion ? [advisory.minVersion] : [];
+}
+
+function badgeClass(severity) {
+  return { critical: "danger", important: "danger", warning: "warn", info: "info" }[severity] || "ok";
+}
+
+function calloutClass(severity) {
+  return { critical: "danger", important: "danger", warning: "warn", info: "info" }[severity] || "";
+}
+
+// Lightweight formatting markup: **bold**, __underline__, "- " bullet lines, blank line = new
+// paragraph, ![alt](url) images. Always builds real DOM nodes (never innerHTML).
+function renderRichText(container, text) {
+  container.replaceChildren();
+  if (!text) return;
+  const lines = String(text).split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i].trim() === "") {
+      i += 1;
+      continue;
+    }
+    if (lines[i].startsWith("- ")) {
+      const list = document.createElement("ul");
+      while (i < lines.length && lines[i].startsWith("- ")) {
+        const item = document.createElement("li");
+        appendInlineRich(item, lines[i].slice(2));
+        list.appendChild(item);
+        i += 1;
+      }
+      container.appendChild(list);
+      continue;
+    }
+    const paragraph = document.createElement("p");
+    let first = true;
+    while (i < lines.length && lines[i].trim() !== "" && !lines[i].startsWith("- ")) {
+      if (!first) paragraph.appendChild(document.createElement("br"));
+      appendInlineRich(paragraph, lines[i]);
+      first = false;
+      i += 1;
+    }
+    container.appendChild(paragraph);
+  }
+}
+
+function appendInlineRich(parent, text) {
+  const pattern = /\*\*(.+?)\*\*|__(.+?)__|!\[(.*?)\]\((.*?)\)/g;
+  let lastIndex = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+    if (match[4] !== undefined) {
+      const link = document.createElement("a");
+      link.href = match[4];
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      const img = document.createElement("img");
+      img.src = match[4];
+      img.alt = match[3] || "capture";
+      img.loading = "lazy";
+      link.appendChild(img);
+      parent.appendChild(link);
+    } else {
+      const node = document.createElement(match[1] !== undefined ? "strong" : "u");
+      node.textContent = match[1] !== undefined ? match[1] : match[2];
+      parent.appendChild(node);
+    }
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) parent.appendChild(document.createTextNode(text.slice(lastIndex)));
 }
 
 function el(tag, options) {

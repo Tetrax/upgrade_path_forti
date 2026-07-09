@@ -134,6 +134,8 @@ http://localhost:8000/app/forticlient/
 
 En plus d'afficher un résumé du catalogue de versions connues, cette page permet d'enregistrer des **combinaisons EMS ↔ FortiClient qui fonctionnent bien** (testées en prod), pour éviter de retester à chaque fois : choisir une version d'EMS, cocher une ou plusieurs versions FortiClient compatibles, ajouter une note et une source. Modifier/supprimer une combinaison fonctionne comme pour les alertes.
 
+Les **alertes internes** créées pour FortiClient ou FortiClient EMS s'affichent aussi sur cette page (lecture seule), pour tout avoir au même endroit. Elles se créent et se modifient toujours depuis `/app/alerte/` — le bouton "Modifier dans Alertes internes" de chaque carte y renvoie directement, pré-filtré sur le bon produit via `?product=forticlient` ou `?product=forticlient-ems` dans l'URL (ce paramètre fonctionne sur `/app/alerte/` en général, pas seulement depuis cette page).
+
 La grille de compatibilité **officielle** de Fortinet (publiée en PDF, `FortiClient_ems-compatibility-matrix.pdf`) peut être importée en une fois avec :
 
 ```bash
