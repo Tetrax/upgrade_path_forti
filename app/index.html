@@ -499,13 +499,13 @@
         <tr class="${rowClass}">
           <td class="version-cell">${escapeHtml(version)} ${index === 0 ? `<span class="badge">Current</span>` : ""} ${index === path.hops.length - 1 ? `<span class="badge danger">Target</span>` : ""}</td>
           <td>${escapeHtml(firmware?.build || "-")}</td>
-          <td><div class="notes">${renderNoteTokens(firmware?.notes || [])}</div></td>
+          <td><div class="notes">${renderNoteTokens(firmware?.notes || [], firmware?.links || {})}</div></td>
           <td>${badges}</td>
         </tr>
       `;
     }
 
-    function renderNoteTokens(notes) {
+    function renderNoteTokens(notes, links) {
       const all = [
         ["resolved", "R", "Resolved issues"],
         ["known", "K", "Known issues"],
@@ -514,8 +514,13 @@
         ["release-notes", "D", "Public Fortinet docs"]
       ];
       return all.map(([key, label, title]) => {
-        const active = notes.includes(key) ? " active" : "";
-        return `<span class="note-token${active}" title="${escapeAttr(title)}">${label}</span>`;
+        const active = notes.includes(key);
+        const className = `note-token${active ? " active" : ""}`;
+        const href = links && links[key];
+        if (href) {
+          return `<a class="${className}" href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(title)}">${label}</a>`;
+        }
+        return `<span class="${className}" title="${escapeAttr(title)}">${label}</span>`;
       }).join("");
     }
 
@@ -535,7 +540,7 @@
           <tr>
             <td class="version-cell">${escapeHtml(firmware.version)}</td>
             <td>${escapeHtml(firmware.build || "-")}</td>
-            <td><div class="notes">${renderNoteTokens(firmware.notes || [])}</div></td>
+            <td><div class="notes">${renderNoteTokens(firmware.notes || [], firmware.links || {})}</div></td>
           </tr>
         `).join("");
 

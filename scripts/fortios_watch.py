@@ -28,7 +28,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +54,11 @@ PRODUCTS = {
     "fortimanager": {"slug": "fortimanager", "label": "FortiManager"},
 }
 PRODUCT_LABELS = {product_id: meta["label"] for product_id, meta in PRODUCTS.items()}
+RELEASE_NOTES_DOC_SLUGS = {
+    DEFAULT_PRODUCT_ID: "fortios-release-notes",
+    "fortianalyzer": "release-notes",
+    "fortimanager": "release-notes",
+}
 
 
 @dataclass(frozen=True)
@@ -63,6 +68,7 @@ class Firmware:
     version: str
     build: str = "-"
     notes: tuple[str, ...] = ()
+    links: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -181,15 +187,18 @@ def upsert_firmware(state: dict[str, Any], item: Firmware) -> bool:
                 existing["build"] = item.build
             if item.notes:
                 existing["notes"] = sorted(set(existing.get("notes", [])) | set(item.notes))
+            if item.links:
+                existing["links"] = {**existing.get("links", {}), **item.links}
             return existing != before
 
-    model["firmwares"].append(
-        {
-            "version": item.version,
-            "build": item.build,
-            "notes": list(item.notes),
-        }
-    )
+    entry = {
+        "version": item.version,
+        "build": item.build,
+        "notes": list(item.notes),
+    }
+    if item.links:
+        entry["links"] = dict(item.links)
+    model["firmwares"].append(entry)
     model["firmwares"].sort(key=lambda firmware: version_key(firmware["version"]))
     return True
 
@@ -298,6 +307,7 @@ def collect_docs_catalog(major_versions: tuple[str, ...], timeout: int) -> tuple
                 version=release.version,
                 build=release.build,
                 notes=("release-notes",),
+                links={"release-notes": release_notes_url(DEFAULT_PRODUCT_ID, release.version)},
             )
             upsert_firmware(state, firmware)
 
@@ -318,6 +328,32 @@ def official_note_keys(item: dict[str, Any]) -> tuple[str, ...]:
         if note:
             notes.append(note)
     return tuple(unique_in_order(notes))
+
+
+def release_notes_url(product_id: str, version: str) -> str:
+    product_slug = PRODUCTS.get(product_id, PRODUCTS[DEFAULT_PRODUCT_ID])["slug"]
+    doc_slug = RELEASE_NOTES_DOC_SLUGS.get(product_id, "release-notes")
+    return f"{FORTINET_DOCS_BASE_URL}/document/{product_slug}/{version}/{doc_slug}"
+
+
+def official_note_links(item: dict[str, Any], product_id: str, version: str) -> dict[str, str]:
+    """Deep links into the version's release notes, one per section badge (R/K/U/B), plus a
+    "release-notes" entry for the general page (the D badge)."""
+    slug_to_note = {
+        "resolved-issues": "resolved",
+        "known-issues": "known",
+        "upgrade-information": "upgrade",
+        "changes-in-default-behavior": "behavior",
+    }
+    base_url = release_notes_url(product_id, version)
+    links: dict[str, str] = {"release-notes": base_url}
+    for permalink in item.get("permalinks") or []:
+        slug = permalink.get("slug")
+        note = slug_to_note.get(slug)
+        permanent_id = permalink.get("permanent_id")
+        if note and permanent_id:
+            links[note] = f"{base_url}/{permanent_id}/{slug}"
+    return links
 
 
 def post_official_upgrade_tool(payload: dict[str, str], timeout: int) -> dict[str, Any]:
@@ -412,6 +448,7 @@ def fetch_official_upgrade_path(requested: OfficialPathRequest, timeout: int) ->
             version=item["version"],
             build=item.get("build_number") or "-",
             notes=official_note_keys(item),
+            links=official_note_links(item, requested.product, item["version"]),
         )
         for item in path_items
         if item.get("version")
@@ -474,6 +511,7 @@ def collect_tool_catalog(product_id: str, timeout: int) -> dict[str, Any]:
                     model=model_id,
                     version=firmware_info["version"],
                     build=firmware_info.get("build_number") or "-",
+                    links={"release-notes": release_notes_url(product_id, firmware_info["version"])},
                 ),
             )
 

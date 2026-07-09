@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T20:07:31Z",
+  "generatedAt": "2026-07-09T20:20:37Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -18562,7 +18562,13 @@
                 "resolved",
                 "special",
                 "upgrade"
-              ]
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes",
+                "known": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.4.0",
@@ -18658,7 +18664,14 @@
                 "resolved",
                 "special",
                 "upgrade"
-              ]
+              ],
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/230510/changes-in-default-behavior",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/832438/upgrade-information"
+              }
             },
             {
               "version": "7.6.0",
@@ -94476,6 +94489,19 @@
       ],
       "source": "Fortinet Upgrade Path Tool public service",
       "fetchedAt": "2026-07-09T19:58:45Z"
+    },
+    {
+      "id": "path-FGT100F-7.2.13-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT100F",
+      "from": "7.2.13",
+      "to": "7.4.12",
+      "hops": [
+        "7.2.13",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T20:20:37Z"
     }
   ],
   "advisories": [
