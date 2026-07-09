@@ -101,6 +101,9 @@
   <script>
     const STORAGE_KEY = "fortios-upgrade-intelligence-v1";
     const GENERATED_DATA_URL = "../data/fortios-data.generated.json";
+    // FortiClient/EMS have no Fortinet Upgrade Path Tool support, so no "Afficher le chemin" here
+    // — they get their own catalog/advisories/compatibility page instead (app/forticlient/).
+    const NO_PATH_PRODUCT_IDS = ["forticlient", "forticlient-ems"];
 
     const sampleState = {
       generatedAt: "2026-07-09T08:00:00Z",
@@ -283,7 +286,10 @@
     }
 
     function populateProducts() {
-      els.product.innerHTML = state.products.map(product => option(product.id, product.label)).join("");
+      els.product.innerHTML = state.products
+        .filter(product => !NO_PATH_PRODUCT_IDS.includes(product.id))
+        .map(product => option(product.id, product.label))
+        .join("");
     }
 
     function populateModels() {
