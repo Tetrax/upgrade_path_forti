@@ -667,13 +667,26 @@
     }
 
     function appendInlineRich(parent, text) {
-      const pattern = /\*\*(.+?)\*\*|__(.+?)__/g;
+      const pattern = /\*\*(.+?)\*\*|__(.+?)__|!\[(.*?)\]\((.*?)\)/g;
       let lastIndex = 0;
       for (const match of text.matchAll(pattern)) {
         if (match.index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-        const node = document.createElement(match[1] !== undefined ? "strong" : "u");
-        node.textContent = match[1] !== undefined ? match[1] : match[2];
-        parent.appendChild(node);
+        if (match[4] !== undefined) {
+          const link = document.createElement("a");
+          link.href = match[4];
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          const img = document.createElement("img");
+          img.src = match[4];
+          img.alt = match[3] || "capture";
+          img.loading = "lazy";
+          link.appendChild(img);
+          parent.appendChild(link);
+        } else {
+          const node = document.createElement(match[1] !== undefined ? "strong" : "u");
+          node.textContent = match[1] !== undefined ? match[1] : match[2];
+          parent.appendChild(node);
+        }
         lastIndex = match.index + match[0].length;
       }
       if (lastIndex < text.length) parent.appendChild(document.createTextNode(text.slice(lastIndex)));

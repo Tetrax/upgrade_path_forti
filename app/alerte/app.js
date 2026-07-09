@@ -40,8 +40,13 @@ const els = {
   boldButton: document.getElementById("boldButton"),
   underlineButton: document.getElementById("underlineButton"),
   bulletButton: document.getElementById("bulletButton"),
+  imageButton: document.getElementById("imageButton"),
+  imageFileInput: document.getElementById("imageFileInput"),
   descriptionPreview: document.getElementById("descriptionPreview")
 };
+
+const ALLOWED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 els.scopeAllButton.addEventListener("click", () => setScope("all"));
 els.scopeSomeButton.addEventListener("click", () => setScope("some"));
@@ -57,6 +62,25 @@ els.boldButton.addEventListener("click", () => wrapSelection(els.description, "*
 els.underlineButton.addEventListener("click", () => wrapSelection(els.description, "__", "__"));
 els.bulletButton.addEventListener("click", () => toggleBulletLines(els.description));
 els.description.addEventListener("input", () => renderRichText(els.descriptionPreview, els.description.value));
+els.imageButton.addEventListener("click", () => els.imageFileInput.click());
+els.imageFileInput.addEventListener("change", () => {
+  const file = els.imageFileInput.files[0];
+  if (file) uploadImage(file);
+  els.imageFileInput.value = "";
+});
+els.description.addEventListener("paste", event => {
+  const item = Array.from(event.clipboardData?.items || []).find(entry => entry.type.startsWith("image/"));
+  if (!item) return;
+  event.preventDefault();
+  uploadImage(item.getAsFile());
+});
+els.description.addEventListener("dragover", event => event.preventDefault());
+els.description.addEventListener("drop", event => {
+  const file = Array.from(event.dataTransfer?.files || []).find(entry => entry.type.startsWith("image/"));
+  if (!file) return;
+  event.preventDefault();
+  uploadImage(file);
+});
 for (const button of els.severityFilterGroup.querySelectorAll("[data-severity-filter]")) {
   button.addEventListener("click", () => setSeverityFilter(button.dataset.severityFilter));
 }
@@ -442,6 +466,54 @@ function advisoryMinVersions(advisory) {
   return advisory.minVersion ? [advisory.minVersion] : [];
 }
 
+async function uploadImage(file) {
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    els.formMessage.textContent = "Format d'image non supporté (PNG, JPEG, GIF, WEBP).";
+    return;
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    els.formMessage.textContent = "Image trop volumineuse (8 Mo max).";
+    return;
+  }
+
+  els.formMessage.textContent = "Envoi de l'image...";
+  try {
+    const dataBase64 = await fileToBase64(file);
+    const response = await fetch("/api/advisory-images", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contentType: file.type, dataBase64 })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Service local indisponible.");
+
+    insertAtCursor(els.description, `![capture](${payload.url})\n`);
+    renderRichText(els.descriptionPreview, els.description.value);
+    els.formMessage.textContent = "Image ajoutée.";
+  } catch (error) {
+    els.formMessage.textContent = `Envoi de l'image impossible : ${error.message}.`;
+  }
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = () => reject(new Error("Lecture du fichier impossible."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function insertAtCursor(textarea, text) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const value = textarea.value;
+  textarea.value = value.slice(0, start) + text + value.slice(end);
+  const cursor = start + text.length;
+  textarea.focus();
+  textarea.setSelectionRange(cursor, cursor);
+}
+
 function wrapSelection(textarea, before, after) {
   const start = textarea.selectionStart;
   const end = textarea.selectionEnd;
@@ -510,13 +582,26 @@ function renderRichText(container, text) {
 }
 
 function appendInlineRich(parent, text) {
-  const pattern = /\*\*(.+?)\*\*|__(.+?)__/g;
+  const pattern = /\*\*(.+?)\*\*|__(.+?)__|!\[(.*?)\]\((.*?)\)/g;
   let lastIndex = 0;
   for (const match of text.matchAll(pattern)) {
     if (match.index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-    const node = document.createElement(match[1] !== undefined ? "strong" : "u");
-    node.textContent = match[1] !== undefined ? match[1] : match[2];
-    parent.appendChild(node);
+    if (match[4] !== undefined) {
+      const link = document.createElement("a");
+      link.href = match[4];
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      const img = document.createElement("img");
+      img.src = match[4];
+      img.alt = match[3] || "capture";
+      img.loading = "lazy";
+      link.appendChild(img);
+      parent.appendChild(link);
+    } else {
+      const node = document.createElement(match[1] !== undefined ? "strong" : "u");
+      node.textContent = match[1] !== undefined ? match[1] : match[2];
+      parent.appendChild(node);
+    }
     lastIndex = match.index + match[0].length;
   }
   if (lastIndex < text.length) parent.appendChild(document.createTextNode(text.slice(lastIndex)));

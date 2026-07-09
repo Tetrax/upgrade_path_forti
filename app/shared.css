@@ -638,6 +638,14 @@ pre {
 .rich-text ul:last-child { margin-bottom: 0; }
 .rich-text li { margin-bottom: 2px; }
 
+.rich-text img {
+  display: block;
+  max-width: 100%;
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
 @media (max-width: 920px) {
   .grid {
     grid-template-columns: 1fr;

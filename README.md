@@ -181,8 +181,11 @@ Le champ description accepte une mise en forme légère, avec aperçu en direct 
 - `__texte__` pour du souligné
 - une ligne commençant par `- ` pour une puce de liste
 - une ligne vide pour démarrer un nouveau paragraphe
+- coller (Ctrl+V) ou glisser une image dans le champ, ou utiliser le bouton Image, pour insérer une capture d'écran (PNG/JPEG/GIF/WEBP, 8 Mo max)
 
-Le rendu (dans `/app/alerte/` comme dans l'outil principal) est toujours construit en DOM à partir de ce texte brut, jamais en interprétant du HTML — les captures d'écran ne sont pas encore supportées.
+Le rendu (dans `/app/alerte/` comme dans l'outil principal) est toujours construit en DOM à partir de ce texte brut, jamais en interprétant du HTML.
+
+Les images sont envoyées à `POST /api/advisory-images`, stockées dans `data/advisory-images/` (non versionné dans Git — voir `.gitignore`, pour ne pas alourdir le dépôt avec des captures potentiellement sensibles) et référencées dans la description via `![alt](/data/advisory-images/...)`. Supprimer une alerte supprime aussi les images qu'elle référence. Modifier une alerte ne nettoie pas les images retirées de la description à cette occasion (à faire manuellement dans `data/advisory-images/` si besoin).
 
 Comme pour la récupération Fortinet, cette page a besoin de `scripts/fortios_server.py` pour fonctionner (pas d'un simple serveur statique).
 

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T18:56:14Z",
+  "generatedAt": "2026-07-09T19:14:32Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -78409,12 +78409,12 @@
     {
       "id": "adv-ssl-connection-is-blocked-cert-probe-failure-0ce06c86",
       "createdAt": "2026-07-09T16:14:25Z",
-      "updatedAt": "2026-07-09T16:18:00Z",
+      "updatedAt": "2026-07-09T18:58:28Z",
       "product": "fortigate-fortios",
       "severity": "warning",
       "timing": "post-upgrade",
       "title": "SSL connection is blocked (cert-probe-failure)",
-      "description": "Changement dans le fonctionnement de l'inspection SSL sur les profils par défaut. \n\nCréer un nouveau profil ssl en clonant le profil par défaut utilisé et modifier en cli",
+      "description": "Changement dans le fonctionnement de l'inspection SSL sur les profils par défaut. \n\n- Créer un nouveau profil ssl en clonant le profil par défaut utilisé et modifier en cli",
       "source": "Ingénieur SNS",
       "minVersions": [
         "7.6.1",

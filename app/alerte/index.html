@@ -41,9 +41,11 @@
               <button type="button" class="mini" id="boldButton" title="Gras (**texte**)"><b>G</b></button>
               <button type="button" class="mini" id="underlineButton" title="Souligné (__texte__)"><u>S</u></button>
               <button type="button" class="mini" id="bulletButton" title="Liste à puces">• Liste</button>
+              <button type="button" class="mini" id="imageButton" title="Insérer une capture d'écran">🖼 Image</button>
+              <input type="file" id="imageFileInput" class="file-input" accept="image/png,image/jpeg,image/gif,image/webp" />
             </div>
             <textarea id="descriptionInput" placeholder="Décrire le comportement observé et l'action à effectuer."></textarea>
-            <p class="hint">Mise en forme : **gras**, __souligné__, une ligne commençant par "- " pour une puce, ligne vide pour un nouveau paragraphe.</p>
+            <p class="hint">Mise en forme : **gras**, __souligné__, une ligne commençant par "- " pour une puce, ligne vide pour un nouveau paragraphe. Coller (Ctrl+V) ou glisser une image directement dans le champ, ou utiliser le bouton Image.</p>
             <div class="rich-preview rich-text" id="descriptionPreview"></div>
           </div>
           <div class="version-row">

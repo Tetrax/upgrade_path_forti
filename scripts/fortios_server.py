@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
+import re
 import secrets
 import sys
 import urllib.parse
@@ -30,6 +33,15 @@ from fortios_watch import (
 VALID_SEVERITIES = {"critical", "important", "warning", "info"}
 VALID_TIMINGS = {"pre-upgrade", "during-upgrade", "post-upgrade"}
 ADVISORIES_PREFIX = "/api/advisories/"
+IMAGE_EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+IMAGE_URL_PREFIX = "/data/advisory-images/"
+IMAGE_REF_RE = re.compile(r"!\[[^\]]*\]\(/data/advisory-images/([^)\s]+)\)")
 
 
 def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
@@ -75,6 +87,17 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "fortios-data.generated.json"
 SAMPLE_PATH = ROOT / "data" / "fortios-data.sample.json"
+IMAGE_DIR = ROOT / "data" / "advisory-images"
+
+
+def delete_referenced_images(description: str) -> None:
+    for match in IMAGE_REF_RE.finditer(description or ""):
+        path = IMAGE_DIR / match.group(1)
+        try:
+            if path.is_file() and path.resolve().parent == IMAGE_DIR.resolve():
+                path.unlink()
+        except OSError:
+            pass
 
 
 class FortiosHandler(SimpleHTTPRequestHandler):
@@ -87,6 +110,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.handle_official_path()
         elif self.path == "/api/advisories":
             self.handle_create_advisory()
+        elif self.path == "/api/advisory-images":
+            self.handle_upload_image()
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
@@ -193,16 +218,44 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         try:
             advisory_id = urllib.parse.unquote(raw_id)
             state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-            remaining = [item for item in state["advisories"] if item.get("id") != advisory_id]
-            if len(remaining) == len(state["advisories"]):
+            target = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
+            if target is None:
                 self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
                 return
 
-            state["advisories"] = remaining
+            state["advisories"] = [item for item in state["advisories"] if item.get("id") != advisory_id]
             state["generatedAt"] = utc_now()
             write_json(DATA_PATH, state)
+            delete_referenced_images(target.get("description", ""))
 
             self.write_json_response({"state": state})
+        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+
+    def handle_upload_image(self) -> None:
+        try:
+            payload = self.read_json_body()
+            content_type = str(payload.get("contentType") or "").strip().lower()
+            data_base64 = str(payload.get("dataBase64") or "").strip()
+            if content_type not in IMAGE_EXTENSIONS:
+                raise ValueError(f"Format d'image non supporté : {content_type or 'inconnu'}")
+            if not data_base64:
+                raise ValueError("Image manquante.")
+
+            try:
+                raw = base64.b64decode(data_base64, validate=True)
+            except (binascii.Error, ValueError) as error:
+                raise ValueError("Image mal encodée.") from error
+            if len(raw) > MAX_IMAGE_BYTES:
+                raise ValueError("Image trop volumineuse (8 Mo max).")
+
+            IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+            filename = f"{secrets.token_hex(8)}{IMAGE_EXTENSIONS[content_type]}"
+            (IMAGE_DIR / filename).write_bytes(raw)
+
+            self.write_json_response({"url": f"{IMAGE_URL_PREFIX}{filename}"})
+        except ValueError as error:
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 
