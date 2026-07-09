@@ -1,0 +1,9 @@
+[Unit]
+Description=FortiOS Upgrade Intelligence — catalog refresh (new models / new FortiOS versions)
+
+[Service]
+Type=oneshot
+User=tetrax
+Group=tetrax
+WorkingDirectory=/home/tetrax/workspace/upgrade_path
+ExecStart=/usr/bin/python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog

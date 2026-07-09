@@ -40,7 +40,9 @@ DEFAULT_PRODUCT_LABEL = "FortiGate / FortiOS"
 PSIRT_RSS_URL = "https://www.fortiguard.com/rss/ir.xml"
 FORTINET_DOCS_BASE_URL = "https://docs.fortinet.com"
 FORTINET_UPGRADE_PATH_URL = f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/upgrade-path"
-DEFAULT_DOCS_MAJOR_VERSIONS = ("8.0", "7.6", "7.4", "7.2", "7.0", "6.4", "6.2", "6.0", "5.6", "5.4", "5.2", "5.0")
+DEFAULT_DOCS_MAJOR_VERSIONS = (
+    "8.4", "8.2", "8.0", "7.6", "7.4", "7.2", "7.0", "6.4", "6.2", "6.0", "5.6", "5.4", "5.2", "5.0",
+)
 
 
 @dataclass(frozen=True)

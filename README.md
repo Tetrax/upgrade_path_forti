@@ -210,8 +210,21 @@ Si l'API existe, elle doit alimenter directement le format JSON ci-dessus. Si el
 
 ## Planification
 
-Exemple cron quotidien :
+Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h15 :
 
-```cron
-15 7 * * * cd /chemin/vers/Upgrade_path && /usr/bin/python3 scripts/fortios_watch.py >> docs/cron.log 2>&1
+```bash
+python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog
+```
+
+Ce scan détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`. Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`.
+
+Important : `--base data/fortios-data.generated.json` est indispensable en tâche planifiée. Sans lui, le script repart de `data/fortios-data.sample.json` (le petit exemple) et écraserait les chemins déjà récupérés via l'interface.
+
+Un train FortiOS totalement nouveau (ex: un futur 8.4) n'est détecté que s'il figure dans `DEFAULT_DOCS_MAJOR_VERSIONS` (dans `scripts/fortios_watch.py`) ou via `--docs-major-versions`.
+
+Suivre l'exécution :
+
+```bash
+systemctl list-timers fortios-catalog-refresh.timer
+journalctl -u fortios-catalog-refresh.service -n 50
 ```
