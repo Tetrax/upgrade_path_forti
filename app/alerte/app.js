@@ -1,9 +1,14 @@
 const GENERATED_DATA_URL = "../../data/fortios-data.generated.json";
+const SEVERITY_ORDER = ["critical", "important", "warning", "info"];
+const SEVERITY_LABEL = { critical: "Critique", important: "Importante", warning: "Avertissement", info: "Info" };
+
 let allModels = [];
 let allVersions = [];
 let advisories = [];
 let modelScope = "all";
 let versionMode = "exact";
+let editingId = null;
+let severityFilter = "all";
 
 const els = {
   title: document.getElementById("titleInput"),
@@ -25,7 +30,11 @@ const els = {
   modelSearch: document.getElementById("modelSearch"),
   modelList: document.getElementById("modelList"),
   submitButton: document.getElementById("submitButton"),
+  submitButtonLabel: document.getElementById("submitButtonLabel"),
+  cancelEditButton: document.getElementById("cancelEditButton"),
   formMessage: document.getElementById("formMessage"),
+  advisorySearch: document.getElementById("advisorySearch"),
+  severityFilterGroup: document.getElementById("severityFilterGroup"),
   advisoryList: document.getElementById("advisoryList")
 };
 
@@ -36,6 +45,11 @@ els.versionModeFromButton.addEventListener("click", () => setVersionMode("from")
 els.versionSearch.addEventListener("input", () => renderVersionList());
 els.modelSearch.addEventListener("input", () => renderModelList());
 els.submitButton.addEventListener("click", submitAdvisory);
+els.cancelEditButton.addEventListener("click", cancelEdit);
+els.advisorySearch.addEventListener("input", () => renderAdvisoryList());
+for (const button of els.severityFilterGroup.querySelectorAll("[data-severity-filter]")) {
+  button.addEventListener("click", () => setSeverityFilter(button.dataset.severityFilter));
+}
 
 init();
 
@@ -99,6 +113,14 @@ function setVersionMode(mode) {
   els.versionFromField.classList.toggle("hidden", mode !== "from");
 }
 
+function setSeverityFilter(severity) {
+  severityFilter = severity;
+  for (const button of els.severityFilterGroup.querySelectorAll("[data-severity-filter]")) {
+    button.classList.toggle("active", button.dataset.severityFilter === severity);
+  }
+  renderAdvisoryList();
+}
+
 function renderMinVersionOptions() {
   els.minVersionSelect.replaceChildren();
   const versionsAscending = [...allVersions].sort(compareVersions);
@@ -151,6 +173,13 @@ function checkboxRow(value, labelText, checked) {
   return label;
 }
 
+function setCheckedValues(container, values) {
+  const wanted = new Set(values);
+  for (const input of container.querySelectorAll("input[type=checkbox]")) {
+    input.checked = wanted.has(input.value);
+  }
+}
+
 function getCheckedValues(container) {
   return Array.from(container.querySelectorAll("input[type=checkbox]:checked")).map(input => input.value);
 }
@@ -179,11 +208,12 @@ async function submitAdvisory() {
     return;
   }
 
+  const isEdit = Boolean(editingId);
   els.submitButton.disabled = true;
-  els.formMessage.textContent = "Publication en cours...";
+  els.formMessage.textContent = isEdit ? "Enregistrement en cours..." : "Publication en cours...";
   try {
-    const response = await fetch("/api/advisories", {
-      method: "POST",
+    const response = await fetch(isEdit ? `/api/advisories/${encodeURIComponent(editingId)}` : "/api/advisories", {
+      method: isEdit ? "PUT" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         title,
@@ -203,7 +233,7 @@ async function submitAdvisory() {
     advisories = payload.state.advisories || advisories;
     renderAdvisoryList();
     resetForm();
-    els.formMessage.textContent = "Alerte publiée.";
+    els.formMessage.textContent = isEdit ? "Alerte mise à jour." : "Alerte publiée.";
   } catch (error) {
     els.formMessage.textContent = `Publication impossible : ${error.message}. Lancer l'interface avec scripts/fortios_server.py.`;
   } finally {
@@ -211,10 +241,68 @@ async function submitAdvisory() {
   }
 }
 
+function startEdit(item) {
+  editingId = item.id;
+  els.title.value = item.title || "";
+  els.description.value = item.description || "";
+  els.severity.value = item.severity || "important";
+  els.timing.value = item.timing || "post-upgrade";
+  els.command.value = item.command || "";
+  els.source.value = item.source || "";
+
+  if (item.minVersion) {
+    setVersionMode("from");
+    els.minVersionSelect.value = item.minVersion;
+  } else {
+    setVersionMode("exact");
+    els.versionSearch.value = "";
+    renderVersionList();
+    setCheckedValues(els.versionList, advisoryVersions(item));
+  }
+
+  if (Array.isArray(item.models) && item.models.length) {
+    setScope("some");
+    els.modelSearch.value = "";
+    renderModelList();
+    setCheckedValues(els.modelList, item.models);
+  } else {
+    setScope("all");
+  }
+
+  els.submitButtonLabel.textContent = "Enregistrer les modifications";
+  els.cancelEditButton.classList.remove("hidden");
+  els.formMessage.textContent = `Modification de "${item.title}".`;
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function cancelEdit() {
+  editingId = null;
+  resetForm();
+  els.formMessage.textContent = "Modification annulée.";
+}
+
+async function deleteAdvisory(item) {
+  if (!window.confirm(`Supprimer l'alerte "${item.title}" ?`)) return;
+  try {
+    const response = await fetch(`/api/advisories/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Service local indisponible.");
+
+    advisories = payload.state.advisories || advisories.filter(existing => existing.id !== item.id);
+    if (editingId === item.id) cancelEdit();
+    renderAdvisoryList();
+    els.formMessage.textContent = "Alerte supprimée.";
+  } catch (error) {
+    els.formMessage.textContent = `Suppression impossible : ${error.message}.`;
+  }
+}
+
 function resetForm() {
+  editingId = null;
   els.title.value = "";
   els.description.value = "";
   els.command.value = "";
+  els.source.value = "";
   els.severity.value = "important";
   els.timing.value = "post-upgrade";
   els.versionSearch.value = "";
@@ -223,18 +311,61 @@ function resetForm() {
   setVersionMode("exact");
   renderVersionList();
   renderModelList();
+  els.submitButtonLabel.textContent = "Publier l'alerte";
+  els.cancelEditButton.classList.add("hidden");
+}
+
+function filteredAdvisories() {
+  const query = normalizeSearch(els.advisorySearch.value);
+  return advisories.filter(item => {
+    if (severityFilter !== "all" && item.severity !== severityFilter) return false;
+    if (!query) return true;
+
+    const haystack = normalizeSearch(
+      [
+        item.title,
+        item.description,
+        item.minVersion,
+        ...advisoryVersions(item),
+        ...(Array.isArray(item.models) ? item.models : [])
+      ]
+        .filter(Boolean)
+        .join(" ")
+    );
+    return haystack.includes(query);
+  });
 }
 
 function renderAdvisoryList() {
   els.advisoryList.replaceChildren();
+
   if (!advisories.length) {
     els.advisoryList.appendChild(el("div", { className: "empty", text: "Aucune alerte interne publiée pour l'instant." }));
     return;
   }
 
-  const sorted = [...advisories].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
-  for (const item of sorted) {
-    els.advisoryList.appendChild(advisoryCard(item));
+  const visible = filteredAdvisories();
+  if (!visible.length) {
+    els.advisoryList.appendChild(el("div", { className: "empty", text: "Aucune alerte ne correspond au filtre." }));
+    return;
+  }
+
+  const bySeverity = new Map(SEVERITY_ORDER.map(severity => [severity, []]));
+  for (const item of visible) {
+    const bucket = bySeverity.has(item.severity) ? item.severity : "info";
+    bySeverity.get(bucket).push(item);
+  }
+
+  for (const severity of SEVERITY_ORDER) {
+    const items = bySeverity.get(severity);
+    if (!items.length) continue;
+
+    const sorted = [...items].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+    const header = el("h3", { className: "section-title", text: `${SEVERITY_LABEL[severity]} (${sorted.length})` });
+    els.advisoryList.appendChild(header);
+    for (const item of sorted) {
+      els.advisoryList.appendChild(advisoryCard(item));
+    }
   }
 }
 
@@ -263,6 +394,17 @@ function advisoryCard(item) {
     codebox.appendChild(pre);
     article.appendChild(codebox);
   }
+
+  const actions = el("div", { className: "code-actions" });
+  const editButton = el("button", { className: "mini", text: "Modifier" });
+  editButton.type = "button";
+  editButton.addEventListener("click", () => startEdit(item));
+  const deleteButton = el("button", { className: "mini", text: "Supprimer" });
+  deleteButton.type = "button";
+  deleteButton.addEventListener("click", () => deleteAdvisory(item));
+  actions.appendChild(editButton);
+  actions.appendChild(deleteButton);
+  article.appendChild(actions);
 
   return article;
 }

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T15:41:11Z",
+  "generatedAt": "2026-07-09T15:51:24Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -7983,7 +7983,11 @@
               "version": "7.0.19",
               "build": "0696",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8046,7 +8050,11 @@
               "version": "7.2.13",
               "build": "1762",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8137,7 +8145,12 @@
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8407,7 +8420,11 @@
               "version": "7.0.19",
               "build": "0696",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8470,7 +8487,11 @@
               "version": "7.2.13",
               "build": "1762",
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -8561,7 +8582,12 @@
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ]
             },
             {
@@ -78224,6 +78250,34 @@
       ],
       "source": "Fortinet Upgrade Path Tool public service",
       "fetchedAt": "2026-07-09T15:15:13Z"
+    },
+    {
+      "id": "path-FGT70F-7.0.19-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT70F",
+      "from": "7.0.19",
+      "to": "7.4.12",
+      "hops": [
+        "7.0.19",
+        "7.2.13",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T15:44:24Z"
+    },
+    {
+      "id": "path-FGT71F-7.0.19-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT71F",
+      "from": "7.0.19",
+      "to": "7.4.12",
+      "hops": [
+        "7.0.19",
+        "7.2.13",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-09T15:49:06Z"
     }
   ],
   "advisories": [
@@ -78240,6 +78294,18 @@
       "description": "Verifier que allow-traffic-redirect est dans l'etat attendu. Si l'upgrade remet l'option en disable sur le parc concerne, l'ingenieur doit la reactiver explicitement.",
       "command": "config system settings\n  set allow-traffic-redirect enable\nend",
       "source": "Base interne SNS"
+    },
+    {
+      "id": "adv-option-allow-traffic-redirect-v-rifier-0a110869",
+      "product": "fortigate-fortios",
+      "severity": "important",
+      "timing": "post-upgrade",
+      "title": "Option allow-traffic-redirect à vérifier",
+      "description": "Le paramètre par défaut de allow-traffic-redirect et ipv6-allow-traffic-redirect a été modifié : il passe de enable à disable.\n\nconfig system global\n    set allow-traffic-redirect disable\n    set ipv6-allow-traffic-redirect disable\nend\n\nLa désactivation de ce paramètre garantit que le trafic arrivant sur une interface et redirigé en sortie sur cette même interface nécessite une règle firewall l’autorisant explicitement.",
+      "source": "Ingénieur SNS",
+      "createdAt": "2026-07-09T15:43:54Z",
+      "minVersion": "7.4.10",
+      "command": "config system global\n    set allow-traffic-redirect disable\n    set ipv6-allow-traffic-redirect disable\nend"
     }
   ]
 }

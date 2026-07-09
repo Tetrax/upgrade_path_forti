@@ -7,6 +7,7 @@ import argparse
 import json
 import secrets
 import sys
+import urllib.parse
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +29,47 @@ from fortios_watch import (
 
 VALID_SEVERITIES = {"critical", "important", "warning", "info"}
 VALID_TIMINGS = {"pre-upgrade", "during-upgrade", "post-upgrade"}
+ADVISORIES_PREFIX = "/api/advisories/"
+
+
+def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    title = str(payload.get("title", "")).strip()
+    description = str(payload.get("description", "")).strip()
+    versions = [str(item).strip() for item in payload.get("versions") or [] if str(item).strip()]
+    min_version = str(payload.get("minVersion") or "").strip()
+    if not title or not description:
+        raise ValueError("Titre et description sont obligatoires.")
+    if not versions and not min_version:
+        raise ValueError("Indiquer au moins une version, ou une version de départ.")
+
+    severity = str(payload.get("severity") or "important").strip()
+    if severity not in VALID_SEVERITIES:
+        raise ValueError(f"Sévérité invalide : {severity}")
+    timing = str(payload.get("timing") or "post-upgrade").strip()
+    if timing not in VALID_TIMINGS:
+        raise ValueError(f"Timing invalide : {timing}")
+
+    models = [str(item).strip() for item in payload.get("models") or [] if str(item).strip()]
+    command = str(payload.get("command") or "").strip()
+    source = str(payload.get("source") or "Ingénieur SNS").strip()
+
+    fields: dict[str, Any] = {
+        "product": DEFAULT_PRODUCT_ID,
+        "severity": severity,
+        "timing": timing,
+        "title": title,
+        "description": description,
+        "source": source,
+    }
+    if min_version:
+        fields["minVersion"] = min_version
+    else:
+        fields["versions"] = versions
+    if models:
+        fields["models"] = models
+    if command:
+        fields["command"] = command
+    return fields
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +87,18 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.handle_official_path()
         elif self.path == "/api/advisories":
             self.handle_create_advisory()
+        else:
+            self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
+
+    def do_PUT(self) -> None:
+        if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(ADVISORIES_PREFIX):
+            self.handle_update_advisory(self.path[len(ADVISORIES_PREFIX):])
+        else:
+            self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
+
+    def do_DELETE(self) -> None:
+        if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(ADVISORIES_PREFIX):
+            self.handle_delete_advisory(self.path[len(ADVISORIES_PREFIX):])
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
@@ -89,44 +143,12 @@ class FortiosHandler(SimpleHTTPRequestHandler):
     def handle_create_advisory(self) -> None:
         try:
             payload = self.read_json_body()
-            title = str(payload.get("title", "")).strip()
-            description = str(payload.get("description", "")).strip()
-            versions = [str(item).strip() for item in payload.get("versions") or [] if str(item).strip()]
-            min_version = str(payload.get("minVersion") or "").strip()
-            if not title or not description:
-                raise ValueError("Titre et description sont obligatoires.")
-            if not versions and not min_version:
-                raise ValueError("Indiquer au moins une version, ou une version de départ.")
-
-            severity = str(payload.get("severity") or "important").strip()
-            if severity not in VALID_SEVERITIES:
-                raise ValueError(f"Sévérité invalide : {severity}")
-            timing = str(payload.get("timing") or "post-upgrade").strip()
-            if timing not in VALID_TIMINGS:
-                raise ValueError(f"Timing invalide : {timing}")
-
-            models = [str(item).strip() for item in payload.get("models") or [] if str(item).strip()]
-            command = str(payload.get("command") or "").strip()
-            source = str(payload.get("source") or "Ingénieur SNS").strip()
-
+            fields = parse_advisory_fields(payload)
             advisory: dict[str, Any] = {
-                "id": f"adv-{slugify(title)}-{secrets.token_hex(4)}",
-                "product": DEFAULT_PRODUCT_ID,
-                "severity": severity,
-                "timing": timing,
-                "title": title,
-                "description": description,
-                "source": source,
+                "id": f"adv-{slugify(fields['title'])}-{secrets.token_hex(4)}",
                 "createdAt": utc_now(),
+                **fields,
             }
-            if min_version:
-                advisory["minVersion"] = min_version
-            else:
-                advisory["versions"] = versions
-            if models:
-                advisory["models"] = models
-            if command:
-                advisory["command"] = command
 
             state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
             upsert_advisory(state, advisory)
@@ -136,6 +158,51 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.write_json_response({"state": state, "advisory": advisory})
         except ValueError as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+
+    def handle_update_advisory(self, raw_id: str) -> None:
+        try:
+            advisory_id = urllib.parse.unquote(raw_id)
+            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+            existing = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
+            if existing is None:
+                self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
+                return
+
+            payload = self.read_json_body()
+            fields = parse_advisory_fields(payload)
+            advisory: dict[str, Any] = {
+                "id": advisory_id,
+                "createdAt": existing.get("createdAt") or utc_now(),
+                "updatedAt": utc_now(),
+                **fields,
+            }
+
+            upsert_advisory(state, advisory)
+            state["generatedAt"] = utc_now()
+            write_json(DATA_PATH, state)
+
+            self.write_json_response({"state": state, "advisory": advisory})
+        except ValueError as error:
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+
+    def handle_delete_advisory(self, raw_id: str) -> None:
+        try:
+            advisory_id = urllib.parse.unquote(raw_id)
+            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+            remaining = [item for item in state["advisories"] if item.get("id") != advisory_id]
+            if len(remaining) == len(state["advisories"]):
+                self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
+                return
+
+            state["advisories"] = remaining
+            state["generatedAt"] = utc_now()
+            write_json(DATA_PATH, state)
+
+            self.write_json_response({"state": state})
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 

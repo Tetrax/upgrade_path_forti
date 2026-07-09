@@ -101,10 +101,13 @@
             <input type="text" id="sourceInput" placeholder="Ingénieur SNS" autocomplete="off" />
           </div>
 
-          <button class="btn primary" id="submitButton">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L14.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
-            Publier l'alerte
-          </button>
+          <div class="toolbar" style="justify-content: flex-start;">
+            <button class="btn primary" id="submitButton">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L14.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+              <span id="submitButtonLabel">Publier l'alerte</span>
+            </button>
+            <button class="btn hidden" id="cancelEditButton" type="button">Annuler la modification</button>
+          </div>
           <p class="message" id="formMessage"></p>
         </div>
       </aside>
@@ -113,6 +116,18 @@
         <div class="panel-header">
           <p class="eyebrow">Base interne</p>
           <h2 class="panel-title">Alertes déjà publiées</h2>
+        </div>
+        <div class="panel-body" style="padding-bottom: 0;">
+          <div class="field">
+            <input type="text" id="advisorySearch" placeholder="Rechercher (titre, description, version, boîtier)..." autocomplete="off" />
+          </div>
+          <div class="toggle-group" id="severityFilterGroup" style="justify-content: flex-start; flex-wrap: wrap;">
+            <button type="button" class="btn active" data-severity-filter="all">Toutes</button>
+            <button type="button" class="btn" data-severity-filter="critical">Critique</button>
+            <button type="button" class="btn" data-severity-filter="important">Importante</button>
+            <button type="button" class="btn" data-severity-filter="warning">Avertissement</button>
+            <button type="button" class="btn" data-severity-filter="info">Info</button>
+          </div>
         </div>
         <div class="content-band" id="advisoryList"></div>
       </section>
