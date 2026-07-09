@@ -802,7 +802,9 @@
       }
 
       merged.paths = upsertByKey(merged.paths, incoming.paths, item => `${item.product}|${item.model}|${item.from}|${item.to}`);
-      merged.advisories = upsertByKey(merged.advisories, incoming.advisories, item => item.id);
+      // Advisories are fully managed server-side (create/edit/delete via /app/alerte/), so the
+      // fetched catalog is authoritative — replacing (not upserting) is what makes deletions stick.
+      merged.advisories = incoming.advisories;
       merged.generatedAt = incoming.generatedAt || new Date().toISOString();
       return merged;
     }
