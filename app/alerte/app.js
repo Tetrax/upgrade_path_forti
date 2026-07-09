@@ -22,6 +22,8 @@ const els = {
   severity: document.getElementById("severitySelect"),
   timing: document.getElementById("timingSelect"),
   command: document.getElementById("commandInput"),
+  bugId: document.getElementById("bugIdInput"),
+  bugVersion: document.getElementById("bugVersionInput"),
   source: document.getElementById("sourceInput"),
   versionModeExactButton: document.getElementById("versionModeExactButton"),
   versionModeFromButton: document.getElementById("versionModeFromButton"),
@@ -316,6 +318,8 @@ async function submitAdvisory() {
         minVersions,
         models,
         command: els.command.value.trim(),
+        bugId: els.bugId.value.trim(),
+        bugVersion: els.bugVersion.value.trim(),
         source: els.source.value.trim()
       })
     });
@@ -342,6 +346,8 @@ function startEdit(item) {
   els.severity.value = item.severity || "important";
   els.timing.value = item.timing || "post-upgrade";
   els.command.value = item.command || "";
+  els.bugId.value = item.bugId || "";
+  els.bugVersion.value = item.bugVersion || "";
   els.source.value = item.source || "";
 
   const minVersions = advisoryMinVersions(item);
@@ -400,6 +406,8 @@ function resetForm() {
   els.description.value = "";
   renderRichText(els.descriptionPreview, "");
   els.command.value = "";
+  els.bugId.value = "";
+  els.bugVersion.value = "";
   els.source.value = "";
   els.severity.value = "important";
   els.timing.value = "post-upgrade";
@@ -426,6 +434,8 @@ function filteredAdvisories() {
       [
         item.title,
         item.description,
+        item.bugId,
+        item.bugVersion,
         ...advisoryVersions(item),
         ...advisoryMinVersions(item),
         ...(Array.isArray(item.models) ? item.models : [])
@@ -486,10 +496,15 @@ function advisoryCard(item) {
   const meta = el("p", { className: "hint" });
   meta.textContent = `${productLabel(item.product)} • Versions : ${versionsLabel} • Boîtiers : ${modelsScope} • Source : ${item.source || "-"}`;
 
+  const bugMeta = item.bugId
+    ? el("p", { className: "hint", text: `Bug Fortinet : ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}` })
+    : null;
+
   const article = el("article", { className: `advisory-row callout ${calloutClass(item.severity)}` });
   article.appendChild(head);
   article.appendChild(description);
   article.appendChild(meta);
+  if (bugMeta) article.appendChild(bugMeta);
 
   if (item.command) {
     const pre = el("pre", { text: item.command });

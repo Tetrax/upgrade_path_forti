@@ -67,6 +67,8 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
 
     models = [str(item).strip() for item in payload.get("models") or [] if str(item).strip()]
     command = str(payload.get("command") or "").strip()
+    bug_id = str(payload.get("bugId") or "").strip()
+    bug_version = str(payload.get("bugVersion") or "").strip()
     source = str(payload.get("source") or "Ingénieur SNS").strip()
 
     fields: dict[str, Any] = {
@@ -85,6 +87,10 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
         fields["models"] = models
     if command:
         fields["command"] = command
+    if bug_id:
+        fields["bugId"] = bug_id
+    if bug_version:
+        fields["bugVersion"] = bug_version
     return fields
 
 

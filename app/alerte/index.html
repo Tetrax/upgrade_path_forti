@@ -110,6 +110,18 @@
             <textarea id="commandInput" placeholder="config system settings&#10;  set allow-traffic-redirect enable&#10;end"></textarea>
           </div>
 
+          <div class="version-row">
+            <div class="field">
+              <label for="bugIdInput">Bug ID / Change Fortinet (optionnel)</label>
+              <input type="text" id="bugIdInput" placeholder="ex: 1004258" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="bugVersionInput">Version où identifié (optionnel)</label>
+              <input type="text" id="bugVersionInput" placeholder="ex: 7.2.11, 7.4.5, 7.6.1" autocomplete="off" />
+            </div>
+          </div>
+          <p class="hint" style="margin-top: -8px; margin-bottom: 14px;">Pour retrouver facilement le bug dans les release notes Fortinet plus tard (Resolved/Known issues).</p>
+
           <div class="field">
             <label for="sourceInput">Source</label>
             <input type="text" id="sourceInput" placeholder="Ingénieur SNS" autocomplete="off" />
