@@ -280,6 +280,12 @@ function compatCard(item) {
   head.appendChild(el("h4", { className: "callout-title", text: `EMS ${item.emsVersion}` }));
   head.appendChild(el("span", { className: "badge ok", text: `${(item.clientVersions || []).length} version(s) FortiClient` }));
 
+  const relatedAdvisories = advisoriesForCompat(item);
+  for (const advisory of relatedAdvisories) {
+    const label = advisory.bugId ? `⚠ ${advisory.title} · #${advisory.bugId}` : `⚠ ${advisory.title}`;
+    head.appendChild(el("span", { className: `badge ${badgeClass(advisory.severity)}`, text: label }));
+  }
+
   const versionsLine = el("p", { text: `FortiClient : ${(item.clientVersions || []).join(", ") || "-"}` });
 
   const meta = el("p", { className: "hint", text: `Source : ${item.source || "-"}` });
@@ -289,6 +295,10 @@ function compatCard(item) {
   article.appendChild(versionsLine);
   if (item.note) article.appendChild(el("p", { className: "hint", text: item.note }));
   article.appendChild(meta);
+
+  for (const advisory of relatedAdvisories) {
+    article.appendChild(relatedAdvisoryDetail(advisory));
+  }
 
   const actions = el("div", { className: "code-actions" });
   const editButton = el("button", { className: "mini", text: "Modifier" });
@@ -370,6 +380,62 @@ function advisoryVersions(advisory) {
 function advisoryMinVersions(advisory) {
   if (Array.isArray(advisory.minVersions)) return advisory.minVersions;
   return advisory.minVersion ? [advisory.minVersion] : [];
+}
+
+function branchOf(version) {
+  return version.split(".").slice(0, 2).join(".");
+}
+
+function sameTrain(a, b) {
+  return branchOf(a) === branchOf(b);
+}
+
+// Same threshold semantics as the main app (once a "from version" change ships, it stays in
+// effect), but without the path-relative "from" gating — a compatibility combo isn't an upgrade,
+// just a version, so there's no "before/after this upgrade" to reason about here.
+function advisoryMatchesVersionSimple(advisory, version) {
+  const thresholds = advisoryMinVersions(advisory);
+  if (thresholds.length) {
+    return thresholds.some(threshold =>
+      sameTrain(version, threshold) ? compareVersions(version, threshold) >= 0 : compareVersions(branchOf(version), branchOf(threshold)) > 0
+    );
+  }
+  return advisoryVersions(advisory).includes(version);
+}
+
+function advisoriesForCompat(item) {
+  const matches = [];
+  for (const advisory of advisories) {
+    if (advisory.product === "forticlient-ems" && advisoryMatchesVersionSimple(advisory, item.emsVersion)) {
+      matches.push(advisory);
+      continue;
+    }
+    if (advisory.product === "forticlient" && (item.clientVersions || []).some(v => advisoryMatchesVersionSimple(advisory, v))) {
+      matches.push(advisory);
+    }
+  }
+  return matches;
+}
+
+function relatedAdvisoryDetail(advisory) {
+  const wrapper = el("div", { className: `callout ${calloutClass(advisory.severity)}` });
+  const head = el("div", { className: "callout-head" });
+  head.appendChild(el("h4", { className: "callout-title", text: advisory.title }));
+  head.appendChild(el("span", { className: `badge ${badgeClass(advisory.severity)}`, text: SEVERITY_LABEL[advisory.severity] || "Info" }));
+  wrapper.appendChild(head);
+
+  const description = el("div", { className: "rich-text" });
+  renderRichText(description, advisory.description);
+  wrapper.appendChild(description);
+
+  if (advisory.command) {
+    const pre = el("pre", { text: advisory.command });
+    const codebox = el("div", { className: "codebox" });
+    codebox.appendChild(pre);
+    wrapper.appendChild(codebox);
+  }
+
+  return wrapper;
 }
 
 function badgeClass(severity) {
