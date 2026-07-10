@@ -136,15 +136,14 @@ En plus d'afficher un résumé du catalogue de versions connues, cette page perm
 
 Les **alertes internes** créées pour FortiClient ou FortiClient EMS s'affichent aussi sur cette page (lecture seule), pour tout avoir au même endroit. Elles se créent et se modifient toujours depuis `/app/alerte/` — le bouton "Modifier dans Alertes internes" de chaque carte y renvoie directement, pré-filtré sur le bon produit via `?product=forticlient` ou `?product=forticlient-ems` dans l'URL (ce paramètre fonctionne sur `/app/alerte/` en général, pas seulement depuis cette page).
 
-La grille de compatibilité **officielle** de Fortinet (publiée en PDF, `FortiClient_ems-compatibility-matrix.pdf`) peut être importée en une fois avec :
+La grille de compatibilité **officielle** de Fortinet (publiée en PDF, `FortiClient_ems-compatibility-matrix.pdf`) est importée automatiquement chaque jour par le timer systemd (voir Planification ci-dessous). Elle peut aussi être relancée à la main :
 
 ```bash
-python3 -m venv /tmp/pdfenv && /tmp/pdfenv/bin/pip install pdfplumber
-/tmp/pdfenv/bin/python3 scripts/import_forticlient_compat.py            # aperçu seulement
-/tmp/pdfenv/bin/python3 scripts/import_forticlient_compat.py --commit   # écrit dans data/fortios-data.generated.json
+.venv-compat/bin/python3 scripts/import_forticlient_compat.py            # aperçu seulement
+.venv-compat/bin/python3 scripts/import_forticlient_compat.py --commit   # écrit dans data/fortios-data.generated.json
 ```
 
-Ce script n'est pas branché sur le rafraîchissement quotidien automatique : le PDF de Fortinet a des en-têtes de colonnes tournés à 90°, qui ressortent à l'extraction sous forme de texte inversé (ex: "7.2.10" devient "01.2.7") — ça se parse (le script le fait), mais c'est fragile, donc mieux vaut relancer à la main de temps en temps et vérifier l'aperçu avant `--commit`. Les combinaisons importées ainsi ont pour source `"FortiClient EMS Compatibility Matrix (Fortinet, officielle)"`, pour les distinguer des combinaisons testées par l'équipe.
+`.venv-compat/` est un venv dédié (gitignored, provisionné par `deploy/install.sh`) contenant `pdfplumber`, seule dépendance non-stdlib du projet — nécessaire car le PDF de Fortinet a des en-têtes de colonnes tournés à 90°, qui ressortent à l'extraction sous forme de texte inversé (ex: "7.2.10" devient "01.2.7"). Le script est volontairement prudent : il refuse de commiter si moins de `MIN_EXPECTED_ENTRIES` (10) combinaisons sont extraites, ce qui indiquerait que Fortinet a changé le format du PDF plutôt qu'une vraie absence de données. Un re-import ne touche que la liste de versions FortiClient de chaque entrée existante (`compat-official-<version EMS>`) — `note`, `source` et `createdAt` d'une entrée déjà modifiée à la main sont préservés, et `updatedAt` ne bouge que si les versions compatibles ont réellement changé. Les combinaisons importées ont pour source `"FortiClient EMS Compatibility Matrix (Fortinet, officielle)"`, pour les distinguer des combinaisons testées par l'équipe.
 
 ## Récupérer des chemins officiels Fortinet
 
@@ -298,13 +297,14 @@ Si l'API existe, elle doit alimenter directement le format JSON ci-dessus. Si el
 
 ## Planification
 
-Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h15 :
+Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h15, en deux étapes :
 
 ```bash
 python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog
+.venv-compat/bin/python3 scripts/import_forticlient_compat.py --commit
 ```
 
-Ce scan détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool, ainsi que les nouvelles versions FortiClient/FortiClient EMS via leurs release notes publiques. Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`. La grille de compatibilité officielle EMS ↔ FortiClient n'est PAS rafraîchie automatiquement (voir `scripts/import_forticlient_compat.py`, à relancer à la main).
+La première commande détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool, ainsi que les nouvelles versions FortiClient/FortiClient EMS via leurs release notes publiques. La seconde réimporte la grille de compatibilité officielle EMS ↔ FortiClient (voir ci-dessus). Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`. Si la première étape échoue, systemd n'enchaîne pas sur la seconde (`ExecStart=` multiples) — sans gravité, le timer réessaie le lendemain.
 
 Important : `--base data/fortios-data.generated.json` est indispensable en tâche planifiée. Sans lui, le script repart de `data/fortios-data.sample.json` (le petit exemple) et écraserait les chemins déjà récupérés via l'interface.
 

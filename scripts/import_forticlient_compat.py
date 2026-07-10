@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""One-time/manual import of Fortinet's official FortiClient <-> EMS compatibility matrix.
+"""Import Fortinet's official FortiClient <-> EMS compatibility matrix.
 
-Not part of the daily catalog refresh: Fortinet only publishes this matrix as a PDF with
-sideways column headers, which extracts as reversed text (pdfplumber reads it character-by-
-character in the wrong direction) — parseable, but fragile enough that a human should review
-the result before it lands in production data. Run without --commit first to preview.
+Run automatically by the daily catalog-refresh timer (see deploy/fortios-compat-refresh.service).
+Fortinet only publishes this matrix as a PDF with sideways column headers, which extracts as
+reversed text (pdfplumber reads it character-by-character in the wrong direction) — parseable,
+but fragile enough that this script refuses to commit if the parse looks suspicious (too few
+rows, malformed version strings): see MIN_EXPECTED_ENTRIES below.
 
-Requires pdfplumber, which isn't part of this project's normal (stdlib-only) dependencies:
+Requires pdfplumber, which isn't part of this project's normal (stdlib-only) dependencies. A
+dedicated venv is provisioned at .venv-compat/ (gitignored) for this script only:
 
-    python3 -m venv /tmp/pdfenv && /tmp/pdfenv/bin/pip install pdfplumber
-    /tmp/pdfenv/bin/python3 scripts/import_forticlient_compat.py --commit
+    uv venv .venv-compat && uv pip install --python .venv-compat/bin/python pdfplumber
+    .venv-compat/bin/python3 scripts/import_forticlient_compat.py --commit
 
 Usage:
     python3 scripts/import_forticlient_compat.py                # preview only
@@ -34,6 +36,8 @@ from fortios_watch import normalize_state, read_json, upsert_compatibility, utc_
 FORTINET_DOCS_BASE_URL = "https://docs.fortinet.com"
 DEFAULT_MAJORS_TO_TRY = ("8.0", "7.4", "7.2")
 SOURCE_LABEL = "FortiClient EMS Compatibility Matrix (Fortinet, officielle)"
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+MIN_EXPECTED_ENTRIES = 10  # last known-good import found 22; refuse to commit far below that.
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "fortios-data.generated.json"
 SAMPLE_PATH = ROOT / "data" / "fortios-data.sample.json"
@@ -62,11 +66,12 @@ def parse_matrix(pdf_path: Path) -> list[dict[str, Any]]:
     # holds the actual EMS version tokens — extracted reversed since the PDF renders them as
     # sideways text (e.g. "7.2.10" comes out as "01.2.7").
     header = [cell[::-1] if cell else cell for cell in table[1][1:]]
+    header = [ems if ems and VERSION_RE.match(ems) else None for ems in header]
     client_by_ems: dict[str, list[str]] = {ems: [] for ems in header if ems}
 
     for row in table[2:]:
         client_version = row[0]
-        if not client_version or not re.match(r"^\d+\.\d+\.\d+$", client_version):
+        if not client_version or not VERSION_RE.match(client_version):
             continue
         for ems_version, cell in zip(header, row[1:]):
             if ems_version and cell and cell.strip().upper() == "P":
@@ -102,8 +107,12 @@ def main(argv: list[str]) -> int:
     tmp_pdf.write_bytes(pdf_bytes)
 
     entries = parse_matrix(tmp_pdf)
-    if not entries:
-        print("Aucune combinaison extraite — le format du PDF a peut-être changé.", file=sys.stderr)
+    if len(entries) < MIN_EXPECTED_ENTRIES:
+        print(
+            f"Seulement {len(entries)} combinaison(s) extraite(s) (minimum attendu : {MIN_EXPECTED_ENTRIES}) "
+            "— le format du PDF a peut-être changé, abandon par sécurité.",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"\n{len(entries)} versions EMS trouvées :\n")
@@ -115,16 +124,22 @@ def main(argv: list[str]) -> int:
         return 0
 
     state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+    existing_by_id = {item.get("id"): item for item in state["compatibilities"]}
     added = 0
     for entry in entries:
-        item = {
-            "id": f"compat-official-{entry['emsVersion']}",
-            "emsVersion": entry["emsVersion"],
-            "clientVersions": entry["clientVersions"],
-            "note": "",
-            "source": SOURCE_LABEL,
-            "createdAt": utc_now(),
-        }
+        item_id = f"compat-official-{entry['emsVersion']}"
+        prior = existing_by_id.get(item_id)
+        # Preserve any human edits (note, source, createdAt) on re-import; only the version
+        # list is refreshed from the PDF, and updatedAt only moves if it actually changed.
+        item = dict(prior) if prior else {}
+        item["id"] = item_id
+        item["emsVersion"] = entry["emsVersion"]
+        item.setdefault("note", "")
+        item.setdefault("source", SOURCE_LABEL)
+        item.setdefault("createdAt", utc_now())
+        if prior and prior.get("clientVersions") != entry["clientVersions"]:
+            item["updatedAt"] = utc_now()
+        item["clientVersions"] = entry["clientVersions"]
         if upsert_compatibility(state, item):
             added += 1
     state["generatedAt"] = utc_now()

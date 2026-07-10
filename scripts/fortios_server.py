@@ -120,9 +120,20 @@ SAMPLE_PATH = ROOT / "data" / "fortios-data.sample.json"
 IMAGE_DIR = ROOT / "data" / "advisory-images"
 
 
-def delete_referenced_images(description: str) -> None:
-    for match in IMAGE_REF_RE.finditer(description or ""):
-        path = IMAGE_DIR / match.group(1)
+def referenced_image_filenames(description: str) -> set[str]:
+    return {match.group(1) for match in IMAGE_REF_RE.finditer(description or "")}
+
+
+def prune_unreferenced_images(candidates: set[str], state: dict[str, Any]) -> None:
+    """Delete image files in `candidates` unless still referenced by any advisory in `state`."""
+    if not candidates:
+        return
+    still_used: set[str] = set()
+    for advisory in state["advisories"]:
+        still_used |= referenced_image_filenames(advisory.get("description", ""))
+
+    for filename in candidates - still_used:
+        path = IMAGE_DIR / filename
         try:
             if path.is_file() and path.resolve().parent == IMAGE_DIR.resolve():
                 path.unlink()
@@ -239,6 +250,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
                 return
 
+            old_images = referenced_image_filenames(existing.get("description", ""))
+
             payload = self.read_json_body()
             fields = parse_advisory_fields(payload)
             advisory: dict[str, Any] = {
@@ -251,6 +264,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             upsert_advisory(state, advisory)
             state["generatedAt"] = utc_now()
             write_json(DATA_PATH, state)
+            prune_unreferenced_images(old_images, state)
 
             self.write_json_response({"state": state, "advisory": advisory})
         except ValueError as error:
@@ -270,7 +284,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             state["advisories"] = [item for item in state["advisories"] if item.get("id") != advisory_id]
             state["generatedAt"] = utc_now()
             write_json(DATA_PATH, state)
-            delete_referenced_images(target.get("description", ""))
+            prune_unreferenced_images(referenced_image_filenames(target.get("description", "")), state)
 
             self.write_json_response({"state": state})
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
