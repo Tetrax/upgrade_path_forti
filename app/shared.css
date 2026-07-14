@@ -524,7 +524,7 @@ a.note-token:hover {
   list-style: none;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   user-select: none;
 }
 
@@ -535,13 +535,21 @@ a.note-token:hover {
 .checklist-details summary::before {
   content: "▸";
   display: inline-block;
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--ink);
+  font-size: 20px;
+  line-height: 1;
   transition: transform 0.15s ease;
 }
 
 .checklist-details[open] summary::before {
   transform: rotate(90deg);
+}
+
+.checklist-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0;
 }
 
 .checklist-details .checklist {
@@ -597,18 +605,7 @@ pre {
   background: #fbfcfe;
 }
 
-.drawer {
-  margin-top: 16px;
-  border-top: 1px solid var(--soft-line);
-  padding-top: 16px;
-}
-
 .hidden { display: none !important; }
-
-.import-box {
-  display: grid;
-  gap: 10px;
-}
 
 .message {
   margin-top: 10px;
