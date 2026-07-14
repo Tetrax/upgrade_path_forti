@@ -179,10 +179,11 @@
       target: document.getElementById("targetSelect"),
       result: document.getElementById("result"),
       dataStatus: document.getElementById("dataStatus"),
-      sideMessage: document.getElementById("sideMessage")
+      sideMessage: document.getElementById("sideMessage"),
+      go: document.getElementById("goButton")
     };
 
-    document.getElementById("goButton").addEventListener("click", showPath);
+    els.go.addEventListener("click", showPath);
     els.product.addEventListener("change", () => {
       els.modelSearch.value = "";
       populateModels();
@@ -332,8 +333,63 @@
       );
     }
 
-    function showPath() {
+    async function showPath() {
       renderResult();
+      if (currentModel() && !currentPath()) {
+        await fetchOfficialPath();
+      }
+    }
+
+    // Every path request that isn't already in the pre-fetched catalog goes live to Fortinet
+    // Upgrade Path Tool through the local proxy (scripts/fortios_server.py) — no manual "refresh"
+    // button anymore, this just runs automatically whenever showPath() can't find a stored path.
+    async function fetchOfficialPath() {
+      const model = currentModel();
+      if (!model) return;
+
+      const selection = {
+        product: els.product.value,
+        model: els.model.value,
+        current: els.current.value,
+        target: els.target.value
+      };
+
+      els.sideMessage.textContent = "Interrogation du service Fortinet...";
+      els.go.disabled = true;
+      try {
+        const response = await fetch("/api/official-path", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            product: selection.product,
+            model: selection.model,
+            from: selection.current,
+            to: selection.target
+          })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error || "Service local indisponible.");
+
+        state = mergeState(state, normalizeState(payload.state));
+        saveState();
+        restoreSelection(selection);
+        renderResult();
+        els.dataStatus.textContent = `Chemin Fortinet récupéré : ${new Date().toLocaleString("fr-FR")}.`;
+        els.sideMessage.textContent = `${payload.path.hops.join(" > ")} récupéré depuis Fortinet.`;
+      } catch (error) {
+        els.sideMessage.textContent = `Récupération Fortinet impossible : ${error.message}. Lancer l'interface avec scripts/fortios_server.py.`;
+      } finally {
+        els.go.disabled = false;
+      }
+    }
+
+    function restoreSelection(selection) {
+      els.product.value = selection.product;
+      populateModels();
+      els.model.value = selection.model;
+      populateVersions();
+      els.current.value = selection.current;
+      els.target.value = selection.target;
     }
 
     function renderResult() {
