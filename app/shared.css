@@ -270,6 +270,7 @@ select:focus, textarea:focus, input[type="text"]:focus {
 
 .badge {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   min-height: 22px;
   padding: 0 8px;
@@ -400,17 +401,18 @@ tr.target-row { background: var(--soft-red); }
 
 .notes {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 5px;
+  flex-wrap: nowrap;
 }
 
 .note-token {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
   border-radius: 50%;
   display: inline-grid;
   place-items: center;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
   border: 1px solid #d5dbe6;
   color: #4d596b;
@@ -463,6 +465,7 @@ a.note-token:hover {
 
 .callout-head {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 7px;
@@ -478,6 +481,77 @@ a.note-token:hover {
   margin: 0;
   color: #465165;
   line-height: 1.45;
+}
+
+.checklist {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.checklist li {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 13px;
+  background: #fbfcfe;
+}
+
+.checklist-head {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.checklist-head .badge {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.checklist-head p {
+  margin: 0;
+  color: #465165;
+  line-height: 1.45;
+}
+
+.checklist-details {
+  margin-bottom: 18px;
+}
+
+.checklist-details summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.checklist-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.checklist-details summary::before {
+  content: "▸";
+  display: inline-block;
+  color: var(--muted);
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+
+.checklist-details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.checklist-details .checklist {
+  margin: 12px 0 0;
+}
+
+.muted {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
 }
 
 .codebox {

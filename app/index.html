@@ -262,7 +262,8 @@
         generatedAt: nextState.generatedAt || new Date().toISOString(),
         products,
         paths: Array.isArray(nextState.paths) ? nextState.paths : [],
-        advisories: Array.isArray(nextState.advisories) ? nextState.advisories : []
+        advisories: Array.isArray(nextState.advisories) ? nextState.advisories : [],
+        cves: Array.isArray(nextState.cves) ? nextState.cves : []
       };
     }
 
@@ -383,33 +384,13 @@
       const path = currentPath();
 
       if (!path) {
-        els.result.innerHTML = `
-          <div class="path-head">
-            <div>
-              <p class="eyebrow">Chemin non stocké</p>
-              <div class="path-title"><span class="from">${escapeHtml(els.current.value)}</span><span class="arrow">→</span><span class="to">${escapeHtml(els.target.value)}</span></div>
-              <div class="path-meta">
-                <span>${escapeHtml(product.label)}</span>
-                <span>•</span>
-                <span>${escapeHtml(model.label)}</span>
-                <span>•</span>
-                <span>Catalogue versions seulement</span>
-              </div>
-            </div>
-          </div>
-          <div class="content-band">
-            <div class="empty">
-              Aucun chemin recommandé n’est stocké pour ce modèle et ce couple de versions. Le tableau ci-dessous n’est pas un ordre d’upgrade : il liste seulement les versions FortiOS connues dans la plage demandée, en attendant la réponse de Fortinet.
-            </div>
-            ${renderEstimatedPath(model, els.current.value, els.target.value)}
-            ${renderModelCatalog(model, els.current.value, els.target.value)}
-          </div>
-        `;
-        els.sideMessage.textContent = "Chemin absent : il faut récupérer la recommandation Fortinet pour ce modèle.";
+        els.result.innerHTML = buildMissingPathView();
+        els.sideMessage.textContent = "Chemin absent : interroge Fortinet Upgrade Path Tool pour ce modèle.";
         return;
       }
 
       const hopAdvisories = advisoriesForPath(path);
+      const hopCves = cvesForPath(path);
       const firmwareRows = path.hops.map(version => firmwareFor(model, version));
 
       els.result.innerHTML = `
@@ -456,6 +437,7 @@
           </div>
         </div>
         <div class="content-band">
+          ${renderChecklist()}
           <h3 class="section-title">Recommended Upgrade Path</h3>
           <div class="table-wrap">
             <table>
@@ -473,11 +455,28 @@
             </table>
           </div>
           ${renderCallouts(hopAdvisories)}
+          <h3 class="section-title">Vulnérabilités connues (CVE PSIRT Fortinet)</h3>
+          ${renderCveCallouts(hopCves, path)}
         </div>
       `;
 
       hydrateRichText(els.result, hopAdvisories);
-      els.sideMessage.textContent = `${path.hops.join(" > ")} affiché avec ${hopAdvisories.length} information(s) ingénieur.`;
+      els.sideMessage.textContent = `${path.hops.join(" > ")} affiché avec ${hopAdvisories.length} information(s) ingénieur et ${hopCves.length} CVE PSIRT connue(s).`;
+    }
+
+    // No stored path: nothing is cached locally to invent an upgrade path from, so this view
+    // only ever points at fetchOfficialPath() (the live Fortinet Upgrade Path Tool query) — never
+    // shows a locally-derived guess, to avoid a technician following a wrong sequence.
+    function buildMissingPathView() {
+      const refreshIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 12a9 9 0 0 1-9 9 9.8 9.8 0 0 1-6.7-2.7"/><path d="M3 12a9 9 0 0 1 9-9 9.8 9.8 0 0 1 6.7 2.7"/><path d="M3 21v-6h6"/><path d="M21 3v6h-6"/></svg>`;
+      return [
+        `<div class="content-band">`,
+        `  <div class="toolbar">`,
+        `    <button class="btn primary" data-official-path-button onclick="fetchOfficialPath()" title="Interroger Fortinet Upgrade Path Tool">${refreshIcon} Interroger Fortinet</button>`,
+        `  </div>`,
+        `  ${renderChecklist()}`,
+        `</div>`
+      ].join("\n");
     }
 
     function renderSteps(hops) {
@@ -497,18 +496,23 @@
     function renderFirmwareRow(firmware, path, index) {
       const version = firmware?.version || path.hops[index];
       const versionAdvisories = advisoriesForVersion(path, version);
+      const versionCves = cvesForVersion(path, version);
       const rowClass = index === path.hops.length - 1 ? "target-row" : "";
-      const badges = versionAdvisories.length
-        ? versionAdvisories.map(item => {
-            const prefix = item.behaviorChange ? "⚙ " : "";
-            const label = prefix + (item.bugId ? `${item.title} · #${item.bugId}` : item.title);
-            const tooltipBase = item.behaviorChange ? `${item.title} (changement de comportement par défaut, pas un bug)` : item.title;
-            const tooltip = item.bugId
-              ? `${tooltipBase} — Bug ID ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}`
-              : tooltipBase;
-            return `<span class="badge ${badgeClass(item.severity)}" title="${escapeAttr(tooltip)}">${escapeHtml(label)}</span>`;
-          }).join(" ")
-        : `<span class="badge ok">Aucune alerte interne</span>`;
+      const advisoryBadges = versionAdvisories.map(item => {
+        const prefix = item.behaviorChange ? "⚙ " : "";
+        const label = prefix + (item.bugId ? `${item.title} · #${item.bugId}` : item.title);
+        const tooltipBase = item.behaviorChange ? `${item.title} (changement de comportement par défaut, pas un bug)` : item.title;
+        const tooltip = item.bugId
+          ? `${tooltipBase} — Bug ID ${item.bugId}${item.bugVersion ? ` (identifié en ${item.bugVersion})` : ""}`
+          : tooltipBase;
+        return `<span class="badge ${badgeClass(item.severity)}" title="${escapeAttr(tooltip)}">${escapeHtml(label)}</span>`;
+      });
+      const cveBadges = versionCves.map(cve => {
+        const tooltip = `${cve.title} — CVSS ${cveSeverityLabel(cve.severity)}${typeof cve.cvssScore === "number" ? ` ${cve.cvssScore}` : ""}`;
+        return `<span class="badge ${cveBadgeClass(cve.severity)}" title="${escapeAttr(tooltip)}">🛡 ${escapeHtml(cve.id)}</span>`;
+      });
+      const allBadges = [...advisoryBadges, ...cveBadges];
+      const badges = allBadges.length ? allBadges.join(" ") : `<span class="badge ok">Aucune alerte connue</span>`;
 
       return `
         <tr class="${rowClass}">
@@ -539,81 +543,54 @@
       }).join("");
     }
 
-    function renderModelCatalog(model, fromVersion, toVersion) {
-      if (!model.firmwares?.length) return "";
-      const firmwares = versionsInRange(model.firmwares, fromVersion, toVersion);
-      if (!firmwares.length) {
-        return `
-          <h3 class="section-title">Versions FortiOS connues dans la plage demandée</h3>
-          <div class="empty">Aucune version connue pour ce modèle entre ${escapeHtml(fromVersion)} et ${escapeHtml(toVersion)}.</div>
-        `;
-      }
-
-      const rows = firmwares
-        .sort((a, b) => compareVersions(a.version, b.version))
-        .map(firmware => `
-          <tr>
-            <td class="version-cell">${escapeHtml(firmware.version)}</td>
-            <td>${escapeHtml(firmware.build || "-")}</td>
-            <td><div class="notes">${renderNoteTokens(firmware.notes || [], firmware.links || {})}</div></td>
-          </tr>
-        `).join("");
+    function renderChecklist() {
+      const checklistItems = [
+        {
+          tag: "Si HA",
+          tagClass: "warn",
+          text: "Vérifier dans System &gt; HA que les deux membres sont bien synchronisés, puis en CLI qu’il n’y a pas d’override ou d’option divergente (priority, hostname, mode) qui pourrait bloquer la synchro ou provoquer un split-brain après l’upgrade.",
+          command: "get system ha status\ndiagnose sys ha checksum show"
+        },
+        {
+          tag: "Avant",
+          tagClass: "info",
+          text: "Faire un backup complet de la configuration (et de l’image firmware si possible) avant de commencer, et le stocker en dehors du boîtier."
+        },
+        {
+          tag: "Avant",
+          tagClass: "info",
+          text: "Demander si un contact est disponible sur place, au cas où une bascule HA manuelle ou une perte d’accès distant serait nécessaire."
+        },
+        {
+          tag: "Après chaque étape",
+          tagClass: "danger",
+          text: "Vérifier que la configuration a bien été reprise après chaque mise à jour, avant de passer à l’étape suivante.",
+          command: "diagnose debug config-error-log read"
+        }
+      ];
+      const items = checklistItems.map(item => `
+        <li>
+          <div class="checklist-head">
+            <span class="badge ${item.tagClass}">${escapeHtml(item.tag)}</span>
+            <p>${item.text}</p>
+          </div>
+          ${item.command ? `
+            <div class="codebox">
+              <pre>${escapeHtml(item.command)}</pre>
+              <div class="code-actions">
+                <button class="mini" onclick="copyText(${jsArg(item.command)})">Copier commande</button>
+              </div>
+            </div>
+          ` : ""}
+        </li>
+      `).join("");
 
       return `
-        <h3 class="section-title">Versions FortiOS connues dans la plage demandée</h3>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Version</th>
-                <th>Build</th>
-                <th>Source</th>
-              </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
+        <details class="checklist-details">
+          <summary class="section-title">Checklist avant upgrade <span class="muted">(${checklistItems.length} points)</span></summary>
+          <ul class="checklist">${items}</ul>
+        </details>
       `;
-    }
-
-    function renderEstimatedPath(model, fromVersion, toVersion) {
-      const path = estimatePath(model, fromVersion, toVersion);
-      if (path.length < 2) return "";
-
-      return `
-        <div class="callouts">
-          <article class="callout warn">
-            <div class="callout-head">
-              <h4 class="callout-title">Chemin indicatif à confirmer</h4>
-              <span class="badge warn">Non Fortinet</span>
-            </div>
-            <p>Ce chemin est calculé localement avec les versions publiques connues du modèle. Il sert de repère, mais le chemin officiel doit venir de Fortinet Upgrade Path Tool.</p>
-            <div class="steps">
-              <div class="step-track">${renderSteps(path)}</div>
-            </div>
-          </article>
-        </div>
-      `;
-    }
-
-    function estimatePath(model, fromVersion, toVersion) {
-      const versions = versionsInRange(model.firmwares || [], fromVersion, toVersion)
-        .map(firmware => firmware.version)
-        .sort(compareVersions);
-      if (!versions.includes(fromVersion) || !versions.includes(toVersion)) return [];
-
-      const byTrain = new Map();
-      for (const version of versions) {
-        const train = version.split(".").slice(0, 2).join(".");
-        byTrain.set(train, version);
-      }
-
-      const estimated = [fromVersion];
-      for (const version of byTrain.values()) {
-        if (version !== fromVersion && version !== toVersion) estimated.push(version);
-      }
-      estimated.push(toVersion);
-      return estimated.filter(uniqueInOrder).sort(compareVersions);
     }
 
     function renderCallouts(advisories) {
@@ -775,6 +752,77 @@
       return path.hops.slice(0, -1).map((from, index) => ({ from, to: path.hops[index + 1] }));
     }
 
+    // CVE ranges come from Fortinet's own CSAF advisories (see scripts/fortios_watch.py) as
+    // per-branch bounds — a branch with no from/to means the whole train is affected (Fortinet
+    // phrases that as "X.Y all versions", usually because it's EOL with no planned fix).
+    function cveMatchesVersion(cve, product, model, version) {
+      return (cve.affected || []).some(range => {
+        if (range.product !== product) return false;
+        if (Array.isArray(range.models) && range.models.length && !range.models.includes(model)) return false;
+        if (branchOf(version) !== range.branch) return false;
+        if (!range.from && !range.to) return true;
+        if (range.from && compareVersions(version, range.from) < 0) return false;
+        if (range.to && compareVersions(version, range.to) > 0) return false;
+        return true;
+      });
+    }
+
+    function cvesForPath(path) {
+      const items = (state.cves || []).filter(cve =>
+        path.hops.some(version => cveMatchesVersion(cve, path.product, path.model, version))
+      );
+      return items.sort((a, b) => cveSeverityRank(b.severity) - cveSeverityRank(a.severity));
+    }
+
+    function cvesForVersion(path, version) {
+      return cvesForPath(path).filter(cve => cveMatchesVersion(cve, path.product, path.model, version));
+    }
+
+    function cveSeverityRank(severity) {
+      return { critical: 4, high: 3, medium: 2, low: 1 }[severity] || 0;
+    }
+
+    function cveBadgeClass(severity) {
+      return { critical: "danger", high: "danger", medium: "warn", low: "info" }[severity] || "ok";
+    }
+
+    function cveSeverityLabel(severity) {
+      return { critical: "Critique", high: "Élevée", medium: "Moyenne", low: "Faible" }[severity] || "Inconnue";
+    }
+
+    function renderCveCallouts(cves, path) {
+      if (!cves.length) {
+        return `<div class="callouts"><div class="callout"><p>Aucune CVE PSIRT Fortinet connue sur ce chemin.</p></div></div>`;
+      }
+
+      return `
+        <div class="callouts">
+          ${cves.map(cve => {
+            const stillAffected = cveMatchesVersion(cve, path.product, path.model, path.to);
+            const scoreLabel = typeof cve.cvssScore === "number" ? ` (CVSS ${cve.cvssScore})` : "";
+            return `
+              <article class="callout ${calloutClass(cveSeverityToInternal(cve.severity))}">
+                <div class="callout-head">
+                  <h4 class="callout-title">${escapeHtml(cve.title)}</h4>
+                  <span class="badge ${cveBadgeClass(cve.severity)}">${escapeHtml(cve.id)} · ${escapeHtml(cveSeverityLabel(cve.severity))}${scoreLabel}</span>
+                  ${stillAffected
+                    ? `<span class="badge danger">⚠ Toujours vulnérable après ce chemin</span>`
+                    : `<span class="badge ok">✅ Corrigé par ce chemin</span>`}
+                </div>
+                <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a></p>
+              </article>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    // Reuses the existing internal-advisory callout color scale (critical/important/warning/info)
+    // for visual consistency, without conflating the two severity vocabularies elsewhere.
+    function cveSeverityToInternal(severity) {
+      return { critical: "critical", high: "important", medium: "warning", low: "info" }[severity] || "info";
+    }
+
     function firmwareFor(model, version) {
       return model.firmwares.find(item => item.version === version) || { version, build: "-", notes: [] };
     }
@@ -927,6 +975,8 @@
       // Advisories are fully managed server-side (create/edit/delete via /app/alerte/), so the
       // fetched catalog is authoritative — replacing (not upserting) is what makes deletions stick.
       merged.advisories = incoming.advisories;
+      // CVEs are entirely auto-collected server-side too (PSIRT import), same reasoning.
+      merged.cves = incoming.cves || [];
       merged.generatedAt = incoming.generatedAt || new Date().toISOString();
       return merged;
     }
@@ -1007,6 +1057,21 @@
           })
         : ["Aucune action obligatoire connue dans la base interne pour ce chemin.", ""];
 
+      const cves = cvesForPath(path);
+      const cveLines = cves.length
+        ? cves.flatMap(cve => {
+            const stillAffected = cveMatchesVersion(cve, path.product, path.model, path.to);
+            const scoreLabel = typeof cve.cvssScore === "number" ? ` (CVSS ${cve.cvssScore})` : "";
+            return [
+              `### ${cve.id} - ${cve.title}`,
+              `- Sévérité : ${cveSeverityLabel(cve.severity)}${scoreLabel}`,
+              `- Fiche PSIRT : ${cve.advisoryId} - ${cve.url}`,
+              `- Statut : ${stillAffected ? "toujours vulnérable après ce chemin" : "corrigé par ce chemin"}`,
+              ""
+            ];
+          })
+        : ["Aucune CVE PSIRT Fortinet connue sur ce chemin.", ""];
+
       return [
         `# Rapport d’intervention FortiOS - ${path.model} ${path.from} vers ${path.to}`,
         "",
@@ -1022,7 +1087,10 @@
         "",
         "## Alertes ingénieur",
         "",
-        ...advisoryLines
+        ...advisoryLines,
+        "## CVE PSIRT Fortinet",
+        "",
+        ...cveLines
       ].join("\n");
     }
 
@@ -1083,15 +1151,6 @@
         if (diff !== 0) return diff;
       }
       return 0;
-    }
-
-    function versionsInRange(firmwares, fromVersion, toVersion) {
-      const low = compareVersions(fromVersion, toVersion) <= 0 ? fromVersion : toVersion;
-      const high = compareVersions(fromVersion, toVersion) <= 0 ? toVersion : fromVersion;
-      return firmwares.filter(firmware =>
-        compareVersions(firmware.version, low) >= 0 &&
-        compareVersions(firmware.version, high) <= 0
-      );
     }
 
     function compareModelIds(a, b) {
