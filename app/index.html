@@ -380,7 +380,14 @@
         els.dataStatus.textContent = `Chemin Fortinet récupéré : ${new Date().toLocaleString("fr-FR")}.`;
         els.sideMessage.textContent = `${payload.path.hops.join(" > ")} récupéré depuis Fortinet.`;
       } catch (error) {
-        els.sideMessage.textContent = `Récupération Fortinet impossible : ${error.message}. Lancer l'interface avec scripts/fortios_server.py.`;
+        // Fortinet is unreachable: fall back to whatever this exact model/version pair already
+        // has cached locally (from an earlier successful live fetch) rather than leaving the
+        // technician with a blank screen — but always say so, since it could be stale.
+        renderResult(true);
+        const cached = currentPath();
+        els.sideMessage.textContent = cached
+          ? `Fortinet injoignable (${error.message}) — chemin affiché depuis le cache local du ${formatDateTime(cached.fetchedAt)}.`
+          : `Fortinet injoignable (${error.message}) — aucun chemin en cache pour ce modèle.`;
       } finally {
         els.go.disabled = false;
       }
@@ -395,7 +402,16 @@
       els.target.value = selection.target;
     }
 
-    function renderResult() {
+    function renderOfflineBanner() {
+      return `
+        <div class="callout warn offline-banner">
+          <p>⚠ Fortinet Upgrade Path Tool injoignable — <strong>chemin affiché depuis le cache local</strong>, à revérifier dès que le service est de nouveau accessible.</p>
+        </div>
+      `;
+    }
+
+    function renderResult(offline = false) {
+      const offlineBanner = offline ? renderOfflineBanner() : "";
       const product = currentProduct();
       const model = currentModel();
       if (!model) {
@@ -410,7 +426,7 @@
       const path = currentPath();
 
       if (!path) {
-        els.result.innerHTML = `<div class="content-band">${renderChecklist()}</div>`;
+        els.result.innerHTML = `<div class="content-band">${offlineBanner}${renderChecklist()}</div>`;
         els.sideMessage.textContent = "Chemin absent du catalogue pour ce modèle et ce couple de versions.";
         return;
       }
@@ -420,6 +436,7 @@
       const firmwareRows = path.hops.map(version => firmwareFor(model, version));
 
       els.result.innerHTML = `
+        ${offlineBanner}
         <div class="path-head">
           <div>
             <p class="eyebrow">Recommended path</p>

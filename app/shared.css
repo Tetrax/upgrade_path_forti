@@ -453,6 +453,14 @@ a.note-token:hover {
   background: var(--soft-yellow);
 }
 
+.offline-banner {
+  margin: 0 0 14px;
+}
+
+.offline-banner p {
+  color: #8a5a00;
+}
+
 .callout.danger {
   border-color: #ffc8c3;
   background: var(--soft-red);
