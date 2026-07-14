@@ -333,16 +333,19 @@
       );
     }
 
+    // Never trust the local catalog for the actual path — it's only there to seed the
+    // model/version dropdowns. Every "Afficher le chemin" click re-queries Fortinet live, so the
+    // hops shown always reflect the official service, not a possibly-stale cached copy.
     async function showPath() {
       renderResult();
-      if (currentModel() && !currentPath()) {
+      if (currentModel()) {
         await fetchOfficialPath();
       }
     }
 
-    // Every path request that isn't already in the pre-fetched catalog goes live to Fortinet
-    // Upgrade Path Tool through the local proxy (scripts/fortios_server.py) — no manual "refresh"
-    // button anymore, this just runs automatically whenever showPath() can't find a stored path.
+    // Goes live to Fortinet Upgrade Path Tool through the local proxy
+    // (scripts/fortios_server.py) on every request — no manual "refresh" button, this just runs
+    // automatically whenever showPath() is triggered.
     async function fetchOfficialPath() {
       const model = currentModel();
       if (!model) return;
