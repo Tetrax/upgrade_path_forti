@@ -352,6 +352,43 @@ def collect_docs_catalog(major_versions: tuple[str, ...], timeout: int) -> tuple
     return state, skipped
 
 
+# The Upgrade Path Tool's own available_from/to_extended items carry a "type": "Mature"|"Feature"
+# per version that release-notes scraping (collect_docs_catalog above) never sees. This is a
+# property of the FortiOS version itself, not of the hardware model, so one reference model is
+# enough to read every version's status — no need to repeat this call per model.
+FORTIOS_MATURITY_REFERENCE_MODEL = "FGT60F"
+
+
+def fetch_fortios_version_maturity(timeout: int) -> dict[str, str]:
+    payload_json = post_official_upgrade_tool(
+        {"product_slug": PRODUCTS[DEFAULT_PRODUCT_ID]["slug"], "model": FORTIOS_MATURITY_REFERENCE_MODEL}, timeout
+    )
+    result = payload_json.get("result")
+    if not isinstance(result, dict):
+        return {}
+
+    maturity: dict[str, str] = {}
+    for item in (result.get("available_from_extended") or []) + (result.get("available_to_extended") or []):
+        version = item.get("version")
+        item_type = item.get("type")
+        if version and item_type:
+            maturity[version] = item_type
+    return maturity
+
+
+def apply_fortios_maturity(state: dict[str, Any], maturity: dict[str, str]) -> None:
+    if not maturity:
+        return
+    for product in state["products"]:
+        if product.get("id") != DEFAULT_PRODUCT_ID:
+            continue
+        for model in product.get("models", []):
+            for firmware in model.get("firmwares", []):
+                version = firmware.get("version")
+                if version in maturity:
+                    firmware["maturity"] = maturity[version]
+
+
 # FortiClient has no hardware "models" — the three OS installers are close enough to that concept
 # (each ships its own build number, tracked in its own release notes) to reuse the same model
 # slot. FortiClient EMS has a single implicit model.
@@ -1277,6 +1314,10 @@ def main(argv: list[str]) -> int:
         major_versions = tuple(item.strip() for item in args.docs_major_versions.split(",") if item.strip())
         docs_state, skipped_docs_versions = collect_docs_catalog(major_versions, args.timeout)
         state = merge_state(state, docs_state)
+        try:
+            apply_fortios_maturity(state, fetch_fortios_version_maturity(args.timeout))
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            pass
     elif args.docs_catalog:
         skipped_docs_versions = ["collecte ignorée avec --skip-network"]
 

@@ -28,6 +28,8 @@
       </div>
     </header>
 
+    <section class="panel briefing-panel" id="briefingPanel"></section>
+
     <section class="grid">
       <aside class="panel">
         <div class="panel-header">
@@ -180,7 +182,8 @@
       result: document.getElementById("result"),
       dataStatus: document.getElementById("dataStatus"),
       sideMessage: document.getElementById("sideMessage"),
-      go: document.getElementById("goButton")
+      go: document.getElementById("goButton"),
+      briefingPanel: document.getElementById("briefingPanel")
     };
 
     els.go.addEventListener("click", showPath);
@@ -411,6 +414,7 @@
     }
 
     function renderResult(offline = false) {
+      renderBriefingPanel();
       const offlineBanner = offline ? renderOfflineBanner() : "";
       const product = currentProduct();
       const model = currentModel();
@@ -632,6 +636,97 @@
           <ul class="checklist">${items}</ul>
         </details>
       `;
+    }
+
+    // Reference info shown regardless of the current product/model/version selection, so it's
+    // visible before a technician has even picked a path — refreshed on every renderResult() call
+    // since it only depends on the catalog data, not the current selection.
+    function renderBriefingPanel() {
+      if (!els.briefingPanel) return;
+      els.briefingPanel.innerHTML = `
+        <div class="panel-header">
+          <p class="eyebrow">Avant de commencer</p>
+          <h2 class="panel-title">Vue d’ensemble Fortinet</h2>
+        </div>
+        <div class="panel-body briefing-grid">
+          <div>
+            <h3 class="section-title">Dernières versions FortiOS majeures</h3>
+            ${renderLatestFortiosVersions()}
+          </div>
+          <div>
+            <h3 class="section-title">Dernières CVE PSIRT Fortinet</h3>
+            ${renderLatestCves()}
+          </div>
+        </div>
+      `;
+    }
+
+    // No release date available from any public Fortinet source we scrape (checked release
+    // notes, product pages, upgrade-tool API) — only version + Mature/Feature status, which does
+    // come straight from the Upgrade Path Tool's own API (see apply_fortios_maturity in
+    // scripts/fortios_watch.py). One entry per major train, most recent version first.
+    function latestFortiosVersionsByTrain(limit = 4) {
+      const product = state.products.find(item => item.id === "fortigate-fortios");
+      if (!product) return [];
+      const latestByVersion = new Map();
+      for (const model of product.models) {
+        for (const firmware of model.firmwares || []) {
+          if (!latestByVersion.has(firmware.version)) latestByVersion.set(firmware.version, firmware);
+        }
+      }
+      const latestByTrain = new Map();
+      for (const firmware of latestByVersion.values()) {
+        const train = branchOf(firmware.version);
+        const current = latestByTrain.get(train);
+        if (!current || compareVersions(firmware.version, current.version) > 0) latestByTrain.set(train, firmware);
+      }
+      return Array.from(latestByTrain.values())
+        .sort((a, b) => compareVersions(b.version, a.version))
+        .slice(0, limit);
+    }
+
+    function renderLatestFortiosVersions() {
+      const versions = latestFortiosVersionsByTrain();
+      if (!versions.length) return `<p class="muted">Catalogue FortiOS pas encore chargé.</p>`;
+      const items = versions.map(firmware => {
+        const maturityBadge = firmware.maturity
+          ? `<span class="badge ${firmware.maturity === "Mature" ? "ok" : "info"}">${escapeHtml(firmware.maturity)}</span>`
+          : `<span class="badge">Statut inconnu</span>`;
+        const releaseNotesUrl = firmware.links && firmware.links["release-notes"];
+        const versionLabel = releaseNotesUrl
+          ? `<a href="${escapeAttr(releaseNotesUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(firmware.version)}</a>`
+          : escapeHtml(firmware.version);
+        return `<li><span class="version-cell">${versionLabel}</span>${maturityBadge}</li>`;
+      }).join("");
+      return `<ul class="briefing-list">${items}</ul>`;
+    }
+
+    function latestCves(limit = 8) {
+      return [...(state.cves || [])]
+        .sort((a, b) => (b.publishedAt || "").localeCompare(a.publishedAt || ""))
+        .slice(0, limit);
+    }
+
+    function cveProductLabels(cve) {
+      const productIds = Array.from(new Set((cve.affected || []).map(range => range.product)));
+      return productIds.map(id => state.products.find(item => item.id === id)?.label || id);
+    }
+
+    function renderLatestCves() {
+      const cves = latestCves();
+      if (!cves.length) return `<p class="muted">Catalogue CVE pas encore chargé.</p>`;
+      const items = cves.map(cve => {
+        const scoreLabel = typeof cve.cvssScore === "number" ? ` (CVSS ${cve.cvssScore})` : "";
+        const products = cveProductLabels(cve).join(", ") || "Produit inconnu";
+        return `
+          <li>
+            <a class="badge ${cveBadgeClass(cve.severity)}" href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">🛡 ${escapeHtml(cve.id)}</a>
+            <span class="cve-latest-title">${escapeHtml(cve.title)}</span>
+            <span class="muted">${escapeHtml(products)} · ${escapeHtml(cveSeverityLabel(cve.severity))}${scoreLabel}${cve.publishedAt ? ` · ${escapeHtml(cve.publishedAt)}` : ""}</span>
+          </li>
+        `;
+      }).join("");
+      return `<ul class="briefing-list cve-latest-list">${items}</ul>`;
     }
 
     function renderCallouts(advisories) {
