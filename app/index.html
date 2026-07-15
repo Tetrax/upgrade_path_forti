@@ -819,6 +819,19 @@
       return cvesForPath(path).filter(cve => cveMatchesVersion(cve, path.product, path.model, version));
     }
 
+    // Walks the path's hops in order and returns the first hop version that's no longer affected
+    // right after the last affected one — i.e. the actual version this specific upgrade path
+    // fixes the CVE at, not just "some point after". Returns null when still affected at the
+    // final target (nothing in this path resolves it).
+    function cveFixedAtVersion(cve, path) {
+      let lastAffectedIndex = -1;
+      path.hops.forEach((version, index) => {
+        if (cveMatchesVersion(cve, path.product, path.model, version)) lastAffectedIndex = index;
+      });
+      if (lastAffectedIndex === -1 || lastAffectedIndex === path.hops.length - 1) return null;
+      return path.hops[lastAffectedIndex + 1];
+    }
+
     function cveSeverityRank(severity) {
       return { critical: 4, high: 3, medium: 2, low: 1 }[severity] || 0;
     }
@@ -839,16 +852,16 @@
       return `
         <div class="callouts">
           ${cves.map(cve => {
-            const stillAffected = cveMatchesVersion(cve, path.product, path.model, path.to);
+            const fixedAt = cveFixedAtVersion(cve, path);
             const scoreLabel = typeof cve.cvssScore === "number" ? ` (CVSS ${cve.cvssScore})` : "";
             return `
               <article class="callout ${calloutClass(cveSeverityToInternal(cve.severity))}">
                 <div class="callout-head">
                   <h4 class="callout-title">${escapeHtml(cve.title)}</h4>
                   <span class="badge ${cveBadgeClass(cve.severity)}">${escapeHtml(cve.id)} · ${escapeHtml(cveSeverityLabel(cve.severity))}${scoreLabel}</span>
-                  ${stillAffected
-                    ? `<span class="badge danger">⚠ Toujours vulnérable après ce chemin</span>`
-                    : `<span class="badge ok">✅ Corrigé par ce chemin</span>`}
+                  ${fixedAt
+                    ? `<span class="badge ok">✅ Corrigé en ${escapeHtml(fixedAt)}</span>`
+                    : `<span class="badge danger">⚠ Toujours vulnérable après ce chemin</span>`}
                 </div>
                 <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a></p>
               </article>
@@ -967,13 +980,13 @@
       const cves = cvesForPath(path);
       const cveLines = cves.length
         ? cves.flatMap(cve => {
-            const stillAffected = cveMatchesVersion(cve, path.product, path.model, path.to);
+            const fixedAt = cveFixedAtVersion(cve, path);
             const scoreLabel = typeof cve.cvssScore === "number" ? ` (CVSS ${cve.cvssScore})` : "";
             return [
               `### ${cve.id} - ${cve.title}`,
               `- Sévérité : ${cveSeverityLabel(cve.severity)}${scoreLabel}`,
               `- Fiche PSIRT : ${cve.advisoryId} - ${cve.url}`,
-              `- Statut : ${stillAffected ? "toujours vulnérable après ce chemin" : "corrigé par ce chemin"}`,
+              `- Statut : ${fixedAt ? `corrigé en ${fixedAt}` : "toujours vulnérable après ce chemin"}`,
               ""
             ];
           })
