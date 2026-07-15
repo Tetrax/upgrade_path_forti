@@ -10,6 +10,8 @@ import json
 import re
 import secrets
 import sys
+import threading
+import traceback
 import urllib.parse
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -46,6 +48,19 @@ IMAGE_EXTENSIONS = {
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_URL_PREFIX = "/data/advisory-images/"
 IMAGE_REF_RE = re.compile(r"!\[[^\]]*\]\(/data/advisory-images/([^)\s]+)\)")
+# 1 MB is generously above any legitimate JSON body this API accepts (the image upload payload is
+# base64, so 8 MB of image data becomes ~11 MB on the wire — bump the ceiling for that one route).
+MAX_JSON_BODY_BYTES = 1 * 1024 * 1024
+MAX_IMAGE_UPLOAD_BODY_BYTES = 12 * 1024 * 1024
+# Only these two directories are anything the UI actually needs served over HTTP — ROOT is the
+# whole repo checkout, which also holds scripts/, deploy/, docs/ and .git/.
+ALLOWED_STATIC_PREFIXES = ("/app/", "/data/")
+
+# ThreadingHTTPServer runs every request on its own thread, but all the POST/PUT/DELETE handlers
+# below do read-JSON -> mutate -> write-JSON against the same file with no isolation of their
+# own — this serializes that whole sequence so two concurrent requests can't race and silently
+# clobber one another's changes (a "lost update").
+STATE_LOCK = threading.Lock()
 
 
 def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
@@ -147,7 +162,35 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.timeout = timeout
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
+    def translate_path(self, path: str) -> str:
+        # SimpleHTTPRequestHandler already blocks ".." traversal outside `directory`, but that
+        # still leaves every other file under the repo root (scripts/, deploy/, docs/, .git/)
+        # readable over plain HTTP by anyone who can reach this server — restrict to what the UI
+        # actually needs.
+        url_path = urllib.parse.urlsplit(path).path
+        if not any(url_path.startswith(prefix) for prefix in ALLOWED_STATIC_PREFIXES):
+            return str(ROOT / "__not_served__")
+        return super().translate_path(path)
+
+    def is_safe_origin(self) -> bool:
+        """Lightweight CSRF guard for the state-mutating routes: the request must claim to come
+        from this same host. Not a full token-based scheme, but it closes off the "any page the
+        browser visits can silently fetch() this API" hole a bare Content-Type check leaves open,
+        since a Content-Type of text/plain would otherwise sail through as a CORS-simple request.
+        """
+        host = self.headers.get("Host", "")
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            return urllib.parse.urlsplit(origin).netloc == host
+        referer = self.headers.get("Referer")
+        if referer is not None:
+            return urllib.parse.urlsplit(referer).netloc == host
+        return True  # neither header present — a same-origin browser navigation, not fetch()
+
     def do_POST(self) -> None:
+        if not self.is_safe_origin():
+            self.send_error(HTTPStatus.FORBIDDEN, "Origin invalide")
+            return
         if self.path == "/api/official-path":
             self.handle_official_path()
         elif self.path == "/api/advisories":
@@ -160,6 +203,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
     def do_PUT(self) -> None:
+        if not self.is_safe_origin():
+            self.send_error(HTTPStatus.FORBIDDEN, "Origin invalide")
+            return
         if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(ADVISORIES_PREFIX):
             self.handle_update_advisory(self.path[len(ADVISORIES_PREFIX):])
         elif self.path.startswith(COMPATIBILITIES_PREFIX) and len(self.path) > len(COMPATIBILITIES_PREFIX):
@@ -168,6 +214,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
     def do_DELETE(self) -> None:
+        if not self.is_safe_origin():
+            self.send_error(HTTPStatus.FORBIDDEN, "Origin invalide")
+            return
         if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(ADVISORIES_PREFIX):
             self.handle_delete_advisory(self.path[len(ADVISORIES_PREFIX):])
         elif self.path.startswith(COMPATIBILITIES_PREFIX) and len(self.path) > len(COMPATIBILITIES_PREFIX):
@@ -198,15 +247,16 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 return
 
             official_path, firmwares = result
-            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-            for firmware in firmwares:
-                upsert_firmware(state, firmware)
-            upsert_path(state, official_path)
-            record_search_history(
-                state, request.product, request.model, request.from_version, request.to_version, official_path.hops
-            )
-            state["generatedAt"] = utc_now()
-            write_json(DATA_PATH, state)
+            with STATE_LOCK:
+                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                for firmware in firmwares:
+                    upsert_firmware(state, firmware)
+                upsert_path(state, official_path)
+                record_search_history(
+                    state, request.product, request.model, request.from_version, request.to_version, official_path.hops
+                )
+                state["generatedAt"] = utc_now()
+                write_json(DATA_PATH, state)
 
             path_payload = next(
                 path
@@ -222,6 +272,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         except KeyError as error:
             self.write_json_response({"error": f"Champ manquant : {error.args[0]}"}, HTTPStatus.BAD_REQUEST)
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.log_exception("handle_official_path")
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 
     def handle_create_advisory(self) -> None:
@@ -234,64 +285,70 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 **fields,
             }
 
-            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-            upsert_advisory(state, advisory)
-            state["generatedAt"] = utc_now()
-            write_json(DATA_PATH, state)
+            with STATE_LOCK:
+                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                upsert_advisory(state, advisory)
+                state["generatedAt"] = utc_now()
+                write_json(DATA_PATH, state)
 
             self.write_json_response({"state": state, "advisory": advisory})
         except ValueError as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.log_exception("handle_create_advisory")
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 
     def handle_update_advisory(self, raw_id: str) -> None:
         try:
             advisory_id = urllib.parse.unquote(raw_id)
-            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-            existing = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
-            if existing is None:
-                self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
-                return
+            with STATE_LOCK:
+                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                existing = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
+                if existing is None:
+                    self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
+                    return
 
-            old_images = referenced_image_filenames(existing.get("description", ""))
+                old_images = referenced_image_filenames(existing.get("description", ""))
 
-            payload = self.read_json_body()
-            fields = parse_advisory_fields(payload)
-            advisory: dict[str, Any] = {
-                "id": advisory_id,
-                "createdAt": existing.get("createdAt") or utc_now(),
-                "updatedAt": utc_now(),
-                **fields,
-            }
+                payload = self.read_json_body()
+                fields = parse_advisory_fields(payload)
+                advisory: dict[str, Any] = {
+                    "id": advisory_id,
+                    "createdAt": existing.get("createdAt") or utc_now(),
+                    "updatedAt": utc_now(),
+                    **fields,
+                }
 
-            upsert_advisory(state, advisory)
-            state["generatedAt"] = utc_now()
-            write_json(DATA_PATH, state)
-            prune_unreferenced_images(old_images, state)
+                upsert_advisory(state, advisory)
+                state["generatedAt"] = utc_now()
+                write_json(DATA_PATH, state)
+                prune_unreferenced_images(old_images, state)
 
             self.write_json_response({"state": state, "advisory": advisory})
         except ValueError as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.log_exception("handle_update_advisory")
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 
     def handle_delete_advisory(self, raw_id: str) -> None:
         try:
             advisory_id = urllib.parse.unquote(raw_id)
-            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-            target = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
-            if target is None:
-                self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
-                return
+            with STATE_LOCK:
+                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                target = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
+                if target is None:
+                    self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
+                    return
 
-            state["advisories"] = [item for item in state["advisories"] if item.get("id") != advisory_id]
-            state["generatedAt"] = utc_now()
-            write_json(DATA_PATH, state)
-            prune_unreferenced_images(referenced_image_filenames(target.get("description", "")), state)
+                state["advisories"] = [item for item in state["advisories"] if item.get("id") != advisory_id]
+                state["generatedAt"] = utc_now()
+                write_json(DATA_PATH, state)
+                prune_unreferenced_images(referenced_image_filenames(target.get("description", "")), state)
 
             self.write_json_response({"state": state})
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.log_exception("handle_delete_advisory")
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 
     def handle_create_compatibility(self) -> None:
@@ -304,65 +361,71 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 **fields,
             }
 
-            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-            upsert_compatibility(state, item)
-            state["generatedAt"] = utc_now()
-            write_json(DATA_PATH, state)
+            with STATE_LOCK:
+                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                upsert_compatibility(state, item)
+                state["generatedAt"] = utc_now()
+                write_json(DATA_PATH, state)
 
             self.write_json_response({"state": state, "compatibility": item})
         except ValueError as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.log_exception("handle_create_compatibility")
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 
     def handle_update_compatibility(self, raw_id: str) -> None:
         try:
             item_id = urllib.parse.unquote(raw_id)
-            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-            existing = next((item for item in state["compatibilities"] if item.get("id") == item_id), None)
-            if existing is None:
-                self.write_json_response({"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND)
-                return
+            with STATE_LOCK:
+                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                existing = next((item for item in state["compatibilities"] if item.get("id") == item_id), None)
+                if existing is None:
+                    self.write_json_response({"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND)
+                    return
 
-            payload = self.read_json_body()
-            fields = parse_compatibility_fields(payload)
-            item: dict[str, Any] = {
-                "id": item_id,
-                "createdAt": existing.get("createdAt") or utc_now(),
-                "updatedAt": utc_now(),
-                **fields,
-            }
+                payload = self.read_json_body()
+                fields = parse_compatibility_fields(payload)
+                item: dict[str, Any] = {
+                    "id": item_id,
+                    "createdAt": existing.get("createdAt") or utc_now(),
+                    "updatedAt": utc_now(),
+                    **fields,
+                }
 
-            upsert_compatibility(state, item)
-            state["generatedAt"] = utc_now()
-            write_json(DATA_PATH, state)
+                upsert_compatibility(state, item)
+                state["generatedAt"] = utc_now()
+                write_json(DATA_PATH, state)
 
             self.write_json_response({"state": state, "compatibility": item})
         except ValueError as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.log_exception("handle_update_compatibility")
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 
     def handle_delete_compatibility(self, raw_id: str) -> None:
         try:
             item_id = urllib.parse.unquote(raw_id)
-            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-            remaining = [item for item in state["compatibilities"] if item.get("id") != item_id]
-            if len(remaining) == len(state["compatibilities"]):
-                self.write_json_response({"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND)
-                return
+            with STATE_LOCK:
+                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                remaining = [item for item in state["compatibilities"] if item.get("id") != item_id]
+                if len(remaining) == len(state["compatibilities"]):
+                    self.write_json_response({"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND)
+                    return
 
-            state["compatibilities"] = remaining
-            state["generatedAt"] = utc_now()
-            write_json(DATA_PATH, state)
+                state["compatibilities"] = remaining
+                state["generatedAt"] = utc_now()
+                write_json(DATA_PATH, state)
 
             self.write_json_response({"state": state})
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.log_exception("handle_delete_compatibility")
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 
     def handle_upload_image(self) -> None:
         try:
-            payload = self.read_json_body()
+            payload = self.read_json_body(max_bytes=MAX_IMAGE_UPLOAD_BODY_BYTES)
             content_type = str(payload.get("contentType") or "").strip().lower()
             data_base64 = str(payload.get("dataBase64") or "").strip()
             if content_type not in IMAGE_EXTENSIONS:
@@ -385,12 +448,25 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         except ValueError as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
+            self.log_exception("handle_upload_image")
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
 
-    def read_json_body(self) -> dict[str, Any]:
+    def read_json_body(self, max_bytes: int = MAX_JSON_BODY_BYTES) -> dict[str, Any]:
+        # Requiring the exact Content-Type also closes the "CORS-simple request" loophole a
+        # cross-origin fetch() could otherwise use (e.g. text/plain) to reach this endpoint
+        # without a preflight — paired with is_safe_origin() above.
+        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if content_type != "application/json":
+            raise ValueError("Content-Type doit être application/json.")
         length = int(self.headers.get("Content-Length", "0"))
+        if length > max_bytes:
+            raise ValueError(f"Corps de requête trop volumineux ({length} octets, max {max_bytes}).")
         raw = self.rfile.read(length)
         return json.loads(raw.decode("utf-8"))
+
+    def log_exception(self, context: str) -> None:
+        sys.stderr.write(f"{self.log_date_time_string()} - unhandled error in {context}\n")
+        traceback.print_exc(file=sys.stderr)
 
     def write_json_response(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")

@@ -122,10 +122,15 @@ def read_json(path: Path, default: Any) -> Any:
 
 
 def write_json(path: Path, payload: Any) -> None:
+    """Write via a temp file + atomic rename so a crash mid-write (or a racing writer — see
+    fortios_server.py's per-request lock) can never leave `path` truncated or half-written.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
+    tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    with tmp_path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
+    os.replace(tmp_path, path)
 
 
 def version_key(version: str) -> tuple[int, ...]:
@@ -884,6 +889,40 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
         if advisory_id:
             advisory_by_id[advisory_id] = advisory
     state["advisories"] = list(advisory_by_id.values())
+
+    compatibility_by_id = {item.get("id"): item for item in state["compatibilities"]}
+    for compatibility in incoming["compatibilities"]:
+        compatibility_id = compatibility.get("id")
+        if compatibility_id:
+            compatibility_by_id[compatibility_id] = compatibility
+    state["compatibilities"] = list(compatibility_by_id.values())
+
+    cve_by_id = {item.get("id"): item for item in state["cves"]}
+    for cve in incoming["cves"]:
+        cve_id = cve.get("id")
+        if cve_id:
+            cve_by_id[cve_id] = cve
+    state["cves"] = list(cve_by_id.values())
+
+    # Fetched wholesale from endoflife.date each time, so incoming (fresher) wins per train.
+    state["fortiosLifecycle"] = {**state["fortiosLifecycle"], **incoming["fortiosLifecycle"]}
+
+    # Same product/model/from/to key as record_search_history — keep the most recent
+    # requestedAt per key, then re-sort and cap, so a merge never resurrects a stale entry
+    # above a newer one.
+    history_by_key = {
+        (item.get("product"), item.get("model"), item.get("from"), item.get("to")): item
+        for item in state["searchHistory"]
+    }
+    for item in incoming["searchHistory"]:
+        key = (item.get("product"), item.get("model"), item.get("from"), item.get("to"))
+        existing = history_by_key.get(key)
+        if not existing or (item.get("requestedAt") or "") > (existing.get("requestedAt") or ""):
+            history_by_key[key] = item
+    state["searchHistory"] = sorted(
+        history_by_key.values(), key=lambda item: item.get("requestedAt") or "", reverse=True
+    )[:SEARCH_HISTORY_LIMIT]
+
     state["generatedAt"] = utc_now()
     return state
 
