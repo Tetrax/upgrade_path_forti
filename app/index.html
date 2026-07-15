@@ -485,7 +485,8 @@
                   <th>Version</th>
                   <th>Build</th>
                   <th>Release notes</th>
-                  <th>Infos ingénieur</th>
+                  <th>Advisories</th>
+                  <th>CVE</th>
                 </tr>
               </thead>
               <tbody>
@@ -548,15 +549,16 @@
         const label = `+${minorCveCount} CVE mineure${minorCveCount > 1 ? "s" : ""}`;
         cveBadges.push(`<span class="badge" title="${minorCveCount} CVE avec un score CVSS &lt; ${CVE_BADGE_MIN_SCORE} — détail dans la section CVE ci-dessous">${escapeHtml(label)}</span>`);
       }
-      const allBadges = [...advisoryBadges, ...cveBadges];
-      const badges = allBadges.length ? allBadges.join(" ") : `<span class="badge ok">Aucune alerte connue</span>`;
+      const advisories = advisoryBadges.length ? advisoryBadges.join(" ") : `<span class="badge ok">Aucune</span>`;
+      const cves = cveBadges.length ? cveBadges.join(" ") : `<span class="badge ok">Aucune</span>`;
 
       return `
         <tr class="${rowClass}">
           <td class="version-cell">${escapeHtml(version)} ${index === 0 ? `<span class="badge">Current</span>` : ""} ${index === path.hops.length - 1 ? `<span class="badge danger">Target</span>` : ""}</td>
           <td>${escapeHtml(firmware?.build || "-")}</td>
           <td><div class="notes">${renderNoteTokens(firmware?.notes || [], firmware?.links || {})}</div></td>
-          <td>${badges}</td>
+          <td><div class="badge-cell">${advisories}</div></td>
+          <td><div class="badge-cell">${cves}</div></td>
         </tr>
       `;
     }
