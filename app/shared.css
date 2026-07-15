@@ -543,6 +543,10 @@ a.note-token:hover {
   margin-bottom: 18px;
 }
 
+.callouts + .checklist-details {
+  margin-top: 28px;
+}
+
 .checklist-details summary {
   cursor: pointer;
   list-style: none;
