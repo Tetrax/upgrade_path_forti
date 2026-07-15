@@ -164,6 +164,7 @@ def normalize_state(payload: dict[str, Any] | None) -> dict[str, Any]:
         "advisories": payload.get("advisories") if isinstance(payload.get("advisories"), list) else [],
         "compatibilities": payload.get("compatibilities") if isinstance(payload.get("compatibilities"), list) else [],
         "cves": payload.get("cves") if isinstance(payload.get("cves"), list) else [],
+        "fortiosLifecycle": payload.get("fortiosLifecycle") if isinstance(payload.get("fortiosLifecycle"), dict) else {},
     }
 
 
@@ -387,6 +388,28 @@ def apply_fortios_maturity(state: dict[str, Any], maturity: dict[str, str]) -> N
                 version = firmware.get("version")
                 if version in maturity:
                     firmware["maturity"] = maturity[version]
+
+
+# endoflife.date is a community-maintained tracker, not Fortinet itself, but it's the only public,
+# no-account source for FortiOS support/EOL dates we found — the official page
+# (support.fortinet.com/Information/ProductLifeCycle.aspx) requires a FortiCloud login. Per-train
+# only (e.g. "7.6"), not per patch version — Fortinet's own support windows are per major train.
+FORTIOS_EOL_API_URL = "https://endoflife.date/api/fortios.json"
+
+
+def fetch_fortios_lifecycle(timeout: int) -> dict[str, dict[str, str | None]]:
+    entries = json.loads(fetch_text(FORTIOS_EOL_API_URL, timeout))
+    lifecycle: dict[str, dict[str, str | None]] = {}
+    for entry in entries:
+        train = entry.get("cycle")
+        if not train:
+            continue
+        lifecycle[str(train)] = {
+            "releaseDate": entry.get("releaseDate"),
+            "support": entry.get("support"),
+            "eol": entry.get("eol"),
+        }
+    return lifecycle
 
 
 # FortiClient has no hardware "models" — the three OS installers are close enough to that concept
@@ -1316,6 +1339,10 @@ def main(argv: list[str]) -> int:
         state = merge_state(state, docs_state)
         try:
             apply_fortios_maturity(state, fetch_fortios_version_maturity(args.timeout))
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            pass
+        try:
+            state["fortiosLifecycle"] = fetch_fortios_lifecycle(args.timeout)
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
             pass
     elif args.docs_catalog:

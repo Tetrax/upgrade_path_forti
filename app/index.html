@@ -251,7 +251,8 @@
         products,
         paths: Array.isArray(nextState.paths) ? nextState.paths : [],
         advisories: Array.isArray(nextState.advisories) ? nextState.advisories : [],
-        cves: Array.isArray(nextState.cves) ? nextState.cves : []
+        cves: Array.isArray(nextState.cves) ? nextState.cves : [],
+        fortiosLifecycle: nextState.fortiosLifecycle && typeof nextState.fortiosLifecycle === "object" ? nextState.fortiosLifecycle : {}
       };
     }
 
@@ -730,10 +731,21 @@
       const versionChips = latestFortiosVersionsByTrain().map(firmware => {
         const releaseNotesUrl = firmware.links && firmware.links["release-notes"];
         const maturityTag = firmware.maturity ? ` <span class="briefing-tag">${escapeHtml(firmware.maturity)}</span>` : "";
-        const label = `${escapeHtml(firmware.version)}${maturityTag}`;
+        const lifecycle = fortiosLifecycleFor(firmware.version);
+        let lifecycleTag = "";
+        let tooltip = "";
+        if (lifecycle) {
+          tooltip = `Sortie ${lifecycle.releaseDate || "?"} · Fin de support ${lifecycle.support || "?"} · EOL ${lifecycle.eol || "?"}`;
+          if (lifecycle.support) {
+            const daysLeft = daysUntil(lifecycle.support);
+            if (daysLeft < 0) lifecycleTag = ` <span class="briefing-tag danger">Hors support</span>`;
+            else if (daysLeft <= 183) lifecycleTag = ` <span class="briefing-tag warn">Support → ${escapeHtml(lifecycle.support)}</span>`;
+          }
+        }
+        const label = `${escapeHtml(firmware.version)}${maturityTag}${lifecycleTag}`;
         return releaseNotesUrl
-          ? `<a class="briefing-chip" href="${escapeAttr(releaseNotesUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`
-          : `<span class="briefing-chip">${label}</span>`;
+          ? `<a class="briefing-chip" href="${escapeAttr(releaseNotesUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">${label}</a>`
+          : `<span class="briefing-chip" title="${escapeAttr(tooltip)}">${label}</span>`;
       }).join("");
 
       const cveChips = latestCves(6).map(cve => {
@@ -752,10 +764,21 @@
       `;
     }
 
-    // No release date available from any public Fortinet source we scrape (checked release
-    // notes, product pages, upgrade-tool API) — only version + Mature/Feature status, which does
-    // come straight from the Upgrade Path Tool's own API (see apply_fortios_maturity in
-    // scripts/fortios_watch.py). One entry per major train, most recent version first.
+    // Support/EOL dates come from endoflife.date (see fetch_fortios_lifecycle in
+    // scripts/fortios_watch.py) — Fortinet's own lifecycle page requires a FortiCloud login, this
+    // is the only public source found. Keyed by major train ("7.6"), not patch version, since
+    // that's the granularity Fortinet's own support windows use.
+    function fortiosLifecycleFor(version) {
+      return (state.fortiosLifecycle || {})[branchOf(version)];
+    }
+
+    function daysUntil(dateStr) {
+      return Math.round((new Date(`${dateStr}T00:00:00Z`).getTime() - Date.now()) / 86400000);
+    }
+
+    // Mature/Feature status comes straight from the Upgrade Path Tool's own API (see
+    // apply_fortios_maturity in scripts/fortios_watch.py). One entry per major train, most recent
+    // version first.
     function latestFortiosVersionsByTrain(limit = 4) {
       const product = state.products.find(item => item.id === "fortigate-fortios");
       if (!product) return [];
@@ -1090,6 +1113,8 @@
       merged.advisories = incoming.advisories;
       // CVEs are entirely auto-collected server-side too (PSIRT import), same reasoning.
       merged.cves = incoming.cves || [];
+      // FortiOS support/EOL dates too — fetched wholesale from endoflife.date server-side.
+      merged.fortiosLifecycle = incoming.fortiosLifecycle || merged.fortiosLifecycle || {};
       merged.generatedAt = incoming.generatedAt || new Date().toISOString();
       return merged;
     }

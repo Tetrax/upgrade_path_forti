@@ -219,6 +219,14 @@ h1 {
   font-size: 11px;
 }
 
+.briefing-tag.warn {
+  color: var(--warn);
+}
+
+.briefing-tag.danger {
+  color: var(--danger);
+}
+
 .field {
   margin-bottom: 14px;
 }
