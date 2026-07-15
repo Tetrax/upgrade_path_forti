@@ -495,8 +495,10 @@
             </table>
           </div>
           ${renderCallouts(hopAdvisories)}
-          <h3 class="section-title">Vulnérabilités connues (CVE PSIRT Fortinet)</h3>
-          ${renderCveCallouts(hopCves, path)}
+          <details class="checklist-details" open>
+            <summary class="checklist-title">Vulnérabilités connues (CVE PSIRT Fortinet) <span class="muted">(${hopCves.length})</span></summary>
+            ${renderCveCallouts(hopCves, path)}
+          </details>
         </div>
       `;
 
