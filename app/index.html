@@ -31,54 +31,67 @@
     <section class="briefing-bar" id="briefingPanel"></section>
 
     <section class="grid">
-      <aside class="panel">
-        <div class="panel-header">
-          <p class="eyebrow">Tools & resources</p>
-          <h2 class="panel-title">Upgrade Path Tool</h2>
-        </div>
-        <div class="panel-body">
-          <div class="field">
-            <label for="productSelect">Produit</label>
-            <select id="productSelect"></select>
+      <div class="sidebar-stack">
+        <aside class="panel">
+          <div class="panel-header">
+            <p class="eyebrow">Tools & resources</p>
+            <h2 class="panel-title">Upgrade Path Tool</h2>
           </div>
-          <div class="field">
-            <label for="modelSearch">Modèle FortiGate</label>
-            <input type="text" id="modelSearch" placeholder="Rechercher FGT90G, 100F, VM64..." autocomplete="off" />
-            <p class="hint" id="modelSearchHint">Tous les modèles sont affichés.</p>
-            <select id="modelSelect"></select>
-            <p class="hint">Le modèle est obligatoire, car Fortinet recommande un chemin différent selon le matériel.</p>
-          </div>
-          <div class="version-row">
+          <div class="panel-body">
             <div class="field">
-              <label for="currentSelect">Version actuelle</label>
-              <select id="currentSelect"></select>
+              <label for="productSelect">Produit</label>
+              <select id="productSelect"></select>
             </div>
             <div class="field">
-              <label for="targetSelect">Version cible</label>
-              <select id="targetSelect"></select>
+              <label for="modelSearch">Modèle FortiGate</label>
+              <input type="text" id="modelSearch" placeholder="Rechercher FGT90G, 100F, VM64..." autocomplete="off" />
+              <p class="hint" id="modelSearchHint">Tous les modèles sont affichés.</p>
+              <select id="modelSelect"></select>
+              <p class="hint">Le modèle est obligatoire, car Fortinet recommande un chemin différent selon le matériel.</p>
             </div>
-          </div>
-          <button class="btn primary" id="goButton">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
-            Afficher le chemin
-          </button>
-          <div class="status-line">
-            <span class="status-dot"></span>
-            <span id="dataStatus">Données locales chargées.</span>
-          </div>
-
-          <div class="field cve-search-field">
-            <label for="cveSearchInput">Rechercher une CVE</label>
-            <div class="cve-search-row">
-              <input type="text" id="cveSearchInput" placeholder="CVE-2025-53844" autocomplete="off" />
-              <button class="btn" id="cveSearchButton">Chercher</button>
+            <div class="version-row">
+              <div class="field">
+                <label for="currentSelect">Version actuelle</label>
+                <select id="currentSelect"></select>
+              </div>
+              <div class="field">
+                <label for="targetSelect">Version cible</label>
+                <select id="targetSelect"></select>
+              </div>
             </div>
-            <p class="hint">Retrouve les produits/versions concernés par une CVE PSIRT dans la base locale.</p>
-          </div>
+            <button class="btn primary" id="goButton">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>
+              Afficher le chemin
+            </button>
+            <div class="status-line">
+              <span class="status-dot"></span>
+              <span id="dataStatus">Données locales chargées.</span>
+            </div>
 
-          <p class="message" id="sideMessage"></p>
-        </div>
-      </aside>
+            <div class="field cve-search-field">
+              <label for="cveSearchInput">Rechercher une CVE</label>
+              <div class="cve-search-row">
+                <input type="text" id="cveSearchInput" placeholder="CVE-2025-53844" autocomplete="off" />
+                <button class="btn" id="cveSearchButton">Chercher</button>
+              </div>
+              <p class="hint">Retrouve les produits/versions concernés par une CVE PSIRT dans la base locale.</p>
+            </div>
+
+            <p class="message" id="sideMessage"></p>
+          </div>
+        </aside>
+
+        <aside class="panel">
+          <div class="panel-header">
+            <p class="eyebrow">Équipe</p>
+            <h2 class="panel-title">Historique des recherches</h2>
+          </div>
+          <div class="panel-body">
+            <p class="hint">Les 10 dernières recherches faites par l’équipe (partagé, pas juste les tiennes).</p>
+            <ul class="history-list" id="historyList"></ul>
+          </div>
+        </aside>
+      </div>
 
       <section class="panel">
         <div id="result"></div>
@@ -193,7 +206,8 @@
       sideMessage: document.getElementById("sideMessage"),
       go: document.getElementById("goButton"),
       briefingPanel: document.getElementById("briefingPanel"),
-      cveSearchInput: document.getElementById("cveSearchInput")
+      cveSearchInput: document.getElementById("cveSearchInput"),
+      historyList: document.getElementById("historyList")
     };
 
     els.go.addEventListener("click", showPath);
@@ -252,7 +266,8 @@
         paths: Array.isArray(nextState.paths) ? nextState.paths : [],
         advisories: Array.isArray(nextState.advisories) ? nextState.advisories : [],
         cves: Array.isArray(nextState.cves) ? nextState.cves : [],
-        fortiosLifecycle: nextState.fortiosLifecycle && typeof nextState.fortiosLifecycle === "object" ? nextState.fortiosLifecycle : {}
+        fortiosLifecycle: nextState.fortiosLifecycle && typeof nextState.fortiosLifecycle === "object" ? nextState.fortiosLifecycle : {},
+        searchHistory: Array.isArray(nextState.searchHistory) ? nextState.searchHistory : []
       };
     }
 
@@ -485,6 +500,7 @@
 
     function renderResult(offline = false) {
       renderBriefingPanel();
+      renderHistoryPanel();
       const offlineBanner = offline ? renderOfflineBanner() : "";
       const product = currentProduct();
       const model = currentModel();
@@ -810,6 +826,40 @@
       return productIds.map(id => state.products.find(item => item.id === id)?.label || id);
     }
 
+    // Shared team history — every live path request through fetchOfficialPath() gets appended
+    // server-side (record_search_history in scripts/fortios_watch.py), so this shows what
+    // anyone on the team last looked up, not just the current browser's own searches.
+    function renderHistoryPanel() {
+      if (!els.historyList) return;
+      const history = (state.searchHistory || []).slice(0, 10);
+      if (!history.length) {
+        els.historyList.innerHTML = `<li class="muted">Aucune recherche récente.</li>`;
+        return;
+      }
+      els.historyList.innerHTML = history.map(entry => {
+        const productLabel = state.products.find(item => item.id === entry.product)?.label || entry.product;
+        const when = entry.requestedAt ? formatDateTime(entry.requestedAt) : "";
+        return `
+          <li>
+            <button type="button" class="history-item" onclick="replaySearch(${jsArg(entry.product)}, ${jsArg(entry.model)}, ${jsArg(entry.from)}, ${jsArg(entry.to)})">
+              <span class="history-item-title">${escapeHtml(entry.model)} · ${escapeHtml(entry.from)} → ${escapeHtml(entry.to)}</span>
+              <span class="muted">${escapeHtml(productLabel)}${when ? ` · ${escapeHtml(when)}` : ""}</span>
+            </button>
+          </li>
+        `;
+      }).join("");
+    }
+
+    function replaySearch(product, model, from, to) {
+      els.product.value = product;
+      populateModels();
+      els.model.value = model;
+      populateVersions();
+      els.current.value = from;
+      els.target.value = to;
+      showPath();
+    }
+
     function renderCallouts(advisories) {
       if (!advisories.length) {
         return `<div class="callouts"><div class="callout"><p>Aucune action obligatoire connue dans la base interne pour ce chemin.</p></div></div>`;
@@ -1115,6 +1165,9 @@
       merged.cves = incoming.cves || [];
       // FortiOS support/EOL dates too — fetched wholesale from endoflife.date server-side.
       merged.fortiosLifecycle = incoming.fortiosLifecycle || merged.fortiosLifecycle || {};
+      // Shared team search history is appended to server-side on every live path fetch
+      // (record_search_history in fortios_watch.py) — same replace reasoning as above.
+      merged.searchHistory = incoming.searchHistory || merged.searchHistory || [];
       merged.generatedAt = incoming.generatedAt || new Date().toISOString();
       return merged;
     }

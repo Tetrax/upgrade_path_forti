@@ -136,6 +136,41 @@ h1 {
   align-items: start;
 }
 
+.sidebar-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.history-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.history-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--soft-line);
+  border-radius: 6px;
+  background: #fbfcfe;
+  text-align: left;
+}
+
+.history-item:hover {
+  background: var(--soft-blue);
+  border-color: var(--line);
+}
+
+.history-item-title {
+  font-weight: 700;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--line);

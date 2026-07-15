@@ -165,6 +165,7 @@ def normalize_state(payload: dict[str, Any] | None) -> dict[str, Any]:
         "compatibilities": payload.get("compatibilities") if isinstance(payload.get("compatibilities"), list) else [],
         "cves": payload.get("cves") if isinstance(payload.get("cves"), list) else [],
         "fortiosLifecycle": payload.get("fortiosLifecycle") if isinstance(payload.get("fortiosLifecycle"), dict) else {},
+        "searchHistory": payload.get("searchHistory") if isinstance(payload.get("searchHistory"), list) else [],
     }
 
 
@@ -801,6 +802,40 @@ def upsert_path(state: dict[str, Any], item: UpgradePath) -> bool:
 
     state["paths"].append(next_path)
     return True
+
+
+# Shared across everyone hitting the live /api/official-path endpoint (see fortios_server.py) —
+# no per-user accounts exist, so this is intentionally anonymous: just what was searched and
+# when, not who searched it. Re-searching the same model/from/to bumps it to the top instead of
+# duplicating.
+SEARCH_HISTORY_LIMIT = 50
+
+
+def record_search_history(
+    state: dict[str, Any], product: str, model: str, from_version: str, to_version: str, hops: tuple[str, ...]
+) -> None:
+    history = [
+        entry
+        for entry in state.get("searchHistory", [])
+        if not (
+            entry.get("product") == product
+            and entry.get("model") == model
+            and entry.get("from") == from_version
+            and entry.get("to") == to_version
+        )
+    ]
+    history.insert(
+        0,
+        {
+            "product": product,
+            "model": model,
+            "from": from_version,
+            "to": to_version,
+            "hops": list(hops),
+            "requestedAt": utc_now(),
+        },
+    )
+    state["searchHistory"] = history[:SEARCH_HISTORY_LIMIT]
 
 
 def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:

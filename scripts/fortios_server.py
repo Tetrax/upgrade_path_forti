@@ -24,6 +24,7 @@ from fortios_watch import (
     fetch_official_upgrade_path,
     normalize_state,
     read_json,
+    record_search_history,
     slugify,
     upsert_advisory,
     upsert_compatibility,
@@ -201,6 +202,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             for firmware in firmwares:
                 upsert_firmware(state, firmware)
             upsert_path(state, official_path)
+            record_search_history(
+                state, request.product, request.model, request.from_version, request.to_version, official_path.hops
+            )
             state["generatedAt"] = utc_now()
             write_json(DATA_PATH, state)
 
