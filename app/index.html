@@ -517,6 +517,11 @@
       }).join("");
     }
 
+    // Below this CVSS score, a CVE badge just adds noise to the "Infos ingénieur" column —
+    // collapse it into a "+N CVE mineures" count instead of hiding it outright (the full detail
+    // stays in the "Vulnérabilités connues" section below the table, unfiltered).
+    const CVE_BADGE_MIN_SCORE = 7;
+
     function renderFirmwareRow(firmware, path, index) {
       const version = firmware?.version || path.hops[index];
       const versionAdvisories = advisoriesForVersion(path, version);
@@ -531,10 +536,18 @@
           : tooltipBase;
         return `<span class="badge ${badgeClass(item.severity)}" title="${escapeAttr(tooltip)}">${escapeHtml(label)}</span>`;
       });
-      const cveBadges = versionCves.map(cve => {
-        const tooltip = `${cve.title} — CVSS ${cveSeverityLabel(cve.severity)}${typeof cve.cvssScore === "number" ? ` ${cve.cvssScore}` : ""}`;
-        return `<span class="badge ${cveBadgeClass(cve.severity)}" title="${escapeAttr(tooltip)}">🛡 ${escapeHtml(cve.id)}</span>`;
+      // Unknown/missing CVSS score is treated as notable (shown), not filtered out — never
+      // silently hide a CVE we can't confidently classify as minor.
+      const notableCves = versionCves.filter(cve => !(typeof cve.cvssScore === "number" && cve.cvssScore < CVE_BADGE_MIN_SCORE));
+      const minorCveCount = versionCves.length - notableCves.length;
+      const cveBadges = notableCves.map(cve => {
+        const tooltip = `${cve.title} — CVSS ${cveSeverityLabel(cve.severity)}${typeof cve.cvssScore === "number" ? ` ${cve.cvssScore}` : ""} — ouvrir la fiche PSIRT Fortinet`;
+        return `<a class="badge ${cveBadgeClass(cve.severity)}" href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">🛡 ${escapeHtml(cve.id)}</a>`;
       });
+      if (minorCveCount > 0) {
+        const label = `+${minorCveCount} CVE mineure${minorCveCount > 1 ? "s" : ""}`;
+        cveBadges.push(`<span class="badge" title="${minorCveCount} CVE avec un score CVSS &lt; ${CVE_BADGE_MIN_SCORE} — détail dans la section CVE ci-dessous">${escapeHtml(label)}</span>`);
+      }
       const allBadges = [...advisoryBadges, ...cveBadges];
       const badges = allBadges.length ? allBadges.join(" ") : `<span class="badge ok">Aucune alerte connue</span>`;
 

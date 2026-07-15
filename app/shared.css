@@ -282,6 +282,15 @@ select:focus, textarea:focus, input[type="text"]:focus {
   white-space: nowrap;
 }
 
+a.badge {
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.badge:hover {
+  filter: brightness(0.95);
+}
+
 .badge.warn { background: var(--soft-yellow); color: var(--warn); }
 .badge.danger { background: var(--soft-red); color: var(--danger); }
 .badge.ok { background: var(--soft-green); color: var(--ok); }
