@@ -13,6 +13,13 @@ let modelScope = "all";
 let versionMode = "exact";
 let editingId = null;
 let severityFilter = "all";
+// Source of truth for which checkboxes are checked, kept outside the DOM: the version/model
+// lists only render whatever the current search filter matches, so a checkbox for a filtered-out
+// value doesn't exist in the DOM at all — deriving "checked" from querySelectorAll() would lose
+// any selection made under a different filter the moment the filter changes.
+let checkedVersions = new Set();
+let checkedMinVersions = new Set();
+let checkedModels = new Set();
 
 const els = {
   productSelect: document.getElementById("productSelect"),
@@ -89,10 +96,13 @@ els.description.addEventListener("paste", event => {
 });
 els.description.addEventListener("dragover", event => event.preventDefault());
 els.description.addEventListener("drop", event => {
-  const file = Array.from(event.dataTransfer?.files || []).find(entry => entry.type.startsWith("image/"));
-  if (!file) return;
+  // preventDefault() unconditionally: dragover already told the browser this is a valid drop
+  // target for any file, so without this a dropped non-image file (a PDF, a screenshot saved as
+  // .docx, anything) falls through to the browser's native action — navigating the tab away and
+  // silently discarding the whole in-progress form.
   event.preventDefault();
-  uploadImage(file);
+  const file = Array.from(event.dataTransfer?.files || []).find(entry => entry.type.startsWith("image/"));
+  if (file) uploadImage(file);
 });
 for (const button of els.severityFilterGroup.querySelectorAll("[data-severity-filter]")) {
   button.addEventListener("click", () => setSeverityFilter(button.dataset.severityFilter));
@@ -183,6 +193,12 @@ function selectProduct(productId) {
   }
   allVersions = Array.from(versionSet).sort(compareVersions).reverse();
 
+  // A different product has a different model/version catalog, so any prior checked selection
+  // no longer means anything — startEdit() repopulates these right after via setCheckedValues().
+  checkedVersions.clear();
+  checkedMinVersions.clear();
+  checkedModels.clear();
+
   setScope("all");
   setVersionMode("exact");
   els.versionSearch.value = "";
@@ -218,7 +234,6 @@ function setSeverityFilter(severity) {
 
 function renderMinVersionList() {
   const filter = normalizeSearch(els.minVersionSearch.value);
-  const checked = new Set(getCheckedValues(els.minVersionList));
   const visible = allVersions.filter(version => !filter || normalizeSearch(version).includes(filter));
 
   els.minVersionList.replaceChildren();
@@ -227,13 +242,12 @@ function renderMinVersionList() {
     return;
   }
   for (const version of visible) {
-    els.minVersionList.appendChild(checkboxRow(version, version, checked.has(version)));
+    els.minVersionList.appendChild(checkboxRow(version, version, checkedMinVersions));
   }
 }
 
 function renderVersionList() {
   const filter = normalizeSearch(els.versionSearch.value);
-  const checked = new Set(getCheckedValues(els.versionList));
   const visible = allVersions.filter(version => !filter || normalizeSearch(version).includes(filter));
 
   els.versionList.replaceChildren();
@@ -242,13 +256,12 @@ function renderVersionList() {
     return;
   }
   for (const version of visible) {
-    els.versionList.appendChild(checkboxRow(version, version, checked.has(version)));
+    els.versionList.appendChild(checkboxRow(version, version, checkedVersions));
   }
 }
 
 function renderModelList() {
   const filter = normalizeSearch(els.modelSearch.value);
-  const checked = new Set(getCheckedValues(els.modelList));
   const visible = allModels.filter(model => !filter || normalizeSearch(model.id + model.label).includes(filter));
 
   els.modelList.replaceChildren();
@@ -257,38 +270,38 @@ function renderModelList() {
     return;
   }
   for (const model of visible) {
-    els.modelList.appendChild(checkboxRow(model.id, model.label, checked.has(model.id)));
+    els.modelList.appendChild(checkboxRow(model.id, model.label, checkedModels));
   }
 }
 
-function checkboxRow(value, labelText, checked) {
+// `checkedSet` is the persistent source of truth (see the module-level checked* Sets) — the
+// checkbox's own DOM `checked` property is just a view onto it for whatever's currently rendered.
+function checkboxRow(value, labelText, checkedSet) {
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.value = value;
-  checkbox.checked = checked;
+  checkbox.checked = checkedSet.has(value);
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) checkedSet.add(value);
+    else checkedSet.delete(value);
+  });
   const label = document.createElement("label");
   label.appendChild(checkbox);
   label.appendChild(document.createTextNode(" " + labelText));
   return label;
 }
 
-function setCheckedValues(container, values) {
-  const wanted = new Set(values);
-  for (const input of container.querySelectorAll("input[type=checkbox]")) {
-    input.checked = wanted.has(input.value);
-  }
-}
-
-function getCheckedValues(container) {
-  return Array.from(container.querySelectorAll("input[type=checkbox]:checked")).map(input => input.value);
+function setCheckedValues(checkedSet, values) {
+  checkedSet.clear();
+  for (const value of values) checkedSet.add(value);
 }
 
 async function submitAdvisory() {
   const title = els.title.value.trim();
   const description = els.description.value.trim();
-  const versions = versionMode === "exact" ? getCheckedValues(els.versionList) : [];
-  const minVersions = versionMode === "from" ? getCheckedValues(els.minVersionList) : [];
-  const models = modelScope === "some" ? getCheckedValues(els.modelList) : [];
+  const versions = versionMode === "exact" ? Array.from(checkedVersions) : [];
+  const minVersions = versionMode === "from" ? Array.from(checkedMinVersions) : [];
+  const models = modelScope === "some" ? Array.from(checkedModels) : [];
 
   if (!title || !description) {
     els.formMessage.textContent = "Titre et description sont obligatoires.";
@@ -360,20 +373,20 @@ function startEdit(item) {
   if (minVersions.length) {
     setVersionMode("from");
     els.minVersionSearch.value = "";
+    setCheckedValues(checkedMinVersions, minVersions);
     renderMinVersionList();
-    setCheckedValues(els.minVersionList, minVersions);
   } else {
     setVersionMode("exact");
     els.versionSearch.value = "";
+    setCheckedValues(checkedVersions, advisoryVersions(item));
     renderVersionList();
-    setCheckedValues(els.versionList, advisoryVersions(item));
   }
 
   if (Array.isArray(item.models) && item.models.length) {
     setScope("some");
     els.modelSearch.value = "";
+    setCheckedValues(checkedModels, item.models);
     renderModelList();
-    setCheckedValues(els.modelList, item.models);
   } else {
     setScope("all");
   }
@@ -420,6 +433,9 @@ function resetForm() {
   els.versionSearch.value = "";
   els.minVersionSearch.value = "";
   els.modelSearch.value = "";
+  checkedVersions.clear();
+  checkedMinVersions.clear();
+  checkedModels.clear();
   setScope("all");
   setVersionMode("exact");
   renderVersionList();
@@ -661,12 +677,28 @@ function renderRichText(container, text) {
   }
 }
 
+// Only http(s) and same-origin-relative URLs are ever turned into a real link/image — a
+// javascript:/data: URI typed into a description would otherwise run as script the moment
+// anyone clicked the resulting "image" link (data: URIs open as a full HTML document).
+function isSafeUrl(url) {
+  try {
+    return ["http:", "https:"].includes(new URL(url, window.location.href).protocol);
+  } catch {
+    return false;
+  }
+}
+
 function appendInlineRich(parent, text) {
   const pattern = /\*\*(.+?)\*\*|__(.+?)__|!\[(.*?)\]\((.*?)\)/g;
   let lastIndex = 0;
   for (const match of text.matchAll(pattern)) {
     if (match.index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
     if (match[4] !== undefined) {
+      if (!isSafeUrl(match[4])) {
+        parent.appendChild(document.createTextNode(match[0]));
+        lastIndex = match.index + match[0].length;
+        continue;
+      }
       const link = document.createElement("a");
       link.href = match[4];
       link.target = "_blank";

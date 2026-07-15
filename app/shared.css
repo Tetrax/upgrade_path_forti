@@ -933,7 +933,7 @@ pre {
 
 @media (max-width: 560px) {
   .shell {
-    width: min(100vw - 20px, 1180px);
+    width: min(100vw - 20px, 1560px);
     padding-top: 10px;
   }
 

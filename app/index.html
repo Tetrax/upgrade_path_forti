@@ -709,7 +709,7 @@
         {
           tag: "Si HA",
           tagClass: "warn",
-          text: "Vérifier dans System &gt; HA que les deux membres sont bien synchronisés, puis en CLI qu’il n’y a pas d’override ou d’option divergente (priority, hostname, mode) qui pourrait bloquer la synchro ou provoquer un split-brain après l’upgrade.",
+          text: "Vérifier dans System > HA que les deux membres sont bien synchronisés, puis en CLI qu’il n’y a pas d’override ou d’option divergente (priority, hostname, mode) qui pourrait bloquer la synchro ou provoquer un split-brain après l’upgrade.",
           command: "get system ha status\ndiagnose sys ha checksum show"
         }
       ];
@@ -931,12 +931,28 @@
       }
     }
 
+    // Only http(s) and same-origin-relative URLs are ever turned into a real link/image — a
+    // javascript:/data: URI typed into an advisory description would otherwise run as script the
+    // moment anyone clicked the resulting "image" link (data: URIs open as a full HTML document).
+    function isSafeUrl(url) {
+      try {
+        return ["http:", "https:"].includes(new URL(url, window.location.href).protocol);
+      } catch {
+        return false;
+      }
+    }
+
     function appendInlineRich(parent, text) {
       const pattern = /\*\*(.+?)\*\*|__(.+?)__|!\[(.*?)\]\((.*?)\)/g;
       let lastIndex = 0;
       for (const match of text.matchAll(pattern)) {
         if (match.index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
         if (match[4] !== undefined) {
+          if (!isSafeUrl(match[4])) {
+            parent.appendChild(document.createTextNode(match[0]));
+            lastIndex = match.index + match[0].length;
+            continue;
+          }
           const link = document.createElement("a");
           link.href = match[4];
           link.target = "_blank";
@@ -1205,8 +1221,11 @@
       const path = state.paths.find(item => item.id === pathId);
       if (!path) return "";
 
-      const product = state.products.find(item => item.id === path.product) || currentProduct();
-      const model = (product.models || []).find(item => item.id === path.model) || currentModel();
+      // Fall back to a stand-in built from the path's own ids, never to currentProduct()/
+      // currentModel() — those reflect whatever the form happens to be showing right now, which
+      // silently produces a report for the wrong device if it doesn't match this path.
+      const product = state.products.find(item => item.id === path.product) || { id: path.product, label: path.product, models: [] };
+      const model = (product.models || []).find(item => item.id === path.model) || { id: path.model, label: path.model, firmwares: [] };
       const advisories = advisoriesForPath(path);
       const firmwareLines = path.hops.map((version, index) => {
         const firmware = firmwareFor(model, version);
@@ -1387,18 +1406,22 @@
       return String(value || "unknown").replace(/[^a-z0-9._-]+/gi, "-");
     }
 
+    // "versions" is scoped to FortiOS only, matching the "N versions FortiOS" label this feeds —
+    // it used to count firmware versions across all 5 products, silently inflating the number
+    // with FortiAnalyzer/FortiManager/FortiClient/EMS versions.
     function catalogStats(nextState) {
       const models = [];
-      const versions = new Set();
+      const fortiosVersions = new Set();
       for (const product of nextState.products || []) {
         for (const model of product.models || []) {
           models.push(model);
+          if (product.id !== "fortigate-fortios") continue;
           for (const firmware of model.firmwares || []) {
-            if (firmware.version) versions.add(firmware.version);
+            if (firmware.version) fortiosVersions.add(firmware.version);
           }
         }
       }
-      return { models: models.length, versions: versions.size };
+      return { models: models.length, versions: fortiosVersions.size };
     }
 
     function escapeHtml(value) {

@@ -2,13 +2,18 @@ const GENERATED_DATA_URL = "../../data/fortios-data.generated.json";
 const CLIENT_PLATFORM_IDS = ["windows", "macos", "linux"];
 const FORTICLIENT_PRODUCT_IDS = ["forticlient", "forticlient-ems"];
 const SEVERITY_LABEL = { critical: "Critique", important: "Importante", warning: "Avertissement", info: "Info" };
+const CVE_SEVERITY_LABEL = { critical: "Critique", high: "Élevée", medium: "Moyenne", low: "Faible" };
 
 let emsVersions = [];
 let clientVersions = [];
 let compatibilities = [];
 let advisories = [];
+let cves = [];
 let productLabels = {};
 let editingId = null;
+// Source of truth for which checkboxes are checked, kept outside the DOM — see the identical
+// pattern (and the bug it fixes) in app/alerte/app.js.
+let checkedClientVersions = new Set();
 
 const els = {
   emsVersionSelect: document.getElementById("emsVersionSelect"),
@@ -83,6 +88,8 @@ function loadState(state) {
   compatibilities = Array.isArray(state.compatibilities) ? state.compatibilities : [];
   advisories = (Array.isArray(state.advisories) ? state.advisories : [])
     .filter(item => FORTICLIENT_PRODUCT_IDS.includes(item.product));
+  cves = (Array.isArray(state.cves) ? state.cves : [])
+    .filter(cve => (cve.affected || []).some(range => FORTICLIENT_PRODUCT_IDS.includes(range.product)));
 
   populateEmsVersionSelect();
   renderClientVersionList();
@@ -122,7 +129,6 @@ function populateEmsVersionSelect() {
 
 function renderClientVersionList() {
   const filter = normalizeSearch(els.clientVersionSearch.value);
-  const checked = new Set(getCheckedValues(els.clientVersionList));
   const visible = clientVersions.filter(version => !filter || normalizeSearch(version).includes(filter));
 
   els.clientVersionList.replaceChildren();
@@ -131,35 +137,35 @@ function renderClientVersionList() {
     return;
   }
   for (const version of visible) {
-    els.clientVersionList.appendChild(checkboxRow(version, version, checked.has(version)));
+    els.clientVersionList.appendChild(checkboxRow(version, version, checkedClientVersions));
   }
 }
 
-function checkboxRow(value, labelText, checked) {
+// `checkedSet` is the persistent source of truth (see checkedClientVersions above) — the
+// checkbox's own DOM `checked` property is just a view onto it for whatever's currently rendered.
+function checkboxRow(value, labelText, checkedSet) {
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
   checkbox.value = value;
-  checkbox.checked = checked;
+  checkbox.checked = checkedSet.has(value);
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) checkedSet.add(value);
+    else checkedSet.delete(value);
+  });
   const label = document.createElement("label");
   label.appendChild(checkbox);
   label.appendChild(document.createTextNode(" " + labelText));
   return label;
 }
 
-function setCheckedValues(container, values) {
-  const wanted = new Set(values);
-  for (const input of container.querySelectorAll("input[type=checkbox]")) {
-    input.checked = wanted.has(input.value);
-  }
-}
-
-function getCheckedValues(container) {
-  return Array.from(container.querySelectorAll("input[type=checkbox]:checked")).map(input => input.value);
+function setCheckedValues(checkedSet, values) {
+  checkedSet.clear();
+  for (const value of values) checkedSet.add(value);
 }
 
 async function submitCompatibility() {
   const emsVersion = els.emsVersionSelect.value;
-  const clientVersionsChecked = getCheckedValues(els.clientVersionList);
+  const clientVersionsChecked = Array.from(checkedClientVersions);
 
   if (!emsVersion) {
     els.formMessage.textContent = "Choisir une version FortiClient EMS.";
@@ -202,8 +208,8 @@ function startEdit(item) {
   editingId = item.id;
   els.emsVersionSelect.value = item.emsVersion || "";
   els.clientVersionSearch.value = "";
+  setCheckedValues(checkedClientVersions, item.clientVersions || []);
   renderClientVersionList();
-  setCheckedValues(els.clientVersionList, item.clientVersions || []);
   els.note.value = item.note || "";
   els.source.value = item.source || "";
 
@@ -238,6 +244,7 @@ async function deleteCompatibility(item) {
 function resetForm() {
   editingId = null;
   els.clientVersionSearch.value = "";
+  checkedClientVersions.clear();
   renderClientVersionList();
   els.note.value = "";
   els.source.value = "";
@@ -286,6 +293,11 @@ function compatCard(item) {
     head.appendChild(el("span", { className: `badge ${badgeClass(advisory.severity)}`, text: label }));
   }
 
+  const relatedCves = cvesForCompat(item);
+  for (const cve of relatedCves) {
+    head.appendChild(el("span", { className: `badge ${cveBadgeClass(cve.severity)}`, text: `🛡 ${cve.id}` }));
+  }
+
   const versionsLine = el("p", { text: `FortiClient : ${(item.clientVersions || []).join(", ") || "-"}` });
 
   const meta = el("p", { className: "hint", text: `Source : ${item.source || "-"}` });
@@ -298,6 +310,9 @@ function compatCard(item) {
 
   for (const advisory of relatedAdvisories) {
     article.appendChild(relatedAdvisoryDetail(advisory));
+  }
+  for (const cve of relatedCves) {
+    article.appendChild(relatedCveDetail(cve));
   }
 
   const actions = el("div", { className: "code-actions" });
@@ -403,6 +418,68 @@ function advisoryMatchesVersionSimple(advisory, version) {
   return advisoryVersions(advisory).includes(version);
 }
 
+// Same range shape as scripts/fortios_watch.py's CVE collector: a branch with no from/to means
+// the whole train is affected (Fortinet's CSAF phrases that as "X.Y all versions").
+function cveMatchesVersion(cve, product, model, version) {
+  return (cve.affected || []).some(range => {
+    if (range.product !== product) return false;
+    if (Array.isArray(range.models) && range.models.length && !range.models.includes(model)) return false;
+    if (branchOf(version) !== range.branch) return false;
+    if (!range.from && !range.to) return true;
+    if (range.from && compareVersions(version, range.from) < 0) return false;
+    if (range.to && compareVersions(version, range.to) > 0) return false;
+    return true;
+  });
+}
+
+function cvesForCompat(item) {
+  const matches = [];
+  for (const cve of cves) {
+    if (cveMatchesVersion(cve, "forticlient-ems", "ems", item.emsVersion)) {
+      matches.push(cve);
+      continue;
+    }
+    // A compat combo just lists FortiClient versions without a platform, so a version is
+    // flagged if it's affected on ANY platform (windows/macos/linux) — better to over-warn.
+    if ((item.clientVersions || []).some(v => CLIENT_PLATFORM_IDS.some(platform => cveMatchesVersion(cve, "forticlient", platform, v)))) {
+      matches.push(cve);
+    }
+  }
+  return matches;
+}
+
+function cveBadgeClass(severity) {
+  return { critical: "danger", high: "danger", medium: "warn", low: "info" }[severity] || "ok";
+}
+
+function cveSeverityToInternal(severity) {
+  return { critical: "critical", high: "important", medium: "warning", low: "info" }[severity] || "info";
+}
+
+function relatedCveDetail(cve) {
+  const wrapper = el("div", { className: `callout ${calloutClass(cveSeverityToInternal(cve.severity))}` });
+  const head = el("div", { className: "callout-head" });
+  head.appendChild(el("h4", { className: "callout-title", text: cve.title }));
+  const scoreLabel = typeof cve.cvssScore === "number" ? ` (CVSS ${cve.cvssScore})` : "";
+  head.appendChild(
+    el("span", {
+      className: `badge ${cveBadgeClass(cve.severity)}`,
+      text: `${cve.id} · ${CVE_SEVERITY_LABEL[cve.severity] || "Inconnue"}${scoreLabel}`
+    })
+  );
+  wrapper.appendChild(head);
+
+  const link = document.createElement("a");
+  link.className = "hint";
+  link.href = cve.url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = `${cve.advisoryId} — fiche PSIRT Fortinet ↗`;
+  wrapper.appendChild(link);
+
+  return wrapper;
+}
+
 function advisoriesForCompat(item) {
   const matches = [];
   for (const advisory of advisories) {
@@ -481,12 +558,28 @@ function renderRichText(container, text) {
   }
 }
 
+// Only http(s) and same-origin-relative URLs are ever turned into a real link/image — a
+// javascript:/data: URI typed into a description would otherwise run as script the moment
+// anyone clicked the resulting "image" link (data: URIs open as a full HTML document).
+function isSafeUrl(url) {
+  try {
+    return ["http:", "https:"].includes(new URL(url, window.location.href).protocol);
+  } catch {
+    return false;
+  }
+}
+
 function appendInlineRich(parent, text) {
   const pattern = /\*\*(.+?)\*\*|__(.+?)__|!\[(.*?)\]\((.*?)\)/g;
   let lastIndex = 0;
   for (const match of text.matchAll(pattern)) {
     if (match.index > lastIndex) parent.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
     if (match[4] !== undefined) {
+      if (!isSafeUrl(match[4])) {
+        parent.appendChild(document.createTextNode(match[0]));
+        lastIndex = match.index + match[0].length;
+        continue;
+      }
       const link = document.createElement("a");
       link.href = match[4];
       link.target = "_blank";
