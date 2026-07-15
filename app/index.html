@@ -844,30 +844,52 @@
       return { critical: "Critique", high: "Élevée", medium: "Moyenne", low: "Faible" }[severity] || "Inconnue";
     }
 
+    // Critical/high stay open by default (what an engineer needs to see first); medium/low are
+    // collapsed but still present — same "don't hide, just fold" approach as the "+N CVE
+    // mineures" summary in the table above.
+    const CVE_SEVERITY_GROUPS = [
+      { key: "critical", label: "Critique", open: true },
+      { key: "high", label: "Élevée", open: true },
+      { key: "medium", label: "Moyenne", open: false },
+      { key: "low", label: "Faible", open: false }
+    ];
+
     function renderCveCallouts(cves, path) {
       if (!cves.length) {
         return `<div class="callouts"><div class="callout"><p>Aucune CVE PSIRT Fortinet connue sur ce chemin.</p></div></div>`;
       }
 
+      const knownKeys = new Set(CVE_SEVERITY_GROUPS.map(group => group.key));
+      const groups = CVE_SEVERITY_GROUPS
+        .map(group => ({ ...group, items: cves.filter(cve => cve.severity === group.key) }))
+        .filter(group => group.items.length);
+      const unknownItems = cves.filter(cve => !knownKeys.has(cve.severity));
+      if (unknownItems.length) groups.push({ key: "unknown", label: "Sévérité inconnue", open: true, items: unknownItems });
+
+      return groups.map(group => `
+        <details class="cve-group" ${group.open ? "open" : ""}>
+          <summary class="cve-group-title">${escapeHtml(group.label)} <span class="muted">(${group.items.length})</span></summary>
+          <div class="callouts">
+            ${group.items.map(cve => renderCveCard(cve, path)).join("")}
+          </div>
+        </details>
+      `).join("");
+    }
+
+    function renderCveCard(cve, path) {
+      const fixedAt = cveFixedAtVersion(cve, path);
+      const scoreLabel = typeof cve.cvssScore === "number" ? ` (CVSS ${cve.cvssScore})` : "";
       return `
-        <div class="callouts">
-          ${cves.map(cve => {
-            const fixedAt = cveFixedAtVersion(cve, path);
-            const scoreLabel = typeof cve.cvssScore === "number" ? ` (CVSS ${cve.cvssScore})` : "";
-            return `
-              <article class="callout ${calloutClass(cveSeverityToInternal(cve.severity))}">
-                <div class="callout-head">
-                  <h4 class="callout-title">${escapeHtml(cve.title)}</h4>
-                  <span class="badge ${cveBadgeClass(cve.severity)}">${escapeHtml(cve.id)} · ${escapeHtml(cveSeverityLabel(cve.severity))}${scoreLabel}</span>
-                  ${fixedAt
-                    ? `<span class="badge ok">✅ Corrigé en ${escapeHtml(fixedAt)}</span>`
-                    : `<span class="badge danger">⚠ Toujours vulnérable après ce chemin</span>`}
-                </div>
-                <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a></p>
-              </article>
-            `;
-          }).join("")}
-        </div>
+        <article class="callout ${calloutClass(cveSeverityToInternal(cve.severity))}">
+          <div class="callout-head">
+            <h4 class="callout-title">${escapeHtml(cve.title)}</h4>
+            <span class="badge ${cveBadgeClass(cve.severity)}">${escapeHtml(cve.id)} · ${escapeHtml(cveSeverityLabel(cve.severity))}${scoreLabel}</span>
+            ${fixedAt
+              ? `<span class="badge ok">✅ Corrigé en ${escapeHtml(fixedAt)}</span>`
+              : `<span class="badge danger">⚠ Toujours vulnérable après ce chemin</span>`}
+          </div>
+          <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a></p>
+        </article>
       `;
     }
 

@@ -586,6 +586,47 @@ a.note-token:hover {
   font-size: 12px;
 }
 
+.cve-group {
+  margin: 0 0 12px;
+}
+
+.cve-group summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.cve-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.cve-group summary::before {
+  content: "▸";
+  display: inline-block;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.cve-group[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.cve-group-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.cve-group .callouts {
+  margin: 10px 0 0;
+}
+
 .codebox {
   margin-top: 10px;
   border: 1px solid #d8dee9;
