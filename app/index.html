@@ -67,6 +67,15 @@
             <span id="dataStatus">Données locales chargées.</span>
           </div>
 
+          <div class="field cve-search-field">
+            <label for="cveSearchInput">Rechercher une CVE</label>
+            <div class="cve-search-row">
+              <input type="text" id="cveSearchInput" placeholder="CVE-2025-53844" autocomplete="off" />
+              <button class="btn" id="cveSearchButton">Chercher</button>
+            </div>
+            <p class="hint">Retrouve les produits/versions concernés par une CVE PSIRT dans la base locale.</p>
+          </div>
+
           <p class="message" id="sideMessage"></p>
         </div>
       </aside>
@@ -183,10 +192,15 @@
       dataStatus: document.getElementById("dataStatus"),
       sideMessage: document.getElementById("sideMessage"),
       go: document.getElementById("goButton"),
-      briefingPanel: document.getElementById("briefingPanel")
+      briefingPanel: document.getElementById("briefingPanel"),
+      cveSearchInput: document.getElementById("cveSearchInput")
     };
 
     els.go.addEventListener("click", showPath);
+    document.getElementById("cveSearchButton").addEventListener("click", searchCve);
+    els.cveSearchInput.addEventListener("keydown", event => {
+      if (event.key === "Enter") searchCve();
+    });
     els.product.addEventListener("change", () => {
       els.modelSearch.value = "";
       populateModels();
@@ -405,6 +419,61 @@
       els.target.value = selection.target;
     }
 
+    // Reverse lookup: given a CVE id (e.g. after a PSIRT alert lands), find every product/branch/
+    // version range and model it touches in the local catalog, rather than starting from a
+    // specific upgrade path like the rest of the tool does.
+    function searchCve() {
+      const query = els.cveSearchInput.value.trim().toUpperCase();
+      if (!query) return;
+      const matches = (state.cves || []).filter(cve =>
+        cve.id.toUpperCase().includes(query) || (cve.advisoryId || "").toUpperCase().includes(query)
+      );
+      els.result.innerHTML = renderCveSearchResults(query, matches);
+      els.sideMessage.textContent = matches.length
+        ? `${matches.length} CVE trouvée(s) pour « ${query} ».`
+        : `Aucune CVE trouvée pour « ${query} » dans la base locale.`;
+    }
+
+    function renderCveSearchResults(query, matches) {
+      if (!matches.length) {
+        return `
+          <div class="content-band">
+            <div class="empty">Aucune CVE ne correspond à « ${escapeHtml(query)} » dans la base locale.</div>
+          </div>
+        `;
+      }
+      return `
+        <div class="content-band">
+          <h3 class="section-title">Résultats pour « ${escapeHtml(query)} » (${matches.length})</h3>
+          <div class="callouts">
+            ${matches.map(cve => renderCveSearchCard(cve)).join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderCveSearchCard(cve) {
+      const scoreLabel = typeof cve.cvssScore === "number" ? ` (CVSS ${cve.cvssScore})` : "";
+      const affectedItems = (cve.affected || []).map(range => {
+        const productLabel = state.products.find(item => item.id === range.product)?.label || range.product;
+        const scope = range.from || range.to
+          ? `${range.branch} : ${range.from || "début"} → ${range.to || "dernière connue"}`
+          : `${range.branch} (toutes versions)`;
+        const models = Array.isArray(range.models) && range.models.length ? ` — modèles : ${range.models.join(", ")}` : "";
+        return `<li>${escapeHtml(productLabel)} · ${escapeHtml(scope)}${escapeHtml(models)}</li>`;
+      }).join("");
+      return `
+        <article class="callout ${calloutClass(cveSeverityToInternal(cve.severity))}">
+          <div class="callout-head">
+            <h4 class="callout-title">${escapeHtml(cve.title)}</h4>
+            <span class="badge ${cveBadgeClass(cve.severity)}">${escapeHtml(cve.id)} · ${escapeHtml(cveSeverityLabel(cve.severity))}${scoreLabel}</span>
+          </div>
+          <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a></p>
+          ${affectedItems ? `<ul class="cve-affected-list">${affectedItems}</ul>` : ""}
+        </article>
+      `;
+    }
+
     function renderOfflineBanner() {
       return `
         <div class="callout warn offline-banner">
@@ -438,6 +507,7 @@
       const hopAdvisories = advisoriesForPath(path);
       const hopCves = cvesForPath(path);
       const firmwareRows = path.hops.map(version => firmwareFor(model, version));
+      const rebootWindow = estimateRebootWindow(path.hops.length);
 
       els.result.innerHTML = `
         ${offlineBanner}
@@ -455,6 +525,8 @@
               <span>${escapeHtml(model.label)}</span>
               <span>•</span>
               <span>${path.hops.length} étapes</span>
+              <span>•</span>
+              <span title="Estimation indicative : ${MIN_REBOOT_MINUTES}-${MAX_REBOOT_MINUTES} min par redémarrage, hors temps de vérification">${rebootWindow.reboots} redémarrage${rebootWindow.reboots > 1 ? "s" : ""} · ~${rebootWindow.minMinutes}-${rebootWindow.maxMinutes} min</span>
               <span>•</span>
               <span>Source : ${escapeHtml(path.source || "Fortinet")}</span>
             </div>
@@ -508,6 +580,17 @@
 
       hydrateRichText(els.result, hopAdvisories);
       els.sideMessage.textContent = `${path.hops.join(" > ")} affiché avec ${hopAdvisories.length} information(s) ingénieur et ${hopCves.length} CVE PSIRT connue(s).`;
+    }
+
+    // Rough planning estimate, not a guarantee — actual reboot time varies a lot by model and
+    // config size. One reboot per hop transition (n hops = n-1 reboots), 5-10 min each covers a
+    // typical FortiGate boot + settle time; doesn't include time spent on the checklist itself.
+    const MIN_REBOOT_MINUTES = 5;
+    const MAX_REBOOT_MINUTES = 10;
+
+    function estimateRebootWindow(hopCount) {
+      const reboots = Math.max(hopCount - 1, 0);
+      return { reboots, minMinutes: reboots * MIN_REBOOT_MINUTES, maxMinutes: reboots * MAX_REBOOT_MINUTES };
     }
 
     function renderSteps(hops) {
@@ -591,12 +674,6 @@
     function renderChecklist() {
       const checklistItems = [
         {
-          tag: "Si HA",
-          tagClass: "warn",
-          text: "Vérifier dans System &gt; HA que les deux membres sont bien synchronisés, puis en CLI qu’il n’y a pas d’override ou d’option divergente (priority, hostname, mode) qui pourrait bloquer la synchro ou provoquer un split-brain après l’upgrade.",
-          command: "get system ha status\ndiagnose sys ha checksum show"
-        },
-        {
           tag: "Avant",
           tagClass: "info",
           text: "Faire un backup complet de la configuration (et de l’image firmware si possible) avant de commencer, et le stocker en dehors du boîtier."
@@ -609,8 +686,14 @@
         {
           tag: "Après chaque étape",
           tagClass: "danger",
-          text: "Vérifier que la configuration a bien été reprise après chaque mise à jour, avant de passer à l’étape suivante.",
-          command: "diagnose debug config-error-log read"
+          text: "Vérifier que la configuration a bien été reprise et que le cluster HA (le cas échéant) est toujours sain avant de passer à l’étape suivante.",
+          command: "diagnose debug config-error-log read\nget system status\ndiagnose sys ha status\ndiagnose debug crashlog read"
+        },
+        {
+          tag: "Si HA",
+          tagClass: "warn",
+          text: "Vérifier dans System &gt; HA que les deux membres sont bien synchronisés, puis en CLI qu’il n’y a pas d’override ou d’option divergente (priority, hostname, mode) qui pourrait bloquer la synchro ou provoquer un split-brain après l’upgrade.",
+          command: "get system ha status\ndiagnose sys ha checksum show"
         }
       ];
       const items = checklistItems.map(item => `

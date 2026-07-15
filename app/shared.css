@@ -223,6 +223,29 @@ h1 {
   margin-bottom: 14px;
 }
 
+.cve-search-field {
+  margin-top: 16px;
+  border-top: 1px solid var(--soft-line);
+  padding-top: 16px;
+}
+
+.cve-search-row {
+  display: flex;
+  gap: 8px;
+}
+
+.cve-search-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cve-affected-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #465165;
+  line-height: 1.5;
+}
+
 label {
   display: block;
   color: #4f5b6e;
