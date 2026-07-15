@@ -22,8 +22,10 @@ import datetime as dt
 import html
 import json
 import os
+import random
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -161,6 +163,7 @@ def normalize_state(payload: dict[str, Any] | None) -> dict[str, Any]:
         "paths": payload.get("paths") if isinstance(payload.get("paths"), list) else [],
         "advisories": payload.get("advisories") if isinstance(payload.get("advisories"), list) else [],
         "compatibilities": payload.get("compatibilities") if isinstance(payload.get("compatibilities"), list) else [],
+        "cves": payload.get("cves") if isinstance(payload.get("cves"), list) else [],
     }
 
 
@@ -235,12 +238,35 @@ def normalize_doc_model(doc_model: str) -> str:
     return f"{prefix}{compact}"
 
 
+def urlopen_with_retry(request: urllib.request.Request, timeout: int, retries: int = 3):
+    """urlopen with exponential backoff for transient connection failures.
+
+    The daily cron run has repeatedly died partway through (ConnectionRefusedError, SSL
+    handshake timeout) after dozens of prior successful requests in the same run — that pattern
+    (fails after a long streak of successes, works again standalone seconds later) points at
+    transient connection drops rather than Fortinet actually being down, so it's worth a few
+    retries before giving up. A real HTTP error response (404, 500...) means the server did
+    answer, so that's not retried — another attempt would just get the same answer.
+    """
+    last_error: Exception | None = None
+    for attempt in range(retries):
+        try:
+            return urllib.request.urlopen(request, timeout=timeout)
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            last_error = error
+            if attempt < retries - 1:
+                time.sleep((2 ** attempt) + random.uniform(0, 1))
+    raise last_error
+
+
 def fetch_text(url: str, timeout: int) -> str:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urlopen_with_retry(request, timeout) as response:
         return response.read().decode("utf-8", errors="ignore")
 
 
@@ -480,7 +506,7 @@ def post_official_upgrade_tool(payload: dict[str, str], timeout: int) -> dict[st
             "Referer": f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/{product_slug}",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urlopen_with_retry(request, timeout) as response:
         return json.loads(response.read().decode("utf-8", errors="ignore"))
 
 
@@ -578,7 +604,7 @@ def fetch_product_models(product_slug: str, timeout: int) -> list[dict[str, str]
     """
     url = f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/products/{product_slug}.json"
     request = urllib.request.Request(url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urlopen_with_retry(request, timeout) as response:
         data = json.loads(response.read().decode("utf-8", errors="ignore"))
     return data.get("products", [])
 
@@ -773,7 +799,7 @@ def fetch_psirt_versions(timeout: int) -> set[str]:
         headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urlopen_with_retry(request, timeout) as response:
             xml_bytes = response.read()
     except (urllib.error.URLError, TimeoutError, OSError):
         return set()
@@ -788,6 +814,220 @@ def fetch_psirt_versions(timeout: int) -> set[str]:
         if node.text:
             versions.update(version for version in VERSION_RE.findall(node.text) if is_fortios_version(version))
     return versions
+
+
+# --- PSIRT CVE tracking -------------------------------------------------
+#
+# Fortinet publishes a CSAF (Common Security Advisory Framework — a standard,
+# machine-readable JSON format) export for every PSIRT advisory. Its
+# vulnerabilities[].product_status.known_affected list gives exact per-branch
+# version ranges (e.g. "FortiOS >=7.6.0|<=7.6.4" or "FortiClientEMS 7.0 all
+# versions"), far more reliable than parsing the human-readable advisory page.
+# The CSAF file's own URL isn't guessable (it embeds a slugified title), so a
+# single HTML fetch per new advisory is still needed to find it.
+PSIRT_BASE_URL = "https://fortiguard.fortinet.com"
+CSAF_URL_RE = re.compile(r'csaf_url=([^"&]+\.json)')
+ADVISORY_LINK_RE = re.compile(r"location\.href\s*=\s*'/psirt/(FG-IR-[\w-]+)'")
+KNOWN_AFFECTED_RE = re.compile(r"^(?P<product>Forti\w+)\s+(?P<rest>.+)$")
+ALL_VERSIONS_RE = re.compile(r"^(?P<branch>\d+\.\d+)\s+all versions$", re.IGNORECASE)
+
+# CSAF product name -> (our internal product id, model id or None when the product
+# has no FortiClient-style per-platform model).
+CVE_PRODUCT_MAP: dict[str, tuple[str, str | None]] = {
+    "FortiOS": (DEFAULT_PRODUCT_ID, None),
+    "FortiAnalyzer": ("fortianalyzer", None),
+    "FortiManager": ("fortimanager", None),
+    "FortiClientWindows": (FORTICLIENT_PRODUCT_ID, "windows"),
+    "FortiClientMac": (FORTICLIENT_PRODUCT_ID, "macos"),
+    "FortiClientLinux": (FORTICLIENT_PRODUCT_ID, "linux"),
+    "FortiClientEMS": (FORTICLIENT_EMS_PRODUCT_ID, FORTICLIENT_EMS_MODEL_ID),
+}
+# Product filter values PSIRT's own listing page accepts, used only for --cve-backfill —
+# the RSS feed used for the daily incremental refresh isn't filterable by product and only
+# covers the last ~50 advisories across every Fortinet product line.
+CVE_LISTING_PRODUCT_FILTERS = tuple(CVE_PRODUCT_MAP)
+
+
+def discover_advisory_ids_from_rss(timeout: int) -> list[str]:
+    request = urllib.request.Request(PSIRT_RSS_URL, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
+    with urlopen_with_retry(request, timeout) as response:
+        root = ET.fromstring(response.read())
+
+    ids: list[str] = []
+    for item in root.iter("item"):
+        link = item.findtext("link") or ""
+        match = re.search(r"(FG-IR-[\w-]+)", link)
+        if match:
+            ids.append(match.group(1))
+    return unique_in_order(ids)
+
+
+def discover_advisory_ids_from_listing(product_filter: str, max_pages: int, timeout: int) -> list[str]:
+    ids: list[str] = []
+    for page in range(1, max_pages + 1):
+        url = f"{PSIRT_BASE_URL}/psirt?product={urllib.parse.quote(product_filter)}&page={page}"
+        raw_html = fetch_text(url, timeout)
+        page_ids = unique_in_order(ADVISORY_LINK_RE.findall(raw_html))
+        if not page_ids:
+            break
+        ids.extend(page_ids)
+        time.sleep(0.3)
+    return unique_in_order(ids)
+
+
+def fetch_csaf_url(advisory_id: str, timeout: int) -> str | None:
+    raw_html = fetch_text(f"{PSIRT_BASE_URL}/psirt/{advisory_id}", timeout)
+    match = CSAF_URL_RE.search(raw_html)
+    return match.group(1) if match else None
+
+
+def parse_known_affected_value(value: str) -> tuple[str, str | None, str | None, str | None] | None:
+    """Parse one product_status.known_affected string.
+
+    Returns (csaf_product_name, from_version, to_version, all_versions_branch) — the last
+    element is set instead of from/to when the whole train is affected (e.g. "FortiClientEMS
+    7.0 all versions"). Returns None if the string doesn't match a recognized shape.
+    """
+    match = KNOWN_AFFECTED_RE.match(value.strip())
+    if not match:
+        return None
+    product_name = match.group("product")
+    rest = match.group("rest").strip()
+
+    all_match = ALL_VERSIONS_RE.match(rest)
+    if all_match:
+        return product_name, None, None, all_match.group("branch")
+
+    from_match = re.search(r">=([\d.]+)", rest)
+    to_match = re.search(r"<=([\d.]+)", rest)
+    from_version = from_match.group(1) if from_match else None
+    to_version = to_match.group(1) if to_match else None
+    if not from_version and not to_version:
+        return None
+    return product_name, from_version, to_version, None
+
+
+def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str, Any]]:
+    document = doc.get("document") or {}
+    tracking = document.get("tracking") or {}
+    title = document.get("title") or advisory_id
+    published_at = (tracking.get("initial_release_date") or "")[:10]
+    updated_at = (tracking.get("current_release_date") or "")[:10]
+    url = f"{PSIRT_BASE_URL}/psirt/{advisory_id}"
+
+    # A single CVE can show up as several vulnerabilities[] entries in one CSAF document —
+    # e.g. FG-IR-22-230 has one entry per FortiClient platform, all under CVE-2022-45856.
+    # Merge them into one entry per CVE with a combined `affected` list, otherwise later
+    # entries would silently clobber earlier ones once upserted by id.
+    entries_by_cve: dict[str, dict[str, Any]] = {}
+    for vuln in doc.get("vulnerabilities") or []:
+        cve_id = vuln.get("cve")
+        if not cve_id:
+            continue
+
+        severity = None
+        cvss_score = None
+        for score in vuln.get("scores") or []:
+            metrics = score.get("cvss_v3") or score.get("cvss_v4")
+            if metrics:
+                severity = (metrics.get("baseSeverity") or "").lower() or None
+                cvss_score = metrics.get("baseScore")
+                break
+
+        affected: list[dict[str, Any]] = []
+        for value in (vuln.get("product_status") or {}).get("known_affected") or []:
+            parsed = parse_known_affected_value(value)
+            if not parsed:
+                continue
+            product_name, from_version, to_version, all_versions_branch = parsed
+            mapping = CVE_PRODUCT_MAP.get(product_name)
+            if not mapping:
+                continue
+            product_id, model_id = mapping
+            branch = all_versions_branch or ".".join((from_version or to_version).split(".")[:2])
+            affected.append(
+                {
+                    "product": product_id,
+                    "models": [model_id] if model_id else [],
+                    "branch": branch,
+                    "from": from_version,
+                    "to": to_version,
+                }
+            )
+
+        if not affected:
+            continue  # this vulnerability entry doesn't touch any product this tool tracks.
+
+        entry = entries_by_cve.setdefault(
+            cve_id,
+            {
+                "id": cve_id,
+                "advisoryId": advisory_id,
+                "title": title,
+                "severity": severity or "unknown",
+                "cvssScore": cvss_score,
+                "url": url,
+                "publishedAt": published_at,
+                "updatedAt": updated_at,
+                "affected": [],
+            },
+        )
+        entry["affected"].extend(affected)
+
+    return list(entries_by_cve.values())
+
+
+def collect_cve_entries_for_advisory(advisory_id: str, timeout: int) -> list[dict[str, Any]]:
+    csaf_url = fetch_csaf_url(advisory_id, timeout)
+    if not csaf_url:
+        return []
+    doc = json.loads(fetch_text(csaf_url, timeout))
+    return parse_csaf_document(advisory_id, doc)
+
+
+def upsert_cve(state: dict[str, Any], item: dict[str, Any]) -> bool:
+    for index, existing in enumerate(state["cves"]):
+        if existing.get("id") == item.get("id"):
+            if existing == item:
+                return False
+            state["cves"][index] = item
+            return True
+    state["cves"].append(item)
+    return True
+
+
+def collect_cve_catalog(
+    existing_advisory_ids: set[str],
+    timeout: int,
+    backfill: bool = False,
+    backfill_max_pages: int = 30,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """New CVE entries only (deduped against already-known advisory ids), plus a skipped-id list.
+
+    Daily use (backfill=False) only looks at the PSIRT RSS feed (last ~50 advisories across all
+    Fortinet products) — cheap, and plenty since real advisories publish far slower than that.
+    backfill=True instead walks the paginated, per-product PSIRT listing to seed deep history;
+    meant to be run manually/occasionally, not from the daily timer (many more requests).
+    """
+    if backfill:
+        advisory_ids: list[str] = []
+        for product_filter in CVE_LISTING_PRODUCT_FILTERS:
+            advisory_ids.extend(discover_advisory_ids_from_listing(product_filter, backfill_max_pages, timeout))
+        advisory_ids = unique_in_order(advisory_ids)
+    else:
+        advisory_ids = discover_advisory_ids_from_rss(timeout)
+
+    new_ids = [advisory_id for advisory_id in advisory_ids if advisory_id not in existing_advisory_ids]
+
+    entries: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    for advisory_id in new_ids:
+        try:
+            entries.extend(collect_cve_entries_for_advisory(advisory_id, timeout))
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            skipped.append(advisory_id)
+        time.sleep(0.2)
+    return entries, skipped
 
 
 def read_forticare_json(path: Path) -> dict[str, Any]:
@@ -892,6 +1132,9 @@ def build_report(
     skipped_docs_versions: list[str] | None = None,
     forticlient_catalog_enabled: bool = False,
     skipped_forticlient: list[str] | None = None,
+    cve_catalog_enabled: bool = False,
+    added_cves: int = 0,
+    skipped_cves: list[str] | None = None,
 ) -> str:
     before_versions = all_versions(before)
     after_versions = all_versions(after)
@@ -933,6 +1176,17 @@ def build_report(
                 "",
                 "Le catalogue FortiClient (Windows/macOS/Linux) et FortiClient EMS a été enrichi depuis leurs release notes publiques.",
                 f"- Versions non intégrées faute de numéro de build exploitable : {', '.join(skipped_forticlient) if skipped_forticlient else 'aucune'}",
+                "",
+            ]
+        )
+    if cve_catalog_enabled:
+        skipped_cves = skipped_cves or []
+        lines.extend(
+            [
+                "## CVE PSIRT Fortinet",
+                "",
+                f"- Nouvelles CVE ajoutées : {added_cves}",
+                f"- Advisories PSIRT ignorées (erreur réseau) : {', '.join(skipped_cves) if skipped_cves else 'aucune'}",
                 "",
             ]
         )
@@ -993,6 +1247,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Enrichir les catalogues FortiClient (Windows/macOS/Linux) et FortiClient EMS depuis leurs release notes publiques.",
     )
+    parser.add_argument(
+        "--cve-catalog",
+        action="store_true",
+        help="Rafraîchir le catalogue de CVE PSIRT Fortinet (flux RSS, incrémental) pour FortiOS/FAZ/FMG/FortiClient/EMS.",
+    )
+    parser.add_argument(
+        "--cve-backfill",
+        action="store_true",
+        help="Backfill historique complet des CVE PSIRT via la liste paginée par produit (usage ponctuel, plus lent que --cve-catalog).",
+    )
+    parser.add_argument("--cve-backfill-max-pages", type=int, default=30, help="Pages max à parcourir par produit lors du --cve-backfill.")
     parser.add_argument("--timeout", type=int, default=12)
     parser.add_argument("--skip-network", action="store_true")
     return parser.parse_args(argv)
@@ -1061,6 +1326,20 @@ def main(argv: list[str]) -> int:
     if not args.skip_network:
         psirt_versions = fetch_psirt_versions(args.timeout)
 
+    added_cves = 0
+    skipped_cves: list[str] = []
+    if (args.cve_catalog or args.cve_backfill) and not args.skip_network:
+        existing_advisory_ids = {item.get("advisoryId") for item in state.get("cves", [])}
+        new_cve_entries, skipped_cves = collect_cve_catalog(
+            existing_advisory_ids,
+            args.timeout,
+            backfill=args.cve_backfill,
+            backfill_max_pages=args.cve_backfill_max_pages,
+        )
+        for entry in new_cve_entries:
+            if upsert_cve(state, entry):
+                added_cves += 1
+
     state["generatedAt"] = utc_now()
     write_json(args.output, state)
     args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -1074,6 +1353,9 @@ def main(argv: list[str]) -> int:
             skipped_docs_versions=skipped_docs_versions,
             forticlient_catalog_enabled=args.forticlient_catalog,
             skipped_forticlient=skipped_forticlient,
+            cve_catalog_enabled=args.cve_catalog or args.cve_backfill,
+            added_cves=added_cves,
+            skipped_cves=skipped_cves,
         ),
         encoding="utf-8",
     )

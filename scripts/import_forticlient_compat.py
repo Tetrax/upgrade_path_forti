@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fortios_watch import normalize_state, read_json, upsert_compatibility, utc_now, write_json  # noqa: E402
+from fortios_watch import normalize_state, read_json, upsert_compatibility, urlopen_with_retry, utc_now, write_json  # noqa: E402
 
 FORTINET_DOCS_BASE_URL = "https://docs.fortinet.com"
 DEFAULT_MAJORS_TO_TRY = ("8.0", "7.4", "7.2")
@@ -45,7 +45,7 @@ SAMPLE_PATH = ROOT / "data" / "fortios-data.sample.json"
 
 def fetch_url(url: str, timeout: int) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urlopen_with_retry(request, timeout) as response:
         return response.read()
 
 
