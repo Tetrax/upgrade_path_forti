@@ -344,7 +344,12 @@ def classify_source_severity(
     if consecutive_failures >= repeated_failure_threshold:
         return "error"
     if not last_success_at:
-        return "warning" if status == HEALTH_STATUS_SKIPPED else "error"
+        # No confirmed success yet is only a hard error when the source actually finished with a
+        # real error. A source mid-collection (running), deliberately skipped, or that finished
+        # with a mere warning (succeeded, just flagged as suspicious — see
+        # _merge_health_source()) is not a failure and must never render as full red just because
+        # this happens to be its first-ever attempt.
+        return "error" if status == HEALTH_STATUS_ERROR else "warning"
     age_hours = (now_dt - parse_health_timestamp(last_success_at)).total_seconds() / 3600
     if age_hours > max_age_hours:
         return "error"

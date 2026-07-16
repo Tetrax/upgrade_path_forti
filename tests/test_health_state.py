@@ -220,6 +220,30 @@ class SourceSeverityClassificationTests(unittest.TestCase):
         record = {"status": fw.HEALTH_STATUS_ERROR, "consecutiveFailures": 1}
         self.assertEqual(fw.classify_source_severity(record, now=self.NOW), "error")
 
+    def test_mid_collection_with_no_prior_success_is_orange_not_red(self):
+        """Regression: a source legitimately still running (its own health_mark_running() stamp,
+        no lastSuccessAt yet because it's the very first collection) was being classified as a
+        hard error, which showed several perfectly healthy in-progress sources as "en erreur"
+        during a real, otherwise-successful ~5 minute production run (FortiClient scraping alone
+        took over 3 minutes) -- a false alarm, not a real failure."""
+        record = {"status": fw.HEALTH_STATUS_RUNNING, "consecutiveFailures": 0}
+        self.assertEqual(fw.classify_source_severity(record, now=self.NOW), "warning")
+
+    def test_still_running_but_previously_failing_stays_red(self):
+        record = {"status": fw.HEALTH_STATUS_RUNNING, "consecutiveFailures": 2}
+        self.assertEqual(fw.classify_source_severity(record, now=self.NOW), "error")
+
+    def test_warning_status_with_no_prior_success_is_orange_not_red(self):
+        """Regression: _merge_health_source() deliberately never sets lastSuccessAt for a
+        "warning" outcome (succeeded, but flagged as suspicious -- e.g. cve-psirt skipping one
+        advisory it couldn't parse). On a source's very first-ever run this produced
+        "no lastSuccessAt" + status="warning", which the previous fix still mapped to "error"
+        because its exemption list only covered running/skipped, not warning -- a real
+        production false alarm ("1 source(s) en erreur") for what was actually a minor warning,
+        not a failure."""
+        record = {"status": fw.HEALTH_STATUS_WARNING, "consecutiveFailures": 0}
+        self.assertEqual(fw.classify_source_severity(record, now=self.NOW), "warning")
+
 
 class MainHealthWiringIntegrationTests(unittest.TestCase):
     """Exercises the actual main() wiring end-to-end, not just the underlying primitives in

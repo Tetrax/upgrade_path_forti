@@ -375,7 +375,11 @@
       const lastSuccessAt = record.lastSuccessAt;
       const status = record.status;
       if (consecutiveFailures >= HEALTH_REPEATED_FAILURE_THRESHOLD) return "error";
-      if (!lastSuccessAt) return status === "skipped" ? "warning" : "error";
+      // No confirmed success yet is only a hard error when the source actually finished with a
+      // real error -- mid-collection (running), deliberately skipped, or merely a warning
+      // (succeeded, just flagged as suspicious) must never render as full red just because this
+      // happens to be its first-ever attempt.
+      if (!lastSuccessAt) return status === "error" ? "error" : "warning";
       const ageHours = (now.getTime() - new Date(lastSuccessAt).getTime()) / 3600000;
       if (ageHours > HEALTH_MAX_AGE_HOURS) return "error";
       if (status === "warning" || status === "skipped" || consecutiveFailures > 0) return "warning";
