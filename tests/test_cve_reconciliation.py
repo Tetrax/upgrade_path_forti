@@ -76,12 +76,14 @@ class ReplaceCvesForAdvisoryTests(unittest.TestCase):
             {"id": "CVE-2026-99999", "advisoryId": "FG-IR-26-999", "title": "unrelated advisory"},
         ]})
         # Fresh, successful re-fetch only returns CVE-2026-00001 now.
-        changed = fw.replace_cves_for_advisory(state, "FG-IR-26-001", [
+        stats = fw.replace_cves_for_advisory(state, "FG-IR-26-001", [
             {"id": "CVE-2026-00001", "advisoryId": "FG-IR-26-001", "title": "refreshed"},
         ])
         ids = sorted(item["id"] for item in state["cves"])
         self.assertEqual(ids, ["CVE-2026-00001", "CVE-2026-99999"], "CVE-2026-00002 must be removed")
-        self.assertGreaterEqual(changed, 1)
+        self.assertEqual(stats.removed, 1)
+        self.assertEqual(stats.updated, 1)  # CVE-2026-00001 already existed, its title changed
+        self.assertEqual(stats.added, 0)
         # An unrelated advisory's CVEs must never be touched.
         unrelated = next(item for item in state["cves"] if item["id"] == "CVE-2026-99999")
         self.assertEqual(unrelated["title"], "unrelated advisory")
@@ -97,10 +99,32 @@ class ReplaceCvesForAdvisoryTests(unittest.TestCase):
         state = fw.normalize_state({"cves": [
             {"id": "CVE-2026-00001", "advisoryId": "FG-IR-26-001", "title": "same"},
         ]})
-        changed = fw.replace_cves_for_advisory(state, "FG-IR-26-001", [
+        stats = fw.replace_cves_for_advisory(state, "FG-IR-26-001", [
             {"id": "CVE-2026-00001", "advisoryId": "FG-IR-26-001", "title": "same"},
         ])
-        self.assertEqual(changed, 0)
+        self.assertEqual(stats, fw.CveReconciliationStats(added=0, updated=0, removed=0))
+
+    def test_pure_removal_is_not_counted_as_an_addition(self):
+        """Codex's exact concern: a removal must never inflate the "added" counter."""
+        state = fw.normalize_state({"cves": [
+            {"id": "CVE-KEEP", "advisoryId": "FG-IR-26-001", "title": "keep, unchanged"},
+            {"id": "CVE-STALE", "advisoryId": "FG-IR-26-001", "title": "no longer returned"},
+        ]})
+        stats = fw.replace_cves_for_advisory(state, "FG-IR-26-001", [
+            {"id": "CVE-KEEP", "advisoryId": "FG-IR-26-001", "title": "keep, unchanged"},
+        ])
+        self.assertEqual(stats.removed, 1)
+        self.assertEqual(stats.added, 0)
+        self.assertEqual(stats.updated, 0)
+
+    def test_genuinely_new_cve_is_counted_as_added(self):
+        state = fw.normalize_state({"cves": []})
+        stats = fw.replace_cves_for_advisory(state, "FG-IR-26-001", [
+            {"id": "CVE-NEW", "advisoryId": "FG-IR-26-001", "title": "brand new"},
+        ])
+        self.assertEqual(stats.added, 1)
+        self.assertEqual(stats.updated, 0)
+        self.assertEqual(stats.removed, 0)
 
 
 class CollectCveCatalogReconciliationTests(unittest.TestCase):
@@ -162,6 +186,58 @@ class CollectCveCatalogReconciliationTests(unittest.TestCase):
 
         ids = sorted(item["id"] for item in state["cves"])
         self.assertEqual(ids, ["CVE-2026-00001", "CVE-2026-00002"], "nothing must be lost on a network failure")
+
+
+class MainCommitSequenceCveReconciliationTests(unittest.TestCase):
+    """Reproduces main()'s actual end-to-end commit sequence, not just replace_cves_for_advisory()
+    in isolation — that's exactly what let the first fix pass its own test while still shipping
+    the resurrection bug: reconciling only the in-memory `state` working copy is not enough,
+    because the final commit re-reads the file fresh and merge_state()'s CVE merge is a keyed
+    union that never removes anything absent from the incoming side. The removal only actually
+    sticks if the same reconciliation is re-applied on `final_state` after that merge.
+    """
+
+    def test_stale_cve_does_not_reappear_after_the_full_commit_sequence(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "state.json"
+            fw.write_json(output_path, fw.normalize_state({"cves": [
+                {"id": "CVE-KEEP", "advisoryId": "FG-IR-26-001", "title": "keep"},
+                {"id": "CVE-STALE", "advisoryId": "FG-IR-26-001", "title": "removed by Fortinet"},
+            ]}))
+
+            # 1. main() reads its working-copy snapshot at the top of the run.
+            state = fw.normalize_state(fw.read_json(output_path, {}))
+
+            # 2. A definitive CSAF re-fetch for FG-IR-26-001 now only returns CVE-KEEP.
+            cve_results_by_advisory = {
+                "FG-IR-26-001": [{"id": "CVE-KEEP", "advisoryId": "FG-IR-26-001", "title": "keep"}],
+            }
+
+            # 3. Reconcile the working copy (this is what the previous fix stopped at).
+            for advisory_id, entries in cve_results_by_advisory.items():
+                fw.replace_cves_for_advisory(state, advisory_id, entries)
+            self.assertEqual(
+                sorted(item["id"] for item in state["cves"]), ["CVE-KEEP"],
+                "sanity check: the working copy itself must already be clean",
+            )
+
+            # 4-6. The actual final commit sequence from main(): re-read fresh, bulk-merge
+            # everything except advisories/paths/compatibilities, then re-apply the CVE
+            # reconciliation on final_state -- the step that was missing.
+            with fw.cross_process_lock(output_path):
+                latest_from_disk = fw.normalize_state(fw.read_json(output_path, {}))
+                state_for_bulk_merge = {**state, "advisories": [], "paths": [], "compatibilities": []}
+                final_state = fw.merge_state(latest_from_disk, state_for_bulk_merge)
+                for advisory_id, entries in cve_results_by_advisory.items():
+                    fw.replace_cves_for_advisory(final_state, advisory_id, entries)
+                fw.write_json(output_path, final_state)
+
+            # 7. CVE-STALE must not have reappeared.
+            result = fw.normalize_state(fw.read_json(output_path, {}))
+            ids = sorted(item["id"] for item in result["cves"])
+            self.assertEqual(ids, ["CVE-KEEP"], "CVE-STALE must not resurrect during the final merge")
 
 
 if __name__ == "__main__":

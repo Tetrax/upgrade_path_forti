@@ -1201,25 +1201,47 @@ def upsert_cve(state: dict[str, Any], item: dict[str, Any]) -> bool:
     return True
 
 
-def replace_cves_for_advisory(state: dict[str, Any], advisory_id: str, new_entries: list[dict[str, Any]]) -> int:
+@dataclass
+class CveReconciliationStats:
+    added: int = 0
+    updated: int = 0
+    removed: int = 0
+
+    def __add__(self, other: "CveReconciliationStats") -> "CveReconciliationStats":
+        return CveReconciliationStats(
+            added=self.added + other.added,
+            updated=self.updated + other.updated,
+            removed=self.removed + other.removed,
+        )
+
+
+def replace_cves_for_advisory(
+    state: dict[str, Any], advisory_id: str, new_entries: list[dict[str, Any]]
+) -> CveReconciliationStats:
     """Replace every CVE previously recorded under `advisory_id` with exactly `new_entries` —
     only ever call this with a DEFINITIVE, successfully-parsed CSAF result (never for an advisory
     that was skipped due to a network/parse failure or an unresolved CSAF lookup), since a
     transient PSIRT hiccup must never be allowed to wipe real, previously-confirmed CVE data.
-    Returns how many entries actually changed (added, updated in place, or removed).
+    Returns distinct added/updated/removed counts — a removal must never be reported as if it
+    were a new addition.
     """
-    new_ids = {entry["id"] for entry in new_entries}
-    stale_ids = {
-        item.get("id") for item in state["cves"]
-        if item.get("advisoryId") == advisory_id and item.get("id") not in new_ids
+    existing_for_advisory = {
+        item.get("id"): item for item in state["cves"] if item.get("advisoryId") == advisory_id
     }
-    changed = len(stale_ids)
+    new_ids = {entry["id"] for entry in new_entries}
+    stale_ids = set(existing_for_advisory) - new_ids
     if stale_ids:
         state["cves"] = [item for item in state["cves"] if item.get("id") not in stale_ids]
+
+    added = 0
+    updated = 0
     for entry in new_entries:
-        if upsert_cve(state, entry):
-            changed += 1
-    return changed
+        if entry["id"] in existing_for_advisory:
+            if upsert_cve(state, entry):
+                updated += 1
+        elif upsert_cve(state, entry):
+            added += 1
+    return CveReconciliationStats(added=added, updated=updated, removed=len(stale_ids))
 
 
 def collect_cve_catalog(
@@ -1466,7 +1488,7 @@ def build_report(
     forticlient_catalog_enabled: bool = False,
     skipped_forticlient: list[str] | None = None,
     cve_catalog_enabled: bool = False,
-    added_cves: int = 0,
+    cve_stats: "CveReconciliationStats | None" = None,
     skipped_cves: list[str] | None = None,
 ) -> str:
     before_versions = all_versions(before)
@@ -1514,11 +1536,12 @@ def build_report(
         )
     if cve_catalog_enabled:
         skipped_cves = skipped_cves or []
+        stats = cve_stats or CveReconciliationStats()
         lines.extend(
             [
                 "## CVE PSIRT Fortinet",
                 "",
-                f"- Nouvelles CVE ajoutées : {added_cves}",
+                f"- CVE ajoutées : {stats.added} · mises à jour : {stats.updated} · supprimées : {stats.removed}",
                 f"- Advisories PSIRT ignorées (erreur réseau) : {', '.join(skipped_cves) if skipped_cves else 'aucune'}",
                 "",
             ]
@@ -1680,7 +1703,8 @@ def main(argv: list[str]) -> int:
     if not args.skip_network:
         psirt_versions = fetch_psirt_versions(args.timeout)
 
-    added_cves = 0
+    cve_stats = CveReconciliationStats()
+    cve_results_by_advisory: dict[str, list[dict[str, Any]]] = {}
     skipped_cves: list[str] = []
     if (args.cve_catalog or args.cve_backfill) and not args.skip_network:
         existing_advisory_ids = {item.get("advisoryId") for item in state.get("cves", [])}
@@ -1693,9 +1717,11 @@ def main(argv: list[str]) -> int:
         # Each advisory here got a definitive CSAF result this run: replace (not just upsert)
         # whatever we had for it, so a CVE Fortinet has since removed/reattributed away from our
         # tracked products actually disappears instead of lingering forever. Advisories in
-        # skipped_cves are left completely untouched.
+        # skipped_cves are left completely untouched. Reconciling `state` here (in addition to
+        # `final_state` below) is what makes the numbers in the report accurate; the actual
+        # persisted removal only really takes effect at the final commit.
         for advisory_id, entries in cve_results_by_advisory.items():
-            added_cves += replace_cves_for_advisory(state, advisory_id, entries)
+            cve_stats += replace_cves_for_advisory(state, advisory_id, entries)
 
     # This run started from a read of args.output taken potentially minutes ago (network
     # scraping in between) — fortios_server.py or import_forticlient_compat.py may have written
@@ -1704,10 +1730,17 @@ def main(argv: list[str]) -> int:
     # `state` still carries the advisories/paths/compatibilities exactly as they were at the top
     # of this function; blindly merging that in would replace a concurrent edit with our stale
     # pre-collection copy, or resurrect something a user deleted while we were scraping. So the
-    # bulk merge below only ever carries firmwares/CVEs/lifecycle (this script's own exclusive
-    # domain — no other process writes those) onto a freshly re-read state, while advisories and
-    # paths are applied as precise upserts from the deltas tracked above, and compatibilities
-    # (never touched by this script at all) are left completely alone.
+    # bulk merge below only ever carries firmwares/lifecycle (this script's own exclusive domain
+    # — no other process writes those) onto a freshly re-read state, while advisories and paths
+    # are applied as precise upserts from the deltas tracked above, and compatibilities (never
+    # touched by this script at all) are left completely alone.
+    #
+    # CVEs need the same delta-reapplication treatment: merge_state()'s CVE merge is a keyed
+    # union that only ever adds/overwrites by id, never removes one absent from the incoming
+    # side — so a CVE reconciled away from `state` above would otherwise come right back the
+    # moment merge_state() re-merges it onto latest_from_disk's still-stale copy (which was
+    # never touched by the reconciliation loop above). Re-applying the same reconciliation on
+    # final_state, after the bulk merge, actually makes the removal stick.
     with cross_process_lock(args.output):
         latest_from_disk = normalize_state(read_json(args.output, {}))
         state_for_bulk_merge = {**state, "advisories": [], "paths": [], "compatibilities": []}
@@ -1716,6 +1749,8 @@ def main(argv: list[str]) -> int:
             upsert_advisory(final_state, advisory)
         for path in path_deltas:
             upsert_path(final_state, path)
+        for advisory_id, entries in cve_results_by_advisory.items():
+            replace_cves_for_advisory(final_state, advisory_id, entries)
         final_state["generatedAt"] = utc_now()
         write_json(args.output, final_state)
 
@@ -1731,7 +1766,7 @@ def main(argv: list[str]) -> int:
             forticlient_catalog_enabled=args.forticlient_catalog,
             skipped_forticlient=skipped_forticlient,
             cve_catalog_enabled=args.cve_catalog or args.cve_backfill,
-            added_cves=added_cves,
+            cve_stats=cve_stats,
             skipped_cves=skipped_cves,
         ),
         encoding="utf-8",
