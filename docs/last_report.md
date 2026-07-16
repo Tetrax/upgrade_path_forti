@@ -1,6 +1,6 @@
 # Rapport FortiOS Upgrade Intelligence
 
-- Généré le : 2026-07-16T07:23:57Z
+- Généré le : 2026-07-16T15:41:22Z
 - Modèles FortiGate/FortiWiFi dans la base : 233
 - Versions FortiOS dans la base : 111
 - Nouvelles versions dans la base : aucune
@@ -24,5 +24,5 @@ Le catalogue FortiClient (Windows/macOS/Linux) et FortiClient EMS a été enrich
 
 ## CVE PSIRT Fortinet
 
-- Nouvelles CVE ajoutées : 0
-- Advisories PSIRT ignorées (erreur réseau) : aucune
+- CVE ajoutées : 0 · mises à jour : 2 · supprimées : 0
+- Advisories PSIRT ignorées (erreur réseau) : FG-IR-26-100
