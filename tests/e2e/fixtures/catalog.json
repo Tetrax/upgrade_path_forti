@@ -1,0 +1,54 @@
+{
+  "generatedAt": "2026-07-16T07:15:00Z",
+  "products": [
+    {
+      "id": "fortigate-fortios",
+      "label": "FortiGate/FortiOS",
+      "models": [
+        {
+          "id": "FGT60F",
+          "label": "FortiGate-60F",
+          "firmwares": [
+            {"version": "6.2.4", "build": "1234", "notes": ["release-notes"], "maturity": "Mature"},
+            {"version": "7.0.14", "build": "2345", "notes": ["release-notes"], "maturity": "Mature"},
+            {"version": "8.0.0", "build": "3456", "notes": ["release-notes"], "maturity": "Feature", "discoveredAt": "2026-07-16"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "forticlient",
+      "label": "FortiClient",
+      "models": [
+        {"id": "windows", "label": "FortiClient Windows", "firmwares": [{"version": "7.4.1", "build": "-", "notes": ["release-notes"]}]}
+      ]
+    },
+    {
+      "id": "forticlient-ems",
+      "label": "FortiClient EMS",
+      "models": [
+        {"id": "ems", "label": "FortiClient EMS", "firmwares": [{"version": "7.4.2", "build": "-", "notes": ["release-notes"]}]}
+      ]
+    }
+  ],
+  "paths": [],
+  "advisories": [],
+  "cves": [
+    {
+      "id": "CVE-2026-99999",
+      "advisoryId": "FG-IR-26-999",
+      "title": "Test vulnerability for E2E fixture",
+      "severity": "high",
+      "cvssScore": 7.5,
+      "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-999",
+      "publishedAt": "2026-07-01",
+      "updatedAt": "2026-07-01",
+      "affected": [
+        {"product": "fortigate-fortios", "models": [], "branch": "6.2", "from": "6.2.0", "to": "6.2.4"}
+      ]
+    }
+  ],
+  "compatibilities": [],
+  "fortiosLifecycle": {},
+  "searchHistory": []
+}

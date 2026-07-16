@@ -1,0 +1,11 @@
+# Dev/CI-only dependencies for the Playwright E2E browser suite (tests/e2e/).
+# The application itself stays stdlib-only in production (see README.md) — nothing here is ever
+# imported by scripts/fortios_server.py, scripts/fortios_watch.py, or scripts/fortios_notify.py
+# outside of the FORTIOS_E2E_MOCK_NETWORK-gated test hook.
+#
+# Setup:
+#   uv venv .venv-test && uv pip install --python .venv-test/bin/python -r requirements-dev.txt
+#   .venv-test/bin/python -m playwright install --with-deps chromium
+#   .venv-test/bin/python -m pytest tests/e2e/
+pytest
+pytest-playwright

@@ -26,15 +26,23 @@ import json
 import re
 import secrets
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fortios_watch import (  # noqa: E402
+    DEFAULT_HEALTH_PATH,
+    HEALTH_STATUS_ERROR,
+    HEALTH_STATUS_OK,
+    SOURCE_COMPAT_MATRIX,
+    HealthSourceResult,
     cross_process_lock,
     normalize_state,
     read_json,
+    record_health_results,
     upsert_compatibility,
     urlopen_with_retry,
     utc_now,
@@ -97,31 +105,66 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--major", help="Train FortiClient à utiliser pour trouver le PDF (ex: 8.0). Sinon, essaie 8.0, 7.4, 7.2 dans l'ordre.")
     parser.add_argument("--commit", action="store_true", help="Écrire le résultat dans data/fortios-data.generated.json (sinon, aperçu seulement).")
     parser.add_argument("--timeout", type=int, default=15)
+    parser.add_argument(
+        "--health-output", type=Path, default=DEFAULT_HEALTH_PATH,
+        help="Fichier d'état de santé partagé avec fortios_watch.py.",
+    )
     args = parser.parse_args(argv)
+
+    # Health is only recorded for --commit runs: a --commit-less run is a manual preview that
+    # never touches persisted data, so it shouldn't affect "when did we last actually refresh
+    # this source" freshness tracking either.
+    t0 = time.monotonic()
+    started_at = utc_now()
+
+    def record_and_return(status: str, code: int, *, items: int | None = None, error: Any = None) -> int:
+        if args.commit:
+            try:
+                record_health_results(args.health_output, {
+                    SOURCE_COMPAT_MATRIX: HealthSourceResult(
+                        status=status, started_at=started_at,
+                        duration_seconds=round(time.monotonic() - t0, 3),
+                        items_collected=items, error=error,
+                    ),
+                })
+            except OSError as health_error:
+                print(f"Avertissement : échec de l'écriture de l'état de santé ({health_error}).", file=sys.stderr)
+        return code
 
     majors = (args.major,) if args.major else DEFAULT_MAJORS_TO_TRY
     pdf_url = None
     for major in majors:
-        pdf_url = find_pdf_url(major, args.timeout)
+        try:
+            pdf_url = find_pdf_url(major, args.timeout)
+        except (urllib.error.URLError, OSError):
+            pdf_url = None
+            continue
         if pdf_url:
             break
     if not pdf_url:
         print("Impossible de trouver le PDF de compatibilité sur docs.fortinet.com.", file=sys.stderr)
-        return 1
+        return record_and_return(
+            HEALTH_STATUS_ERROR, 1,
+            error="Impossible de trouver le PDF de compatibilité sur docs.fortinet.com",
+        )
     print(f"PDF trouvé : {pdf_url}")
 
-    pdf_bytes = fetch_url(pdf_url, args.timeout)
+    try:
+        pdf_bytes = fetch_url(pdf_url, args.timeout)
+    except (urllib.error.URLError, OSError) as error:
+        print(f"Échec du téléchargement du PDF : {error}", file=sys.stderr)
+        return record_and_return(HEALTH_STATUS_ERROR, 1, error=error)
     tmp_pdf = Path("/tmp") / "forticlient_ems_compat.pdf"
     tmp_pdf.write_bytes(pdf_bytes)
 
     entries = parse_matrix(tmp_pdf)
     if len(entries) < MIN_EXPECTED_ENTRIES:
-        print(
+        message = (
             f"Seulement {len(entries)} combinaison(s) extraite(s) (minimum attendu : {MIN_EXPECTED_ENTRIES}) "
-            "— le format du PDF a peut-être changé, abandon par sécurité.",
-            file=sys.stderr,
+            "— le format du PDF a peut-être changé, abandon par sécurité."
         )
-        return 1
+        print(message, file=sys.stderr)
+        return record_and_return(HEALTH_STATUS_ERROR, 1, items=len(entries), error=message)
 
     print(f"\n{len(entries)} versions EMS trouvées :\n")
     for entry in sorted(entries, key=lambda e: e["emsVersion"]):
@@ -156,7 +199,7 @@ def main(argv: list[str]) -> int:
         state["generatedAt"] = utc_now()
         write_json(DATA_PATH, state)
     print(f"\n{added} combinaison(s) officielle(s) ajoutée(s)/mise(s) à jour dans {DATA_PATH}.")
-    return 0
+    return record_and_return(HEALTH_STATUS_OK, 0, items=len(entries))
 
 
 if __name__ == "__main__":

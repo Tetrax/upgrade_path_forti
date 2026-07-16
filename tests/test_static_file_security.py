@@ -89,5 +89,49 @@ class OriginCheckTests(unittest.TestCase):
         self.assertTrue(handler.is_safe_origin())
 
 
+class TestDataDirOverrideTests(unittest.TestCase):
+    """FORTIOS_TEST_DATA_DIR (used only by the isolated E2E fixture) must redirect /data/* to
+    the override directory while leaving /app/* on the real ROOT, and must stay just as
+    traversal-safe as the default (unset) case.
+    """
+
+    def setUp(self):
+        import importlib
+        import os
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        (Path(self._tmp.name) / "fortios-data.generated.json").write_text("{}")
+        self._orig_env = os.environ.get("FORTIOS_TEST_DATA_DIR")
+        os.environ["FORTIOS_TEST_DATA_DIR"] = self._tmp.name
+        importlib.reload(fs)
+
+    def tearDown(self):
+        import importlib
+        import os
+
+        if self._orig_env is None:
+            os.environ.pop("FORTIOS_TEST_DATA_DIR", None)
+        else:
+            os.environ["FORTIOS_TEST_DATA_DIR"] = self._orig_env
+        importlib.reload(fs)  # restore the module to its default (unset) state for other tests
+        self._tmp.cleanup()
+
+    def test_data_requests_resolve_against_the_override_dir(self):
+        self.assertTrue(is_served("/data/fortios-data.generated.json"))
+        self.assertEqual(
+            translate("/data/fortios-data.generated.json"),
+            str(Path(self._tmp.name).resolve() / "fortios-data.generated.json"),
+        )
+
+    def test_app_requests_still_resolve_against_the_real_root_when_overridden(self):
+        self.assertTrue(is_served("/app/index.html"))
+        self.assertEqual(translate("/app/index.html"), str(fs.ROOT / "app" / "index.html"))
+
+    def test_traversal_out_of_the_override_dir_is_still_denied(self):
+        self.assertFalse(is_served("/data/../scripts/fortios_server.py"))
+        self.assertFalse(is_served("/data/%2e%2e/scripts/fortios_server.py"))
+
+
 if __name__ == "__main__":
     unittest.main()

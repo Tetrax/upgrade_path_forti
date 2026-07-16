@@ -61,4 +61,12 @@ ln -sf "$NGINX_AVAILABLE" "$NGINX_ENABLED"
 nginx -t
 systemctl reload nginx
 
+if [ ! -f /etc/fortios-upgrade-intelligence.env ]; then
+  echo
+  echo "Note : /etc/fortios-upgrade-intelligence.env absent — les notifications email restent"
+  echo "  désactivées (comportement normal). Pour les activer, copier"
+  echo "  $REPO_ROOT/deploy/fortios-upgrade-intelligence.env.example vers ce chemin, le"
+  echo "  remplir, puis relancer ce script (jamais de vrai secret dans le dépôt Git)."
+fi
+
 echo "OK — https://valdev.me:3001/app/"

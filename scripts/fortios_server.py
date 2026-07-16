@@ -7,10 +7,12 @@ import argparse
 import base64
 import binascii
 import json
+import os
 import re
 import secrets
 import sys
 import traceback
+import urllib.error
 import urllib.parse
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -21,7 +23,9 @@ from fortios_watch import (
     DEFAULT_PRODUCT_ID,
     PRODUCTS,
     PRODUCT_LABELS,
+    Firmware,
     OfficialPathRequest,
+    UpgradePath,
     cross_process_lock,
     fetch_official_upgrade_path,
     normalize_state,
@@ -35,6 +39,31 @@ from fortios_watch import (
     utc_now,
     write_json,
 )
+
+if os.environ.get("FORTIOS_E2E_MOCK_NETWORK") == "1":
+    # Inert unless this exact env var is set — never touched in production, only by the
+    # isolated E2E test fixture, which is also the only thing that ever points
+    # FORTIOS_E2E_MOCK_RESPONSE_FILE somewhere real. Lets tests simulate a successful Fortinet
+    # fetch (a hops[] list) or an outage (an "error" message, raised as a URLError so the
+    # existing offline/cache-fallback code path in handle_official_path() runs unmodified) with
+    # zero real network calls.
+    def _mock_fetch_official_upgrade_path(request: OfficialPathRequest, timeout: int):
+        response_path = Path(os.environ["FORTIOS_E2E_MOCK_RESPONSE_FILE"])
+        payload = json.loads(response_path.read_text()) if response_path.exists() else {}
+        if payload.get("error"):
+            raise urllib.error.URLError(payload["error"])
+        hops = payload.get("hops")
+        if not hops:
+            return None
+        path = UpgradePath(
+            product=request.product, model=request.model,
+            from_version=request.from_version, to_version=request.to_version,
+            hops=tuple(hops), source="Simulation E2E (FORTIOS_E2E_MOCK_NETWORK)",
+        )
+        firmwares = [Firmware(product=request.product, model=request.model, version=version) for version in hops]
+        return path, firmwares
+
+    fetch_official_upgrade_path = _mock_fetch_official_upgrade_path
 
 VALID_SEVERITIES = {"critical", "important", "warning", "info"}
 ADVISORIES_PREFIX = "/api/advisories/"
@@ -132,10 +161,17 @@ def parse_compatibility_fields(payload: dict[str, Any]) -> dict[str, Any]:
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_STATIC_DIR_APP = (ROOT / "app").resolve()
-ALLOWED_STATIC_DIR_DATA = (ROOT / "data").resolve()
-DATA_PATH = ROOT / "data" / "fortios-data.generated.json"
-SAMPLE_PATH = ROOT / "data" / "fortios-data.sample.json"
-IMAGE_DIR = ROOT / "data" / "advisory-images"
+
+# DATA_DIR is overridable via FORTIOS_TEST_DATA_DIR — unset in production (default: ROOT/data,
+# identical to before this existed), set only by the isolated E2E test fixture so tests never
+# read or write the real data/fortios-data.generated.json, advisory-images/, etc. app/ always
+# still resolves against the fixed ROOT below, regardless of this override.
+_test_data_dir = os.environ.get("FORTIOS_TEST_DATA_DIR")
+DATA_DIR = Path(_test_data_dir).resolve() if _test_data_dir else (ROOT / "data")
+ALLOWED_STATIC_DIR_DATA = DATA_DIR.resolve()
+DATA_PATH = DATA_DIR / "fortios-data.generated.json"
+SAMPLE_PATH = DATA_DIR / "fortios-data.sample.json"
+IMAGE_DIR = DATA_DIR / "advisory-images"
 
 
 def referenced_image_filenames(description: str) -> set[str]:
@@ -165,19 +201,27 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def translate_path(self, path: str) -> str:
-        # Checking the raw request string against ALLOWED_STATIC_PREFIXES before decoding/
-        # normalizing is not enough: "/data/%2e%2e/scripts/fortios_server.py" starts with
-        # "/data/" as a literal string, but percent-decodes and normalizes (posixpath.normpath
-        # collapses "data/.." against the preceding segment) to a path outside data/ entirely.
-        # Let the parent class do that decoding/normalization first, then check where the
-        # request actually resolved on disk — the only check that can't be fooled by encoding.
-        resolved = Path(super().translate_path(path)).resolve()
-        if not any(
-            resolved == allowed or resolved.is_relative_to(allowed)
-            for allowed in (ALLOWED_STATIC_DIR_APP, ALLOWED_STATIC_DIR_DATA)
-        ):
+        # Checking the raw request string against an allowed prefix before decoding/normalizing
+        # is not enough: "/data/%2e%2e/scripts/fortios_server.py" starts with "/data/" as a
+        # literal string, but percent-decodes and normalizes (posixpath.normpath collapses
+        # "data/.." against the preceding segment) to a path outside data/ entirely. Both
+        # branches below resolve first, then check where the request actually landed on disk —
+        # the only check that can't be fooled by encoding — before ever serving it.
+        url_path = urllib.parse.urlsplit(path).path
+        if url_path == "/data" or url_path.startswith("/data/"):
+            # Resolved against DATA_DIR (overridable for isolated E2E tests), not against
+            # self.directory/ROOT like the parent class would — otherwise FORTIOS_TEST_DATA_DIR
+            # would have no effect on what gets served here.
+            relative = urllib.parse.unquote(url_path[len("/data/"):] if url_path != "/data" else "")
+            candidate = (DATA_DIR / relative).resolve() if relative else DATA_DIR.resolve()
+            if candidate == ALLOWED_STATIC_DIR_DATA or candidate.is_relative_to(ALLOWED_STATIC_DIR_DATA):
+                return str(candidate)
             return str(ROOT / "__not_served__")
-        return str(resolved)
+
+        resolved = Path(super().translate_path(path)).resolve()
+        if resolved == ALLOWED_STATIC_DIR_APP or resolved.is_relative_to(ALLOWED_STATIC_DIR_APP):
+            return str(resolved)
+        return str(ROOT / "__not_served__")
 
     def is_safe_origin(self) -> bool:
         """Lightweight CSRF guard for the state-mutating routes: the request must claim to come

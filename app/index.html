@@ -30,6 +30,20 @@
 
     <section class="briefing-bar" id="briefingPanel"></section>
 
+    <section class="panel health-panel">
+      <div class="panel-body">
+        <details class="health-details" id="healthDetails">
+          <summary class="health-summary">
+            <span class="health-dot" id="healthSummaryDot"></span>
+            <span>État des données</span>
+            <span class="muted" id="healthSummaryText">Chargement…</span>
+          </summary>
+          <div id="healthWarningBanner"></div>
+          <div id="healthTableContainer"></div>
+        </details>
+      </div>
+    </section>
+
     <section class="grid">
       <div class="sidebar-stack">
         <aside class="panel">
@@ -105,6 +119,27 @@
     // How long a "New" badge stays on a freshly-seen FortiOS version or CVE in the
     // briefing bar before it blends back into the crowd.
     const NEW_BADGE_WINDOW_DAYS = 14;
+
+    // État de santé des collectes (data/fortios-health.json, généré par fortios_watch.py) —
+    // declared up here, not next to the functions that use them below, because init() (called
+    // near the top of the script) triggers autoLoadHealthState() synchronously, and a `let`/
+    // `const` declared later in the file is still in its temporal dead zone at that point.
+    const HEALTH_DATA_URL = "../data/fortios-health.json";
+    const HEALTH_MAX_AGE_HOURS = 48;
+    const HEALTH_REPEATED_FAILURE_THRESHOLD = 2;
+    const HEALTH_SOURCE_LABELS = {
+      "fortios-docs": "Catalogue FortiOS (docs.fortinet.com)",
+      "fortianalyzer": "FortiAnalyzer",
+      "fortimanager": "FortiManager",
+      "forticlient": "FortiClient",
+      "forticlient-ems": "FortiClient EMS",
+      "cve-psirt": "CVE PSIRT Fortinet",
+      "fortios-lifecycle": "Cycle de vie FortiOS",
+      "compat-matrix": "Matrice de compatibilité EMS/FortiClient",
+      "daily-run": "Collecte quotidienne (global)"
+    };
+    const HEALTH_SOURCE_ORDER = Object.keys(HEALTH_SOURCE_LABELS);
+    let healthState = null;
     // FortiClient/EMS have no Fortinet Upgrade Path Tool support, so no "Afficher le chemin" here
     // — they get their own catalog/advisories/compatibility page instead (app/forticlient/).
     const NO_PATH_PRODUCT_IDS = ["forticlient", "forticlient-ems"];
@@ -214,7 +249,11 @@
       go: document.getElementById("goButton"),
       briefingPanel: document.getElementById("briefingPanel"),
       cveSearchInput: document.getElementById("cveSearchInput"),
-      historyList: document.getElementById("historyList")
+      historyList: document.getElementById("historyList"),
+      healthSummaryDot: document.getElementById("healthSummaryDot"),
+      healthSummaryText: document.getElementById("healthSummaryText"),
+      healthWarningBanner: document.getElementById("healthWarningBanner"),
+      healthTableContainer: document.getElementById("healthTableContainer")
     };
 
     els.go.addEventListener("click", showPath);
@@ -257,6 +296,7 @@
       populateVersions();
       renderResult();
       autoLoadGeneratedData();
+      autoLoadHealthState();
     }
 
     function loadState() {
@@ -312,6 +352,123 @@
       } catch {
         els.dataStatus.textContent = "Données locales chargées. Import manuel disponible si le navigateur bloque le JSON généré.";
       }
+    }
+
+    // --- État de santé des collectes (data/fortios-health.json, généré par fortios_watch.py) ---
+    async function autoLoadHealthState() {
+      try {
+        const response = await fetch(HEALTH_DATA_URL, { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        healthState = await response.json();
+      } catch {
+        healthState = null;
+      }
+      renderHealthPanel();
+    }
+
+    // Mirrors classify_source_severity() in scripts/fortios_watch.py — keep the two in sync if
+    // the thresholds ever change, since this is the only "shared logic" the browser can't
+    // literally share with the Python side.
+    function classifySourceSeverity(record, now) {
+      if (!record) return "warning";
+      const consecutiveFailures = record.consecutiveFailures || 0;
+      const lastSuccessAt = record.lastSuccessAt;
+      const status = record.status;
+      if (consecutiveFailures >= HEALTH_REPEATED_FAILURE_THRESHOLD) return "error";
+      if (!lastSuccessAt) return status === "skipped" ? "warning" : "error";
+      const ageHours = (now.getTime() - new Date(lastSuccessAt).getTime()) / 3600000;
+      if (ageHours > HEALTH_MAX_AGE_HOURS) return "error";
+      if (status === "warning" || status === "skipped" || consecutiveFailures > 0) return "warning";
+      return "ok";
+    }
+
+    function healthStatusLabel(status) {
+      return { ok: "OK", warning: "Avertissement", error: "Erreur", running: "En cours", skipped: "Ignorée" }[status] || "Inconnu";
+    }
+
+    // Matches deploy/fortios-catalog-refresh.timer's OnCalendar=*-*-* 07:15:00 (UTC).
+    function nextScheduledRefresh(now) {
+      const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 7, 15, 0));
+      if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+      return next;
+    }
+
+    function renderHealthPanel() {
+      if (!els.healthSummaryDot) return;
+      const now = new Date();
+
+      if (!healthState || !healthState.sources) {
+        els.healthSummaryDot.className = "health-dot warning";
+        els.healthSummaryText.textContent = "État des données indisponible pour le moment.";
+        els.healthWarningBanner.innerHTML = "";
+        els.healthTableContainer.innerHTML = "";
+        return;
+      }
+
+      const sources = healthState.sources;
+      const dailyRun = sources["daily-run"];
+      const overallSeverity = classifySourceSeverity(dailyRun, now);
+      const erroredSources = HEALTH_SOURCE_ORDER.filter(
+        id => id !== "daily-run" && sources[id] && classifySourceSeverity(sources[id], now) === "error"
+      );
+
+      els.healthSummaryDot.className = `health-dot ${overallSeverity}`;
+      const ageText = dailyRun && dailyRun.lastSuccessAt
+        ? `dernière collecte globale réussie le ${formatDateTime(dailyRun.lastSuccessAt)}`
+        : "aucune collecte globale réussie connue";
+      const summaryParts = [ageText, `prochain rafraîchissement prévu le ${formatDateTime(nextScheduledRefresh(now).toISOString())}`];
+      if (erroredSources.length) {
+        summaryParts.push(`${erroredSources.length} source(s) en erreur`);
+      }
+      els.healthSummaryText.textContent = summaryParts.join(" • ");
+
+      if (erroredSources.length) {
+        const names = erroredSources.map(id => escapeHtml(HEALTH_SOURCE_LABELS[id] || id)).join(", ");
+        els.healthWarningBanner.innerHTML = `
+          <div class="callout danger health-warning-banner">
+            <p>⚠ Source(s) en difficulté (échecs répétés ou données de plus de ${HEALTH_MAX_AGE_HOURS}h) : <strong>${names}</strong>.</p>
+          </div>
+        `;
+      } else {
+        els.healthWarningBanner.innerHTML = "";
+      }
+
+      const rows = HEALTH_SOURCE_ORDER.filter(id => sources[id]).map(id => {
+        const record = sources[id];
+        const severity = classifySourceSeverity(record, now);
+        const label = escapeHtml(HEALTH_SOURCE_LABELS[id] || id);
+        const lastSuccess = record.lastSuccessAt ? formatDateTime(record.lastSuccessAt) : "jamais";
+        const failures = record.consecutiveFailures || 0;
+        const errorText = record.lastError ? escapeHtml(record.lastError) : "—";
+        return `
+          <tr>
+            <td><span class="health-dot ${severity}"></span></td>
+            <td>${label}</td>
+            <td>${escapeHtml(healthStatusLabel(record.status))}</td>
+            <td>${escapeHtml(lastSuccess)}</td>
+            <td>${failures}</td>
+            <td class="${record.lastError ? "health-error-cell" : ""}">${errorText}</td>
+          </tr>
+        `;
+      }).join("");
+
+      els.healthTableContainer.innerHTML = `
+        <div class="health-table-wrap">
+          <table class="health-table">
+            <thead>
+              <tr>
+                <th></th>
+                <th>Source</th>
+                <th>Statut</th>
+                <th>Dernier succès</th>
+                <th>Échecs consécutifs</th>
+                <th>Dernier message</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
     }
 
     function populateProducts() {

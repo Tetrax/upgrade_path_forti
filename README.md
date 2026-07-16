@@ -280,6 +280,34 @@ Collecte (`scripts/fortios_watch.py`) :
 
 Une CVE n'est retenue que si elle touche au moins un des 5 produits suivis par l'outil (le reste du catalogue PSIRT — FortiWeb, FortiMail, FortiSandbox, etc. — est ignoré). Une même CVE peut apparaître dans plusieurs `vulnerabilities[]` du CSAF (une par plateforme FortiClient par exemple) : elles sont fusionnées en une seule entrée avant d'être stockées, sinon la dernière écraserait les précédentes.
 
+## État de santé des collectes
+
+`data/fortios-health.json` (gitignored, généré automatiquement, séparé du catalogue principal) suit l'état de chaque source de collecte : `fortios-docs`, `fortianalyzer`, `fortimanager`, `forticlient`, `forticlient-ems`, `cve-psirt`, `fortios-lifecycle`, `compat-matrix`, et `daily-run` (résumé global). Pour chaque source : statut (`ok`/`warning`/`error`/`running`/`skipped`), date de dernière tentative/dernier succès/dernière erreur, message d'erreur court (jamais de traceback ni de secret), durée, nombre d'éléments collectés, et compteur d'échecs consécutifs.
+
+Écrit par `scripts/fortios_watch.py` (une source par étape de collecte) et par `scripts/import_forticlient_compat.py` (source `compat-matrix`), sous le même verrou interprocessus que le catalogue principal (`cross_process_lock`). Une source « ignorée » (flag désactivé, ou `--skip-network`) n'est jamais comptée comme un échec ; un échec n'efface jamais la date du dernier succès connu ; l'écriture de l'état de santé ne peut jamais faire échouer la collecte elle-même.
+
+Affiché dans `/app/` sous le bandeau de briefing : section repliable « État des données » avec un point vert/orange/rouge par source (rouge = échecs répétés ou données de plus de 48h, orange = source vieillissante/ignorée/échec isolé, vert = collecte récente réussie), un bandeau d'avertissement si une source est en rouge, et le détail complet par source dans un tableau replié par défaut.
+
+## Notifications email
+
+Désactivées par défaut, activables par variables d'environnement uniquement (aucune dépendance ajoutée — `smtplib`/`email.message.EmailMessage` de la stdlib). Copier `deploy/fortios-upgrade-intelligence.env.example` vers `/etc/fortios-upgrade-intelligence.env` (hors du dépôt, jamais de vrai secret dans Git), le remplir, puis relancer `deploy/install.sh` — l'unité `fortios-catalog-refresh.service` charge ce fichier via `EnvironmentFile=-...` (le `-` le rend optionnel : absent = pas d'email, sans erreur).
+
+Variables : `FORTIOS_EMAIL_ENABLED` (`false` par défaut), `FORTIOS_SMTP_HOST/PORT/USERNAME/PASSWORD/FROM/TO` (plusieurs destinataires séparés par des virgules), `FORTIOS_SMTP_STARTTLS` (`true` par défaut), `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_APP_URL`.
+
+Un seul email synthétique par collecte (jamais un email par événement), avec un objet reflétant la catégorie la plus grave présente :
+
+- **CRITICAL** : nouvelle CVE critique, ou CVE existante dont la sévérité passe à critique.
+- **DAILY** : nouvelles versions FortiOS/FortiAnalyzer/FortiManager (FortiClient/EMS exclus, trop bruyant), changement de sévérité d'une CVE existante, branche passant en fin de support.
+- **OPERATIONS** : une source en échec depuis ≥ 2 exécutions consécutives, ou son retour à la normale.
+
+Chaque événement a une clé de déduplication stable (`type|source|resource_id|new_value`, ex: `new-cve|psirt|CVE-2026-12345|critical`) conservée dans `data/fortios-notify-history.json` (gitignored, avec purge après 180 jours) — un même événement n'est donc jamais renvoyé deux fois. Les événements sont toujours calculés par différence entre l'état avant/après la collecte en cours, jamais par re-scan du catalogue entier : ni la première activation, ni un `--cve-backfill` historique, ne déclenchent d'email pour des données déjà existantes. Un échec SMTP (réseau, STARTTLS, authentification) est journalisé sans jamais faire échouer la collecte, et sans jamais afficher le mot de passe.
+
+Tester la configuration sans lancer de collecte ni toucher aux données :
+
+```bash
+python3 scripts/fortios_watch.py --test-email
+```
+
 ## Automatisation FortiCare / FNDN
 
 Le script accepte déjà un export JSON authentifié :
@@ -310,6 +338,24 @@ La prochaine étape consiste à vérifier avec le compte entreprise si FNDN expo
 - calculer le chemin recommandé, équivalent à l'Upgrade Path Tool.
 
 Si l'API existe, elle doit alimenter directement le format JSON ci-dessus. Si elle n'existe pas, il faudra évaluer une automatisation navigateur contrôlée de l'outil Fortinet, en vérifiant les conditions d'utilisation.
+
+## Tests
+
+Suite `unittest` stdlib (`tests/`, aucune dépendance) :
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+Suite E2E navigateur (`tests/e2e/`, Playwright — **dev/CI uniquement, jamais nécessaire en production**) :
+
+```bash
+uv venv .venv-test && uv pip install --python .venv-test/bin/python -r requirements-dev.txt
+.venv-test/bin/python -m playwright install --with-deps chromium
+.venv-test/bin/python -m pytest tests/e2e/
+```
+
+Chaque test lance sa propre instance isolée de `scripts/fortios_server.py` (port libre, répertoire `data/` temporaire — jamais `data/fortios-data.generated.json` ni `data/advisory-images/` réels), avec les appels Fortinet remplacés par une réponse simulée déterministe (`FORTIOS_TEST_DATA_DIR` / `FORTIOS_E2E_MOCK_NETWORK` / `FORTIOS_E2E_MOCK_RESPONSE_FILE`, inertes tant que ces variables ne sont pas positionnées — aucun effet en production). Capture d'écran, vidéo et trace Playwright conservées uniquement en cas d'échec. Le workflow GitHub Actions (`.github/workflows/tests.yml`) lance les deux suites à chaque push/PR, sans secret SMTP réel ni appel PSIRT/Fortinet.
 
 ## Planification
 

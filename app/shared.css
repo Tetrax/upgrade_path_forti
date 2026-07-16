@@ -716,6 +716,103 @@ a.note-token:hover {
   margin: 12px 0 0;
 }
 
+.health-panel {
+  margin-bottom: 16px;
+}
+
+.health-panel .panel-body {
+  padding: 10px 16px;
+}
+
+.health-details {
+  margin: 0;
+}
+
+.health-summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.health-summary::-webkit-details-marker {
+  display: none;
+}
+
+.health-summary::before {
+  content: "▸";
+  display: inline-block;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.health-details[open] .health-summary::before {
+  transform: rotate(90deg);
+}
+
+.health-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--muted);
+}
+
+.health-dot.ok {
+  background: var(--ok);
+}
+
+.health-dot.warning {
+  background: var(--warn);
+}
+
+.health-dot.error {
+  background: var(--danger);
+}
+
+.health-warning-banner {
+  margin: 10px 0 0;
+}
+
+.health-table-wrap {
+  overflow-x: auto;
+  margin-top: 12px;
+}
+
+.health-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.health-table th,
+.health-table td {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--soft-line);
+}
+
+.health-table th {
+  color: var(--muted);
+  font-weight: 800;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.health-table td.health-error-cell {
+  color: var(--danger);
+  white-space: normal;
+}
+
 .muted {
   color: var(--muted);
   font-weight: 400;

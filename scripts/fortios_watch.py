@@ -156,6 +156,234 @@ def cross_process_lock(target_path: Path):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+# --- Health-state tracking --------------------------------------------------------------------
+# A separate JSON file from the main catalog (data/fortios-health.json by default), recording
+# per-source collection status so the UI can show "how fresh/healthy is our data" without
+# conflating that with the catalog content itself. Written under cross_process_lock() like
+# everything else; a failure to write health state must never fail the actual collection (see
+# main()'s call site, which wraps record_health_results() in a try/except of its own).
+
+HEALTH_STATUS_OK = "ok"
+HEALTH_STATUS_WARNING = "warning"
+HEALTH_STATUS_ERROR = "error"
+HEALTH_STATUS_RUNNING = "running"
+HEALTH_STATUS_SKIPPED = "skipped"
+
+SOURCE_FORTIOS_DOCS = "fortios-docs"
+SOURCE_FORTIANALYZER = "fortianalyzer"
+SOURCE_FORTIMANAGER = "fortimanager"
+SOURCE_FORTICLIENT = "forticlient"
+SOURCE_FORTICLIENT_EMS = "forticlient-ems"
+SOURCE_CVE_PSIRT = "cve-psirt"
+SOURCE_FORTIOS_LIFECYCLE = "fortios-lifecycle"
+SOURCE_COMPAT_MATRIX = "compat-matrix"
+SOURCE_DAILY_RUN = "daily-run"
+
+ALL_HEALTH_SOURCES = (
+    SOURCE_FORTIOS_DOCS,
+    SOURCE_FORTIANALYZER,
+    SOURCE_FORTIMANAGER,
+    SOURCE_FORTICLIENT,
+    SOURCE_FORTICLIENT_EMS,
+    SOURCE_CVE_PSIRT,
+    SOURCE_FORTIOS_LIFECYCLE,
+    SOURCE_COMPAT_MATRIX,
+    SOURCE_DAILY_RUN,
+)
+
+HEALTH_SOURCE_LABELS = {
+    SOURCE_FORTIOS_DOCS: "Catalogue FortiOS",
+    SOURCE_FORTIANALYZER: "FortiAnalyzer",
+    SOURCE_FORTIMANAGER: "FortiManager",
+    SOURCE_FORTICLIENT: "FortiClient",
+    SOURCE_FORTICLIENT_EMS: "FortiClient EMS",
+    SOURCE_CVE_PSIRT: "CVE PSIRT",
+    SOURCE_FORTIOS_LIFECYCLE: "Cycle de vie FortiOS",
+    SOURCE_COMPAT_MATRIX: "Matrice de compatibilité EMS/FortiClient",
+}
+
+DEFAULT_HEALTH_PATH = Path("data/fortios-health.json")
+DEFAULT_NOTIFY_HISTORY_PATH = Path("data/fortios-notify-history.json")
+
+# A health entry is meant to be a short, human-readable summary shown directly in the UI, never
+# a debugging dump -- scrub anything that looks like a credential/token before it's ever
+# persisted, and never let a full traceback or SMTP auth detail leak through.
+_HEALTH_SECRET_PATTERNS = (
+    re.compile(r"(?i)(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*\S+"),
+    re.compile(r"(?i)Authorization:\s*\S+"),
+)
+
+
+def sanitize_health_error(error: BaseException | str | None) -> str | None:
+    """A short, readable error string safe to store in the health file and show in the UI --
+    never a full traceback, and never a credential/token that might have leaked into an
+    exception message (e.g. an SMTP auth failure).
+    """
+    if error is None:
+        return None
+    message = str(error).strip()
+    if not message:
+        message = type(error).__name__ if isinstance(error, BaseException) else "Erreur inconnue"
+    for pattern in _HEALTH_SECRET_PATTERNS:
+        message = pattern.sub("[masqué]", message)
+    message = message.splitlines()[0]  # one line only, never a multi-line traceback
+    return message[:300]
+
+
+@dataclass
+class HealthSourceResult:
+    """What a single source's collection attempt produced this run, fed into
+    record_health_results() at commit time. `started_at` is stamped once per attempt (via
+    health_mark_running(), or manually for sources that don't use it) and doubles as the
+    ordering key that keeps an older run's result from clobbering a newer one.
+    """
+    status: str
+    started_at: str
+    duration_seconds: float
+    items_collected: int | None = None
+    error: BaseException | str | None = None
+
+
+def _merge_health_source(existing: dict[str, Any], result: HealthSourceResult) -> dict[str, Any]:
+    # An older/slower run's result must never clobber what a later attempt already recorded --
+    # lastAttemptAt is the ordering key (this run's own started_at vs whatever's on disk).
+    if existing.get("lastAttemptAt") and existing["lastAttemptAt"] > result.started_at:
+        return existing
+
+    record = dict(existing)
+    record["status"] = result.status
+    record["lastAttemptAt"] = result.started_at
+    record["durationSeconds"] = result.duration_seconds
+    if result.items_collected is not None:
+        record["itemsCollected"] = result.items_collected
+
+    if result.status == HEALTH_STATUS_OK:
+        record["lastSuccessAt"] = result.started_at
+        record["consecutiveFailures"] = 0
+        record["lastError"] = None
+    elif result.status == HEALTH_STATUS_WARNING:
+        # Succeeded technically, but the result looked abnormal (e.g. an empty result where one
+        # wasn't expected) -- explicitly NOT treated as a full success ("ne pas considérer
+        # automatiquement une source vide comme réussie si cela paraît anormal"), so
+        # lastSuccessAt is left as it was and consecutiveFailures isn't touched either way; only
+        # the visible warning message is recorded.
+        record["lastErrorAt"] = result.started_at
+        record["lastError"] = sanitize_health_error(result.error)
+    elif result.status == HEALTH_STATUS_ERROR:
+        record["lastErrorAt"] = result.started_at
+        record["lastError"] = sanitize_health_error(result.error)
+        record["consecutiveFailures"] = existing.get("consecutiveFailures", 0) + 1
+        # lastSuccessAt is deliberately never touched here.
+    elif result.status == HEALTH_STATUS_SKIPPED:
+        # Deliberately not run this time (--skip-network, or the corresponding --*-catalog flag
+        # left off) -- distinct from a failure: never touch consecutiveFailures, lastSuccessAt,
+        # or lastError.
+        record.setdefault("consecutiveFailures", existing.get("consecutiveFailures", 0))
+    return record
+
+
+def health_mark_running(health_path: Path, source_id: str) -> str:
+    """Stamp `source_id` as currently running, written immediately (not batched with the rest of
+    the run's results) so a process that dies mid-collection leaves a visibly stuck "running"
+    status with a stale lastAttemptAt, rather than silently vanishing with no trace at all.
+    Returns the started_at timestamp — reuse it when building this source's HealthSourceResult
+    so both writes agree on the same attempt's identity.
+    """
+    started_at = utc_now()
+    try:
+        with cross_process_lock(health_path):
+            state = read_json(health_path, {"sources": {}})
+            sources = state.setdefault("sources", {})
+            existing = sources.get(source_id, {})
+            record = dict(existing)
+            record["status"] = HEALTH_STATUS_RUNNING
+            record["lastAttemptAt"] = started_at
+            sources[source_id] = record
+            state["updatedAt"] = utc_now()
+            write_json(health_path, state)
+    except OSError:
+        pass  # health tracking is best-effort -- never let it block the actual collection
+    return started_at
+
+
+def record_health_results(health_path: Path, results: dict[str, HealthSourceResult]) -> None:
+    """Apply a batch of this run's HealthSourceResults to the health-state file, atomically and
+    under the same cross-process lock as every other writer.
+    """
+    with cross_process_lock(health_path):
+        state = read_json(health_path, {"sources": {}})
+        sources = state.setdefault("sources", {})
+        for source_id, result in results.items():
+            sources[source_id] = _merge_health_source(sources.get(source_id, {}), result)
+        state["updatedAt"] = utc_now()
+        write_json(health_path, state)
+
+
+def parse_health_timestamp(value: str) -> dt.datetime:
+    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def classify_source_severity(
+    record: dict[str, Any],
+    *,
+    now: str | None = None,
+    max_age_hours: float = 48,
+    repeated_failure_threshold: int = 2,
+) -> str:
+    """One of "ok" (green), "warning" (orange), or "error" (red), combining status, consecutive
+    failures, and data age into the single traffic-light signal the UI shows per source:
+    - red: repeated failures, or data older than `max_age_hours` (or never succeeded at all);
+    - orange: aging-but-not-stale, a single recent failure, a warning result, or a deliberate skip;
+    - green: a recent, clean success.
+    """
+    now_dt = parse_health_timestamp(now) if now else dt.datetime.now(dt.UTC)
+    consecutive_failures = record.get("consecutiveFailures") or 0
+    last_success_at = record.get("lastSuccessAt")
+    status = record.get("status")
+
+    if consecutive_failures >= repeated_failure_threshold:
+        return "error"
+    if not last_success_at:
+        return "warning" if status == HEALTH_STATUS_SKIPPED else "error"
+    age_hours = (now_dt - parse_health_timestamp(last_success_at)).total_seconds() / 3600
+    if age_hours > max_age_hours:
+        return "error"
+    if status in (HEALTH_STATUS_WARNING, HEALTH_STATUS_SKIPPED) or consecutive_failures > 0:
+        return "warning"
+    return "ok"
+
+
+def count_firmwares(state: dict[str, Any]) -> int:
+    return sum(
+        len(model.get("firmwares", []))
+        for product in state.get("products", [])
+        for model in product.get("models", [])
+    )
+
+
+def count_firmwares_for_product(state: dict[str, Any], product_id: str) -> int:
+    return sum(
+        len(model.get("firmwares", []))
+        for product in state.get("products", [])
+        if product.get("id") == product_id
+        for model in product.get("models", [])
+    )
+
+
+def versions_by_product(state: dict[str, Any]) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
+    for product in state.get("products", []):
+        product_id = product.get("id")
+        if not product_id:
+            continue
+        versions = result.setdefault(product_id, set())
+        for model in product.get("models", []):
+            for firmware in model.get("firmwares", []):
+                if firmware.get("version"):
+                    versions.add(firmware["version"])
+    return result
+
+
 def version_key(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
 
@@ -1614,6 +1842,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Backfill historique complet des CVE PSIRT via la liste paginée par produit (usage ponctuel, plus lent que --cve-catalog).",
     )
     parser.add_argument("--cve-backfill-max-pages", type=int, default=30, help="Pages max à parcourir par produit lors du --cve-backfill.")
+    parser.add_argument(
+        "--health-output",
+        type=Path,
+        default=DEFAULT_HEALTH_PATH,
+        help="Fichier d'état de santé des collectes (séparé du catalogue principal).",
+    )
+    parser.add_argument(
+        "--notify-history-output",
+        type=Path,
+        default=DEFAULT_NOTIFY_HISTORY_PATH,
+        help="Fichier d'historique de déduplication des notifications email.",
+    )
+    parser.add_argument(
+        "--test-email",
+        action="store_true",
+        help="Envoie un email de test (vérifie la config SMTP), ne lance aucune collecte.",
+    )
     parser.add_argument("--timeout", type=int, default=12)
     parser.add_argument("--skip-network", action="store_true")
     return parser.parse_args(argv)
@@ -1621,8 +1866,38 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+
+    if args.test_email:
+        # Deliberately short-circuits before touching anything else: no collection, no catalog
+        # read/write, no dedup history — this is purely a "does SMTP actually work" check.
+        import fortios_notify
+
+        config = fortios_notify.load_email_config()
+        return 0 if fortios_notify.send_test_email(config) else 1
+
+    run_started_at_monotonic = time.monotonic()
     before = normalize_state(read_json(args.base, {}))
     state = normalize_state(read_json(args.base, {}))
+
+    # Snapshots taken before any collection runs, purely for the email notification step at the
+    # very end (see the "Notifications" block below) — every event is a diff against these, never
+    # a re-scan of the whole catalog, which is what keeps a first activation or a --cve-backfill
+    # from spamming years of pre-existing history.
+    health_before = read_json(args.health_output, {}).get("sources", {})
+    cves_before_by_id = {item["id"]: item for item in before.get("cves", []) if item.get("id")}
+    lifecycle_before = dict(before.get("fortiosLifecycle", {}))
+
+    # Populated as each source below finishes (success, failure, or deliberate skip), then
+    # applied to args.health_output in one batch near the end — same delta pattern as the
+    # advisories/paths/CVE deltas, and for the same reason: never write partial health state
+    # sprinkled across the run when one atomic commit at the end is just as easy and safer.
+    health_results: dict[str, HealthSourceResult] = {}
+
+    def record_source(source_id: str, started_at: str, t0: float, *, status: str, items: int | None = None, error: Any = None) -> None:
+        health_results[source_id] = HealthSourceResult(
+            status=status, started_at=started_at, duration_seconds=round(time.monotonic() - t0, 3),
+            items_collected=items, error=error,
+        )
 
     forticare_json = args.forticare_json
     if forticare_json:
@@ -1630,34 +1905,104 @@ def main(argv: list[str]) -> int:
 
     skipped_docs_versions: list[str] = []
     if args.docs_catalog and not args.skip_network:
-        major_versions = tuple(item.strip() for item in args.docs_major_versions.split(",") if item.strip())
-        docs_state, skipped_docs_versions = collect_docs_catalog(major_versions, args.timeout)
-        state = merge_state(state, docs_state)
+        t0 = time.monotonic()
+        started_at = health_mark_running(args.health_output, SOURCE_FORTIOS_DOCS)
         try:
-            apply_fortios_maturity(state, fetch_fortios_version_maturity(args.timeout))
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
-            pass
+            major_versions = tuple(item.strip() for item in args.docs_major_versions.split(",") if item.strip())
+            docs_state, skipped_docs_versions = collect_docs_catalog(major_versions, args.timeout)
+            items = count_firmwares(docs_state)
+            state = merge_state(state, docs_state)
+            try:
+                apply_fortios_maturity(state, fetch_fortios_version_maturity(args.timeout))
+            except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+                pass  # maturity is a soft enrichment on top of the docs catalog, not its core success
+            record_source(
+                SOURCE_FORTIOS_DOCS, started_at, t0,
+                status=HEALTH_STATUS_OK if items > 0 else HEALTH_STATUS_WARNING,
+                items=items,
+                error=None if items > 0 else "Aucune version collectée depuis docs.fortinet.com",
+            )
+        except Exception as error:  # noqa: BLE001 - any failure here must still be recorded, then re-raised is NOT desired: a docs-catalog hiccup shouldn't abort the whole run either.
+            record_source(SOURCE_FORTIOS_DOCS, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
+
+        t0 = time.monotonic()
+        started_at = health_mark_running(args.health_output, SOURCE_FORTIOS_LIFECYCLE)
         try:
             state["fortiosLifecycle"] = fetch_fortios_lifecycle(args.timeout)
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
-            pass
-    elif args.docs_catalog:
-        skipped_docs_versions = ["collecte ignorée avec --skip-network"]
+            record_source(
+                SOURCE_FORTIOS_LIFECYCLE, started_at, t0,
+                status=HEALTH_STATUS_OK, items=len(state["fortiosLifecycle"]),
+            )
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
+            record_source(SOURCE_FORTIOS_LIFECYCLE, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
+    else:
+        skip_reason = "collecte ignorée avec --skip-network" if args.docs_catalog else None
+        if skip_reason:
+            skipped_docs_versions = [skip_reason]
+        for source_id in (SOURCE_FORTIOS_DOCS, SOURCE_FORTIOS_LIFECYCLE):
+            record_source(source_id, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
 
     tool_products = [item.strip() for item in args.tool_products.split(",") if item.strip()]
+    tool_product_health_sources = {"fortianalyzer": SOURCE_FORTIANALYZER, "fortimanager": SOURCE_FORTIMANAGER}
     if tool_products and not args.skip_network:
         for product_id in tool_products:
             if product_id not in PRODUCTS:
                 continue
-            state = merge_state(state, collect_tool_catalog(product_id, args.timeout))
+            source_id = tool_product_health_sources.get(product_id)
+            t0 = time.monotonic()
+            started_at = health_mark_running(args.health_output, source_id) if source_id else utc_now()
+            try:
+                product_state = collect_tool_catalog(product_id, args.timeout)
+                items = count_firmwares_for_product(product_state, product_id)
+                state = merge_state(state, product_state)
+                if source_id:
+                    record_source(
+                        source_id, started_at, t0,
+                        status=HEALTH_STATUS_OK if items > 0 else HEALTH_STATUS_WARNING,
+                        items=items,
+                        error=None if items > 0 else f"Aucune version collectée pour {product_id}",
+                    )
+            except Exception as error:  # noqa: BLE001 - one product's failure shouldn't abort the others.
+                if source_id:
+                    record_source(source_id, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
+        for product_id, source_id in tool_product_health_sources.items():
+            if product_id not in tool_products:
+                record_source(source_id, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+    else:
+        for source_id in tool_product_health_sources.values():
+            record_source(source_id, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
 
     skipped_forticlient: list[str] = []
     if args.forticlient_catalog and not args.skip_network:
-        major_versions = tuple(item.strip() for item in args.docs_major_versions.split(",") if item.strip())
-        forticlient_state, skipped_forticlient = collect_forticlient_catalog(major_versions, args.timeout)
-        state = merge_state(state, forticlient_state)
-    elif args.forticlient_catalog:
-        skipped_forticlient = ["collecte ignorée avec --skip-network"]
+        t0 = time.monotonic()
+        started_at_fc = health_mark_running(args.health_output, SOURCE_FORTICLIENT)
+        started_at_ems = health_mark_running(args.health_output, SOURCE_FORTICLIENT_EMS)
+        try:
+            major_versions = tuple(item.strip() for item in args.docs_major_versions.split(",") if item.strip())
+            forticlient_state, skipped_forticlient = collect_forticlient_catalog(major_versions, args.timeout)
+            items_fc = count_firmwares_for_product(forticlient_state, FORTICLIENT_PRODUCT_ID)
+            items_ems = count_firmwares_for_product(forticlient_state, FORTICLIENT_EMS_PRODUCT_ID)
+            state = merge_state(state, forticlient_state)
+            # One HTTP/scraping flow covers both products together, so they succeed/fail as a
+            # pair — only the item counts are tracked per product.
+            record_source(
+                SOURCE_FORTICLIENT, started_at_fc, t0,
+                status=HEALTH_STATUS_OK if items_fc > 0 else HEALTH_STATUS_WARNING, items=items_fc,
+                error=None if items_fc > 0 else "Aucune version FortiClient collectée",
+            )
+            record_source(
+                SOURCE_FORTICLIENT_EMS, started_at_ems, t0,
+                status=HEALTH_STATUS_OK if items_ems > 0 else HEALTH_STATUS_WARNING, items=items_ems,
+                error=None if items_ems > 0 else "Aucune version FortiClient EMS collectée",
+            )
+        except Exception as error:  # noqa: BLE001 - recorded, not re-raised: doesn't abort the rest of the run.
+            record_source(SOURCE_FORTICLIENT, started_at_fc, t0, status=HEALTH_STATUS_ERROR, error=error)
+            record_source(SOURCE_FORTICLIENT_EMS, started_at_ems, t0, status=HEALTH_STATUS_ERROR, error=error)
+    else:
+        if args.forticlient_catalog:
+            skipped_forticlient = ["collecte ignorée avec --skip-network"]
+        for source_id in (SOURCE_FORTICLIENT, SOURCE_FORTICLIENT_EMS):
+            record_source(source_id, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
 
     # Advisories and paths are the two fields a live user can create/edit/delete through
     # fortios_server.py at any moment, including during this run's multi-minute network
@@ -1707,21 +2052,43 @@ def main(argv: list[str]) -> int:
     cve_results_by_advisory: dict[str, list[dict[str, Any]]] = {}
     skipped_cves: list[str] = []
     if (args.cve_catalog or args.cve_backfill) and not args.skip_network:
-        existing_advisory_ids = {item.get("advisoryId") for item in state.get("cves", [])}
-        cve_results_by_advisory, skipped_cves = collect_cve_catalog(
-            existing_advisory_ids,
-            args.timeout,
-            backfill=args.cve_backfill,
-            backfill_max_pages=args.cve_backfill_max_pages,
-        )
-        # Each advisory here got a definitive CSAF result this run: replace (not just upsert)
-        # whatever we had for it, so a CVE Fortinet has since removed/reattributed away from our
-        # tracked products actually disappears instead of lingering forever. Advisories in
-        # skipped_cves are left completely untouched. Reconciling `state` here (in addition to
-        # `final_state` below) is what makes the numbers in the report accurate; the actual
-        # persisted removal only really takes effect at the final commit.
-        for advisory_id, entries in cve_results_by_advisory.items():
-            cve_stats += replace_cves_for_advisory(state, advisory_id, entries)
+        t0 = time.monotonic()
+        started_at = health_mark_running(args.health_output, SOURCE_CVE_PSIRT)
+        try:
+            existing_advisory_ids = {item.get("advisoryId") for item in state.get("cves", [])}
+            cve_results_by_advisory, skipped_cves = collect_cve_catalog(
+                existing_advisory_ids,
+                args.timeout,
+                backfill=args.cve_backfill,
+                backfill_max_pages=args.cve_backfill_max_pages,
+            )
+            # Each advisory here got a definitive CSAF result this run: replace (not just upsert)
+            # whatever we had for it, so a CVE Fortinet has since removed/reattributed away from
+            # our tracked products actually disappears instead of lingering forever. Advisories
+            # in skipped_cves are left completely untouched. Reconciling `state` here (in
+            # addition to `final_state` below) is what makes the numbers in the report accurate;
+            # the actual persisted removal only really takes effect at the final commit.
+            for advisory_id, entries in cve_results_by_advisory.items():
+                cve_stats += replace_cves_for_advisory(state, advisory_id, entries)
+
+            total_considered = len(cve_results_by_advisory) + len(skipped_cves)
+            if total_considered > 0 and not cve_results_by_advisory:
+                cve_health_status = HEALTH_STATUS_ERROR
+                cve_health_error = f"{len(skipped_cves)} advisorie(s) PSIRT injoignable(s)"
+            elif skipped_cves:
+                cve_health_status = HEALTH_STATUS_WARNING
+                cve_health_error = f"{len(skipped_cves)} advisorie(s) PSIRT ignorée(s) (réseau/parsing)"
+            else:
+                cve_health_status = HEALTH_STATUS_OK
+                cve_health_error = None
+            record_source(
+                SOURCE_CVE_PSIRT, started_at, t0, status=cve_health_status,
+                items=cve_stats.added + cve_stats.updated, error=cve_health_error,
+            )
+        except Exception as error:  # noqa: BLE001 - recorded, not re-raised.
+            record_source(SOURCE_CVE_PSIRT, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
+    else:
+        record_source(SOURCE_CVE_PSIRT, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
 
     # This run started from a read of args.output taken potentially minutes ago (network
     # scraping in between) — fortios_server.py or import_forticlient_compat.py may have written
@@ -1771,6 +2138,75 @@ def main(argv: list[str]) -> int:
         ),
         encoding="utf-8",
     )
+
+    # Overall summary across every source touched this run: red if anything hard-failed, orange
+    # if only warnings/skips, green otherwise. Computed from health_results rather than any
+    # separate bookkeeping, so it can never drift from what's actually being reported per source.
+    failed_sources = sorted(sid for sid, result in health_results.items() if result.status == HEALTH_STATUS_ERROR)
+    warned_sources = sorted(sid for sid, result in health_results.items() if result.status == HEALTH_STATUS_WARNING)
+    if failed_sources:
+        daily_run_status = HEALTH_STATUS_ERROR
+        daily_run_error = f"En échec : {', '.join(failed_sources)}"
+    elif warned_sources:
+        daily_run_status = HEALTH_STATUS_WARNING
+        daily_run_error = f"Avertissement : {', '.join(warned_sources)}"
+    else:
+        daily_run_status = HEALTH_STATUS_OK
+        daily_run_error = None
+    health_results[SOURCE_DAILY_RUN] = HealthSourceResult(
+        status=daily_run_status,
+        started_at=utc_now(),
+        duration_seconds=round(time.monotonic() - run_started_at_monotonic, 3),
+        items_collected=count_firmwares(final_state),
+        error=daily_run_error,
+    )
+    # Health tracking is entirely best-effort: a problem writing it (disk full, permissions...)
+    # must never be treated as if the actual collection above had failed.
+    try:
+        record_health_results(args.health_output, health_results)
+    except OSError as error:
+        sys.stderr.write(f"Avertissement : échec de l'écriture de l'état de santé ({error}).\n")
+
+    # Email notifications: entirely best-effort and additive, never touching the catalog or the
+    # exit code — every event below is a diff against a snapshot taken before this run's own
+    # collection started, never a re-scan of the whole catalog, which is what keeps a first
+    # activation (or a --cve-backfill, explicitly excluded below) from spamming years of
+    # pre-existing history in one email.
+    try:
+        import fortios_notify  # deferred: avoids a load-time circular import with this module
+
+        email_config = fortios_notify.load_email_config()
+        if email_config.enabled:
+            health_after = read_json(args.health_output, {}).get("sources", {})
+            events: list[Any] = []
+            if not args.cve_backfill:
+                product_labels = {p.get("id"): p.get("label", p.get("id")) for p in final_state.get("products", [])}
+                events += fortios_notify.derive_version_events(
+                    versions_by_product(before), versions_by_product(final_state), product_labels,
+                )
+                newly_added_cves = [
+                    item for item in final_state.get("cves", [])
+                    if item.get("id") and item["id"] not in cves_before_by_id
+                ]
+                events += fortios_notify.derive_new_cve_events(newly_added_cves)
+                cves_after_by_id = {item["id"]: item for item in final_state.get("cves", []) if item.get("id")}
+                events += fortios_notify.derive_cve_modification_events(cves_before_by_id, cves_after_by_id)
+                events += fortios_notify.derive_eol_events(lifecycle_before, final_state.get("fortiosLifecycle", {}))
+            events += fortios_notify.derive_source_health_events(health_before, health_after, HEALTH_SOURCE_LABELS)
+
+            if events:
+                history = fortios_notify.load_notify_history(args.notify_history_output)
+                new_events = fortios_notify.filter_new_events(events, history)
+                composed = fortios_notify.compose_email(
+                    new_events, app_url=email_config.app_url, run_timestamp=final_state["generatedAt"],
+                )
+                if composed:
+                    subject, body = composed
+                    if fortios_notify.send_email(email_config, subject, body):
+                        fortios_notify.record_sent_events(args.notify_history_output, new_events)
+    except Exception as error:  # noqa: BLE001 - a broken notification path must never fail the run.
+        sys.stderr.write(f"Avertissement : notification email non envoyée ({error}).\n")
+
     return 0
 
 

@@ -2,4 +2,15 @@ __pycache__/
 *.py[cod]
 .DS_Store
 data/advisory-images/
+data/fortios-health.json
+data/fortios-notify-history.json
+data/*.lock
 .venv-compat/
+.venv-test/
+test-results/
+playwright-report/
+
+# Real SMTP credentials belong in /etc/fortios-upgrade-intelligence.env (outside the repo),
+# never here — this only guards against someone accidentally dropping a real .env file in-tree.
+*.env
+!*.env.example
