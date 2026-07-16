@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import fcntl
 import html
 import json
 import os
@@ -30,6 +31,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -123,7 +125,7 @@ def read_json(path: Path, default: Any) -> Any:
 
 def write_json(path: Path, payload: Any) -> None:
     """Write via a temp file + atomic rename so a crash mid-write (or a racing writer — see
-    fortios_server.py's per-request lock) can never leave `path` truncated or half-written.
+    cross_process_lock() below) can never leave `path` truncated or half-written.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f"{path.name}.tmp-{os.getpid()}")
@@ -131,6 +133,27 @@ def write_json(path: Path, payload: Any) -> None:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
     os.replace(tmp_path, path)
+
+
+@contextmanager
+def cross_process_lock(target_path: Path):
+    """Exclusive lock scoped to `target_path`, shared by every writer of the generated JSON:
+    fortios_server.py's live request handlers, this script's daily batch run, and
+    import_forticlient_compat.py. An in-process threading.Lock (what fortios_server.py used to
+    rely on alone) only serializes that one process's own threads — it does nothing to stop a
+    second process from reading the file mid-way through another process's read-modify-write.
+
+    Hold this only around the actual read -> modify -> write critical section, never around slow
+    network I/O (the daily script's multi-minute scraping happens entirely before it's acquired).
+    """
+    lock_path = target_path.with_name(f"{target_path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def version_key(version: str) -> tuple[int, ...]:
@@ -874,14 +897,21 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
                 version = firmware.get("version")
                 if not version:
                     continue
-                existing_firmware = firmware_by_version.get(version, {})
-                merged_firmware = {**existing_firmware, **firmware}
+                existing_firmware = firmware_by_version.get(version)
+                merged_firmware = {**(existing_firmware or {}), **firmware}
                 # The incoming side is usually a throwaway collector state (collect_docs_catalog()
                 # etc. start from a blank state, so every version it touches looks "brand new" to
-                # it and gets stamped with today's date) — never let that clobber the base's real
-                # first-seen date, or every version would re-flip to "New" on every daily refresh.
-                if "discoveredAt" in existing_firmware:
-                    merged_firmware["discoveredAt"] = existing_firmware["discoveredAt"]
+                # it and gets stamped with today's date). If the base already knew this version
+                # before this run, it can never be newly discovered today, full stop — whether or
+                # not it already carried a discoveredAt (~14k pre-migration entries don't; the
+                # frontend already treats a missing discoveredAt as "not new", so there's nothing
+                # to backfill). Only a version genuinely absent from the base keeps incoming's
+                # fresh stamp.
+                if existing_firmware is not None:
+                    if "discoveredAt" in existing_firmware:
+                        merged_firmware["discoveredAt"] = existing_firmware["discoveredAt"]
+                    else:
+                        merged_firmware.pop("discoveredAt", None)
                 firmware_by_version[version] = merged_firmware
             target_model["firmwares"] = sorted(
                 firmware_by_version.values(),
@@ -1213,33 +1243,75 @@ def read_forticare_json(path: Path) -> dict[str, Any]:
     return state
 
 
+class UnsupportedExportShape(ValueError):
+    """Raised when `text` parses as JSON but doesn't match any explicitly recognized export
+    shape — the signal to reject the file outright rather than silently falling back to the
+    regex scan (which is exactly how a decoy version number in an unrelated field like "note"
+    used to get mistaken for a hop)."""
+
+
 def parse_upgrade_export_json(text: str) -> list[str] | None:
-    """If `text` is a raw Fortinet Upgrade Path Tool JSON response (result.path[].version, the
-    same shape fetch_official_upgrade_path() parses from a live call), extract hops from that
-    structure directly. Returns None (not []) when the text isn't recognizable as this shape, so
-    the caller falls back to scanning the raw text — still needed for the .csv/.txt exports the
-    same import also accepts (see README "Ajouter un export Fortinet Upgrade Path Tool").
+    """Extract hops from `text` if it's JSON in one of two explicitly recognized shapes:
+    - the raw Fortinet Upgrade Path Tool API response, result.path[].version (the same shape
+      fetch_official_upgrade_path() parses from a live call);
+    - a plain "path" array, of either version strings or {"version": ...} objects.
+
+    Returns None (not []) when `text` isn't valid JSON at all, so the caller falls back to the
+    loose regex scan — still needed for the .csv/.txt exports this same import also accepts (see
+    README "Ajouter un export Fortinet Upgrade Path Tool"). Raises UnsupportedExportShape when
+    `text` IS valid JSON but matches neither shape: that case must never fall back to the regex
+    scan over the same document, since a real path field sitting next to an unrelated field like
+    "note": "fixed since 6.4.15" would otherwise both get scanned indiscriminately.
     """
     try:
         payload = json.loads(text)
     except (json.JSONDecodeError, TypeError):
         return None
-    result = payload.get("result") if isinstance(payload, dict) else None
-    path_items = result.get("path") if isinstance(result, dict) else None
-    if not isinstance(path_items, list):
+
+    if isinstance(payload, dict):
+        result = payload.get("result")
+        if isinstance(result, dict) and isinstance(result.get("path"), list):
+            return [item["version"] for item in result["path"] if isinstance(item, dict) and item.get("version")]
+
+        path_field = payload.get("path")
+        if isinstance(path_field, list):
+            hops: list[str] = []
+            for item in path_field:
+                if isinstance(item, str):
+                    hops.append(item)
+                elif isinstance(item, dict) and item.get("version"):
+                    hops.append(item["version"])
+            return hops
+
+    raise UnsupportedExportShape(
+        "JSON valide mais structure non reconnue (attendu result.path[].version ou path[])."
+    )
+
+
+def parse_upgrade_export(
+    text: str, expected_from: str | None = None, expected_to: str | None = None
+) -> list[str] | None:
+    """Returns hops, or None if the file should be rejected outright: unsupported-but-valid JSON
+    shape, or extracted endpoints that contradict the from/to versions encoded in the filename
+    (see parse_export_filename) — a mismatch there means something is wrong with the file's
+    content, not just noisy, so the whole path is discarded rather than trusted partially.
+    """
+    try:
+        json_hops = parse_upgrade_export_json(text)
+    except UnsupportedExportShape:
         return None
-    hops = [item["version"] for item in path_items if isinstance(item, dict) and item.get("version")]
-    return hops or None
-
-
-def parse_upgrade_export(text: str) -> list[str]:
-    json_hops = parse_upgrade_export_json(text)
     if json_hops is not None:
-        return unique_in_order(json_hops)
-    # Loose fallback for .csv/.txt exports with no fixed structure: scan for version-looking
-    # substrings anywhere in the text. Only reached for non-JSON input — a stray version number in
-    # a JSON export's unrelated note/comment field no longer gets picked up as a hop.
-    return unique_in_order(VERSION_RE.findall(text))
+        hops = unique_in_order(json_hops)
+    else:
+        # Not JSON at all — loose fallback for .csv/.txt exports with no fixed structure: scan
+        # for version-looking substrings anywhere in the text.
+        hops = unique_in_order(VERSION_RE.findall(text))
+
+    if hops and expected_from and hops[0] != expected_from:
+        return None
+    if hops and expected_to and hops[-1] != expected_to:
+        return None
+    return hops
 
 
 def read_upgrade_exports(directory: Path) -> list[UpgradePath]:
@@ -1255,8 +1327,8 @@ def read_upgrade_exports(directory: Path) -> list[UpgradePath]:
             continue
 
         text = file_path.read_text(encoding="utf-8", errors="ignore")
-        hops = parse_upgrade_export(text)
-        if len(hops) < 2:
+        hops = parse_upgrade_export(text, expected_from=from_version, expected_to=to_version)
+        if not hops or len(hops) < 2:
             continue
 
         paths.append(
@@ -1484,9 +1556,20 @@ def main(argv: list[str]) -> int:
     elif args.forticlient_catalog:
         skipped_forticlient = ["collecte ignorée avec --skip-network"]
 
+    # Advisories and paths are the two fields a live user can create/edit/delete through
+    # fortios_server.py at any moment, including during this run's multi-minute network
+    # collection — so unlike everything else `state` accumulates below (firmwares, CVEs,
+    # lifecycle: this script's own exclusive domain, safe to bulk-merge), these two are tracked
+    # separately as precise deltas and applied as targeted upserts onto a freshly re-read state
+    # at commit time, never as a wholesale replace of a possibly-stale full copy (see the commit
+    # section below for why that distinction matters).
+    advisory_deltas: list[dict[str, Any]] = []
+    path_deltas: list[UpgradePath] = []
+
     for advisory in import_csv_advisories(args.advisories_csv):
         state["advisories"] = [item for item in state["advisories"] if item.get("id") != advisory["id"]]
         state["advisories"].append(advisory)
+        advisory_deltas.append(advisory)
 
     changed_paths = 0
     official_requests = read_official_path_requests(args.official_paths_csv)
@@ -1504,12 +1587,14 @@ def main(argv: list[str]) -> int:
                 upsert_firmware(state, firmware)
             if upsert_path(state, official_path):
                 changed_paths += 1
+            path_deltas.append(official_path)
 
     for path in read_upgrade_exports(args.upgrade_exports):
         for version in path.hops:
             upsert_firmware(state, Firmware(path.product, path.model, version))
         if upsert_path(state, path):
             changed_paths += 1
+        path_deltas.append(path)
 
     psirt_versions: set[str] = set()
     if not args.skip_network:
@@ -1530,21 +1615,32 @@ def main(argv: list[str]) -> int:
                 added_cves += 1
 
     # This run started from a read of args.output taken potentially minutes ago (network
-    # scraping in between) — fortios_server.py may have written new advisories/compatibilities/
-    # paths to that same file since, under its own STATE_LOCK, which only guards its own threads,
-    # not this separate process. Re-reading right before the final write and merging our
-    # collected changes onto that fresh copy (rather than onto the stale start-of-run one) closes
-    # that window from several minutes down to the instant between this read and the write below
-    # — not a full cross-process lock, but proportionate for a small internal tool.
-    latest_from_disk = normalize_state(read_json(args.output, {}))
-    state = merge_state(latest_from_disk, state)
-    state["generatedAt"] = utc_now()
-    write_json(args.output, state)
+    # scraping in between) — fortios_server.py or import_forticlient_compat.py may have written
+    # to that same file since. The lock below closes the race with those other writers; what it
+    # doesn't do on its own is stop THIS run's own stale copy from clobbering what they wrote:
+    # `state` still carries the advisories/paths/compatibilities exactly as they were at the top
+    # of this function; blindly merging that in would replace a concurrent edit with our stale
+    # pre-collection copy, or resurrect something a user deleted while we were scraping. So the
+    # bulk merge below only ever carries firmwares/CVEs/lifecycle (this script's own exclusive
+    # domain — no other process writes those) onto a freshly re-read state, while advisories and
+    # paths are applied as precise upserts from the deltas tracked above, and compatibilities
+    # (never touched by this script at all) are left completely alone.
+    with cross_process_lock(args.output):
+        latest_from_disk = normalize_state(read_json(args.output, {}))
+        state_for_bulk_merge = {**state, "advisories": [], "paths": [], "compatibilities": []}
+        final_state = merge_state(latest_from_disk, state_for_bulk_merge)
+        for advisory in advisory_deltas:
+            upsert_advisory(final_state, advisory)
+        for path in path_deltas:
+            upsert_path(final_state, path)
+        final_state["generatedAt"] = utc_now()
+        write_json(args.output, final_state)
+
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(
         build_report(
             before,
-            state,
+            final_state,
             psirt_versions,
             changed_paths,
             docs_catalog_enabled=args.docs_catalog,

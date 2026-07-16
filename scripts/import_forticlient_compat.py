@@ -31,7 +31,15 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fortios_watch import normalize_state, read_json, upsert_compatibility, urlopen_with_retry, utc_now, write_json  # noqa: E402
+from fortios_watch import (  # noqa: E402
+    cross_process_lock,
+    normalize_state,
+    read_json,
+    upsert_compatibility,
+    urlopen_with_retry,
+    utc_now,
+    write_json,
+)
 
 FORTINET_DOCS_BASE_URL = "https://docs.fortinet.com"
 DEFAULT_MAJORS_TO_TRY = ("8.0", "7.4", "7.2")
@@ -123,27 +131,30 @@ def main(argv: list[str]) -> int:
         print("\nAperçu seulement. Relancer avec --commit pour écrire dans data/fortios-data.generated.json.")
         return 0
 
-    state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-    existing_by_id = {item.get("id"): item for item in state["compatibilities"]}
+    # Shared with fortios_server.py's live handlers and fortios_watch.py's daily batch run — all
+    # three read-modify-write this same file from separate processes.
     added = 0
-    for entry in entries:
-        item_id = f"compat-official-{entry['emsVersion']}"
-        prior = existing_by_id.get(item_id)
-        # Preserve any human edits (note, source, createdAt) on re-import; only the version
-        # list is refreshed from the PDF, and updatedAt only moves if it actually changed.
-        item = dict(prior) if prior else {}
-        item["id"] = item_id
-        item["emsVersion"] = entry["emsVersion"]
-        item.setdefault("note", "")
-        item.setdefault("source", SOURCE_LABEL)
-        item.setdefault("createdAt", utc_now())
-        if prior and prior.get("clientVersions") != entry["clientVersions"]:
-            item["updatedAt"] = utc_now()
-        item["clientVersions"] = entry["clientVersions"]
-        if upsert_compatibility(state, item):
-            added += 1
-    state["generatedAt"] = utc_now()
-    write_json(DATA_PATH, state)
+    with cross_process_lock(DATA_PATH):
+        state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+        existing_by_id = {item.get("id"): item for item in state["compatibilities"]}
+        for entry in entries:
+            item_id = f"compat-official-{entry['emsVersion']}"
+            prior = existing_by_id.get(item_id)
+            # Preserve any human edits (note, source, createdAt) on re-import; only the version
+            # list is refreshed from the PDF, and updatedAt only moves if it actually changed.
+            item = dict(prior) if prior else {}
+            item["id"] = item_id
+            item["emsVersion"] = entry["emsVersion"]
+            item.setdefault("note", "")
+            item.setdefault("source", SOURCE_LABEL)
+            item.setdefault("createdAt", utc_now())
+            if prior and prior.get("clientVersions") != entry["clientVersions"]:
+                item["updatedAt"] = utc_now()
+            item["clientVersions"] = entry["clientVersions"]
+            if upsert_compatibility(state, item):
+                added += 1
+        state["generatedAt"] = utc_now()
+        write_json(DATA_PATH, state)
     print(f"\n{added} combinaison(s) officielle(s) ajoutée(s)/mise(s) à jour dans {DATA_PATH}.")
     return 0
 

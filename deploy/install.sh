@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # À exécuter avec sudo depuis la racine du repo, une fois les fichiers de ce
-# dossier relus. Installe le service systemd et ajoute le bloc nginx.
+# dossier relus. Installe/actualise le service systemd et le bloc nginx.
+# Idempotent : peut être relancé après chaque modif de config (ex: client_max_body_size)
+# sans jamais dupliquer de bloc nginx ni laisser le service tourner avec du code obsolète.
 set -euo pipefail
 
 REPO_ROOT="/home/tetrax/workspace/upgrade_path"
+NGINX_SITE_NAME="fortios-upgrade-intelligence.conf"
+NGINX_AVAILABLE="/etc/nginx/sites-available/$NGINX_SITE_NAME"
+NGINX_ENABLED="/etc/nginx/sites-enabled/$NGINX_SITE_NAME"
+LEGACY_MARKER="# FortiOS Upgrade Intelligence"
 
 VENV_DIR="$REPO_ROOT/.venv-compat"
 if [ ! -x "$VENV_DIR/bin/python3" ]; then
@@ -16,17 +22,36 @@ install -m 644 "$REPO_ROOT/deploy/fortios-upgrade.service" /etc/systemd/system/f
 install -m 644 "$REPO_ROOT/deploy/fortios-catalog-refresh.service" /etc/systemd/system/fortios-catalog-refresh.service
 install -m 644 "$REPO_ROOT/deploy/fortios-catalog-refresh.timer" /etc/systemd/system/fortios-catalog-refresh.timer
 systemctl daemon-reload
+
+# enable --now is a no-op if already enabled/running; restart unconditionally afterwards so a
+# config or code change (this run's whole point, e.g. client_max_body_size) always actually
+# reaches the running process instead of silently waiting for someone to notice and do it by
+# hand (see docs/last_report.md history — that happened at least once).
 systemctl enable --now fortios-upgrade.service
+systemctl restart fortios-upgrade.service
 systemctl enable --now fortios-catalog-refresh.timer
+systemctl restart fortios-catalog-refresh.timer
 systemctl status --no-pager fortios-upgrade.service
 systemctl list-timers --no-pager fortios-catalog-refresh.timer
 
-if ! grep -q "FortiOS Upgrade Intelligence" /etc/nginx/sites-available/default; then
-  cat "$REPO_ROOT/deploy/nginx-fortios-upgrade.conf" >> /etc/nginx/sites-available/default
-  nginx -t
-  systemctl reload nginx
-else
-  echo "Bloc nginx déjà présent, rien ajouté."
+# Own dedicated file, always overwritten in place — this is what makes re-running this script
+# actually pick up a config change (client_max_body_size and similar), unlike the old approach
+# of appending into sites-available/default only once and skipping every run after.
+install -m 644 "$REPO_ROOT/deploy/nginx-fortios-upgrade.conf" "$NGINX_AVAILABLE"
+ln -sf "$NGINX_AVAILABLE" "$NGINX_ENABLED"
+
+if grep -q "$LEGACY_MARKER" /etc/nginx/sites-available/default 2>/dev/null; then
+  echo
+  echo "ATTENTION : un bloc FortiOS Upgrade Intelligence existe encore dans"
+  echo "  /etc/nginx/sites-available/default (installé par une ancienne version de ce script)."
+  echo "  Il fait maintenant doublon avec $NGINX_AVAILABLE."
+  echo "  Ce script ne le retire pas automatiquement (ce fichier est partagé avec d'autres"
+  echo "  apps sur ce VPS — FortiFlow, Ideabox... — et une suppression scriptée mal ciblée y"
+  echo "  casserait leur config). À retirer à la main la prochaine fois que ce fichier est"
+  echo "  édité, en gardant tout le reste intact."
 fi
+
+nginx -t
+systemctl reload nginx
 
 echo "OK — https://valdev.me:3001/app/"

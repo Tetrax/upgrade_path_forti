@@ -10,7 +10,6 @@ import json
 import re
 import secrets
 import sys
-import threading
 import traceback
 import urllib.parse
 from http import HTTPStatus
@@ -23,6 +22,7 @@ from fortios_watch import (
     PRODUCTS,
     PRODUCT_LABELS,
     OfficialPathRequest,
+    cross_process_lock,
     fetch_official_upgrade_path,
     normalize_state,
     read_json,
@@ -53,14 +53,14 @@ IMAGE_REF_RE = re.compile(r"!\[[^\]]*\]\(/data/advisory-images/([^)\s]+)\)")
 MAX_JSON_BODY_BYTES = 1 * 1024 * 1024
 MAX_IMAGE_UPLOAD_BODY_BYTES = 12 * 1024 * 1024
 # Only these two directories are anything the UI actually needs served over HTTP — ROOT is the
-# whole repo checkout, which also holds scripts/, deploy/, docs/ and .git/.
-ALLOWED_STATIC_PREFIXES = ("/app/", "/data/")
+# whole repo checkout, which also holds scripts/, deploy/, docs/ and .git/. Defined next to ROOT
+# below at import time (module globals resolve at call time regardless of source order).
 
-# ThreadingHTTPServer runs every request on its own thread, but all the POST/PUT/DELETE handlers
-# below do read-JSON -> mutate -> write-JSON against the same file with no isolation of their
-# own — this serializes that whole sequence so two concurrent requests can't race and silently
-# clobber one another's changes (a "lost update").
-STATE_LOCK = threading.Lock()
+# ThreadingHTTPServer runs every request on its own thread, and this script's daily batch
+# counterpart (fortios_watch.py) and import_forticlient_compat.py both write the same file from
+# entirely separate processes — all read-JSON -> mutate -> write-JSON critical sections use
+# cross_process_lock(DATA_PATH) (see fortios_watch.py) rather than an in-process threading.Lock,
+# which would do nothing to stop those other processes from interleaving a conflicting write.
 
 
 def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
@@ -131,6 +131,8 @@ def parse_compatibility_fields(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ALLOWED_STATIC_DIR_APP = (ROOT / "app").resolve()
+ALLOWED_STATIC_DIR_DATA = (ROOT / "data").resolve()
 DATA_PATH = ROOT / "data" / "fortios-data.generated.json"
 SAMPLE_PATH = ROOT / "data" / "fortios-data.sample.json"
 IMAGE_DIR = ROOT / "data" / "advisory-images"
@@ -163,14 +165,19 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def translate_path(self, path: str) -> str:
-        # SimpleHTTPRequestHandler already blocks ".." traversal outside `directory`, but that
-        # still leaves every other file under the repo root (scripts/, deploy/, docs/, .git/)
-        # readable over plain HTTP by anyone who can reach this server — restrict to what the UI
-        # actually needs.
-        url_path = urllib.parse.urlsplit(path).path
-        if not any(url_path.startswith(prefix) for prefix in ALLOWED_STATIC_PREFIXES):
+        # Checking the raw request string against ALLOWED_STATIC_PREFIXES before decoding/
+        # normalizing is not enough: "/data/%2e%2e/scripts/fortios_server.py" starts with
+        # "/data/" as a literal string, but percent-decodes and normalizes (posixpath.normpath
+        # collapses "data/.." against the preceding segment) to a path outside data/ entirely.
+        # Let the parent class do that decoding/normalization first, then check where the
+        # request actually resolved on disk — the only check that can't be fooled by encoding.
+        resolved = Path(super().translate_path(path)).resolve()
+        if not any(
+            resolved == allowed or resolved.is_relative_to(allowed)
+            for allowed in (ALLOWED_STATIC_DIR_APP, ALLOWED_STATIC_DIR_DATA)
+        ):
             return str(ROOT / "__not_served__")
-        return super().translate_path(path)
+        return str(resolved)
 
     def is_safe_origin(self) -> bool:
         """Lightweight CSRF guard for the state-mutating routes: the request must claim to come
@@ -252,7 +259,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 return
 
             official_path, firmwares = result
-            with STATE_LOCK:
+            with cross_process_lock(DATA_PATH):
                 state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
                 for firmware in firmwares:
                     upsert_firmware(state, firmware)
@@ -290,7 +297,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 **fields,
             }
 
-            with STATE_LOCK:
+            with cross_process_lock(DATA_PATH):
                 state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
                 upsert_advisory(state, advisory)
                 state["generatedAt"] = utc_now()
@@ -306,7 +313,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
     def handle_update_advisory(self, raw_id: str) -> None:
         try:
             advisory_id = urllib.parse.unquote(raw_id)
-            with STATE_LOCK:
+            with cross_process_lock(DATA_PATH):
                 state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
                 existing = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
                 if existing is None:
@@ -339,7 +346,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
     def handle_delete_advisory(self, raw_id: str) -> None:
         try:
             advisory_id = urllib.parse.unquote(raw_id)
-            with STATE_LOCK:
+            with cross_process_lock(DATA_PATH):
                 state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
                 target = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
                 if target is None:
@@ -366,7 +373,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 **fields,
             }
 
-            with STATE_LOCK:
+            with cross_process_lock(DATA_PATH):
                 state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
                 upsert_compatibility(state, item)
                 state["generatedAt"] = utc_now()
@@ -382,7 +389,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
     def handle_update_compatibility(self, raw_id: str) -> None:
         try:
             item_id = urllib.parse.unquote(raw_id)
-            with STATE_LOCK:
+            with cross_process_lock(DATA_PATH):
                 state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
                 existing = next((item for item in state["compatibilities"] if item.get("id") == item_id), None)
                 if existing is None:
@@ -412,7 +419,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
     def handle_delete_compatibility(self, raw_id: str) -> None:
         try:
             item_id = urllib.parse.unquote(raw_id)
-            with STATE_LOCK:
+            with cross_process_lock(DATA_PATH):
                 state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
                 remaining = [item for item in state["compatibilities"] if item.get("id") != item_id]
                 if len(remaining) == len(state["compatibilities"]):
