@@ -26,7 +26,7 @@ Upgrade_path/
 
 ## Lancer l'interface
 
-Pour que **Afficher le chemin** puisse récupérer automatiquement la recommandation Fortinet quand rien n'est en cache, lancer le serveur local depuis la racine :
+Pour que **Afficher le chemin** puisse interroger Fortinet en direct, lancer le serveur local depuis la racine :
 
 ```bash
 python3 scripts/fortios_server.py --port 8000
@@ -38,7 +38,7 @@ Puis ouvrir :
 http://localhost:8000/app/
 ```
 
-Ce serveur sert l'interface et ajoute l'endpoint local `POST /api/official-path`. Quand on clique sur **Afficher le chemin** et qu'aucun chemin n'est stocké pour la combinaison demandée, l'interface envoie automatiquement le modèle, la version actuelle et la version cible à cet endpoint. Le serveur interroge alors le service public Fortinet Upgrade Path Tool, ajoute le chemin officiel dans `data/fortios-data.generated.json`, puis rafraîchit l'affichage. Si un chemin est déjà stocké, il est affiché immédiatement sans appel réseau ; un bouton **Fortinet** reste disponible à côté du chemin affiché pour forcer une actualisation.
+Ce serveur sert l'interface et ajoute l'endpoint local `POST /api/official-path`. **Chaque clic** sur **Afficher le chemin** envoie le modèle, la version actuelle et la version cible à cet endpoint, qui interroge en direct le service public Fortinet Upgrade Path Tool, met à jour `data/fortios-data.generated.json`, puis rafraîchit l'affichage — jamais de confiance aveugle dans un chemin déjà en cache. Le chemin en cache ne sert que de repli si Fortinet est injoignable au moment du clic ; dans ce cas, l'interface l'affiche quand même (pour ne pas laisser un écran vide) mais l'indique clairement via un bandeau d'avertissement ("chemin affiché depuis le cache local, à revérifier dès que le service est de nouveau accessible").
 
 Il reste possible d'ouvrir directement :
 

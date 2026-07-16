@@ -86,6 +86,65 @@ class DiscoveredAtMigrationTests(unittest.TestCase):
         self.assertEqual(still_there, first_seen)
 
 
+class FirmwareMetadataMergeTests(unittest.TestCase):
+    """merge_state()'s firmware merge used to be a shallow dict-spread: {**existing, **incoming}
+    replaces the whole notes list / links dict wholesale rather than merging their contents. A
+    version enriched by a live official-path fetch (rich notes/links) would lose all of that the
+    very next time collect_docs_catalog() re-scraped it with just notes=("release-notes",)."""
+
+    def test_rich_notes_and_links_survive_a_sparse_daily_rescrape(self):
+        base = make_firmware_state([{
+            "version": "7.2.11", "build": "2000", "maturity": "Mature",
+            "notes": ["release-notes", "resolved", "known", "upgrade", "behavior"],
+            "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.11/fortios-release-notes",
+                "resolved": "https://x/resolved",
+                "known": "https://x/known",
+                "upgrade": "https://x/upgrade",
+                "behavior": "https://x/behavior",
+            },
+        }])
+
+        # A sparse daily re-scrape, exactly as collect_docs_catalog() always builds it.
+        incoming = fw.normalize_state({})
+        fw.upsert_firmware(incoming, fw.Firmware(
+            product="fortigate-fortios", model="FGT60F", version="7.2.11", build="2000",
+            notes=("release-notes",),
+            links={"release-notes": "https://docs.fortinet.com/document/fortigate/7.2.11/fortios-release-notes"},
+        ))
+
+        merged = fw.merge_state(base, incoming)
+        result = merged["products"][0]["models"][0]["firmwares"][0]
+
+        self.assertEqual(
+            set(result["notes"]), {"release-notes", "resolved", "known", "upgrade", "behavior"},
+            "rich notes must survive a sparse re-scrape",
+        )
+        self.assertEqual(
+            set(result["links"]), {"release-notes", "resolved", "known", "upgrade", "behavior"},
+            "rich links must survive a sparse re-scrape",
+        )
+        self.assertEqual(result["maturity"], "Mature")
+        self.assertEqual(result["build"], "2000")
+
+    def test_new_note_and_link_keys_are_added_not_just_preserved(self):
+        base = make_firmware_state([{
+            "version": "7.2.11", "build": "2000",
+            "notes": ["release-notes"],
+            "links": {"release-notes": "https://x/release-notes"},
+        }])
+        incoming = fw.normalize_state({})
+        fw.upsert_firmware(incoming, fw.Firmware(
+            product="fortigate-fortios", model="FGT60F", version="7.2.11", build="2000",
+            notes=("resolved",),
+            links={"resolved": "https://x/resolved"},
+        ))
+        merged = fw.merge_state(base, incoming)
+        result = merged["products"][0]["models"][0]["firmwares"][0]
+        self.assertEqual(set(result["notes"]), {"release-notes", "resolved"})
+        self.assertEqual(set(result["links"]), {"release-notes", "resolved"})
+
+
 class ConcurrentWriteTests(unittest.TestCase):
     """Reproduces the exact scenario Codex flagged: a live user creates/edits/deletes advisories,
     paths, and compatibilities while the daily collector script is mid-run (holding a stale

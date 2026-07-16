@@ -64,6 +64,33 @@ class UpgradeExportParsingTests(unittest.TestCase):
         text = "some plain notes mentioning 7.6.7 as a target"
         self.assertEqual(fw.parse_upgrade_export(text), ["7.6.7"])
 
+    def test_dict_element_without_version_rejects_whole_document(self):
+        """Codex's exact repro: a hop silently missing must never become an invisible gap."""
+        text = json.dumps({"path": ["7.2.10", {"note": "hop manquant"}, "7.4.11"]})
+        self.assertIsNone(fw.parse_upgrade_export(text))
+
+    def test_numeric_version_rejects_whole_document(self):
+        text = json.dumps({"result": {"path": [
+            {"version": "7.2.10"}, {"version": 123}, {"version": "7.4.11"},
+        ]}})
+        self.assertIsNone(fw.parse_upgrade_export(text))
+
+    def test_mixed_valid_and_invalid_array_rejects_whole_document(self):
+        text = json.dumps({"path": ["7.2.10", None, "7.4.8", 42, "7.4.11"]})
+        self.assertIsNone(fw.parse_upgrade_export(text))
+
+    def test_malformed_version_string_rejects_whole_document(self):
+        text = json.dumps({"path": ["7.2.10", "not-a-version", "7.4.11"]})
+        self.assertIsNone(fw.parse_upgrade_export(text))
+
+    def test_array_too_short_rejects_whole_document(self):
+        text = json.dumps({"path": ["7.2.10"]})
+        self.assertIsNone(fw.parse_upgrade_export(text))
+
+    def test_empty_array_rejects_whole_document(self):
+        text = json.dumps({"path": []})
+        self.assertIsNone(fw.parse_upgrade_export(text))
+
 
 class OfficialUpgradePathValidationTests(unittest.TestCase):
     def setUp(self):

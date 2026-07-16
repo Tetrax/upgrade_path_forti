@@ -899,6 +899,23 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
                     continue
                 existing_firmware = firmware_by_version.get(version)
                 merged_firmware = {**(existing_firmware or {}), **firmware}
+                # notes/links are collections, not scalars — a plain dict-spread REPLACES them
+                # wholesale rather than merging their contents, so a version enriched by a live
+                # official-path fetch (rich notes: behavior/known/resolved/special/upgrade, and
+                # matching links) would lose all of that the next time collect_docs_catalog()
+                # re-scrapes it with just notes=("release-notes",). Union notes, merge links key
+                # by key — the same non-destructive merge upsert_firmware() already does for a
+                # single live upsert; build/maturity/anything else stay simple last-writer-wins.
+                if existing_firmware is not None:
+                    if "notes" in firmware:
+                        merged_firmware["notes"] = sorted(
+                            set(existing_firmware.get("notes", [])) | set(firmware.get("notes") or [])
+                        )
+                    if "links" in firmware:
+                        merged_firmware["links"] = {
+                            **existing_firmware.get("links", {}),
+                            **(firmware.get("links") or {}),
+                        }
                 # The incoming side is usually a throwaway collector state (collect_docs_catalog()
                 # etc. start from a blank state, so every version it touches looks "brand new" to
                 # it and gets stamped with today's date). If the base already knew this version
@@ -1158,10 +1175,17 @@ def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str,
     return list(entries_by_cve.values())
 
 
-def collect_cve_entries_for_advisory(advisory_id: str, timeout: int) -> list[dict[str, Any]]:
+def collect_cve_entries_for_advisory(advisory_id: str, timeout: int) -> list[dict[str, Any]] | None:
+    """Returns the definitive, current list of CVEs for this advisory (each already filtered to
+    tracked products by parse_csaf_document — possibly empty if none apply anymore), or None if
+    we can't confirm one way or another: no CSAF url found for this advisory could mean a
+    transient PSIRT hiccup, or a legitimately CSAF-less legacy advisory — since those aren't
+    distinguishable here, callers must never treat None as "confirmed zero CVEs" (see
+    replace_cves_for_advisory()).
+    """
     csaf_url = fetch_csaf_url(advisory_id, timeout)
     if not csaf_url:
-        return []
+        return None
     doc = json.loads(fetch_text(csaf_url, timeout))
     return parse_csaf_document(advisory_id, doc)
 
@@ -1177,21 +1201,48 @@ def upsert_cve(state: dict[str, Any], item: dict[str, Any]) -> bool:
     return True
 
 
+def replace_cves_for_advisory(state: dict[str, Any], advisory_id: str, new_entries: list[dict[str, Any]]) -> int:
+    """Replace every CVE previously recorded under `advisory_id` with exactly `new_entries` —
+    only ever call this with a DEFINITIVE, successfully-parsed CSAF result (never for an advisory
+    that was skipped due to a network/parse failure or an unresolved CSAF lookup), since a
+    transient PSIRT hiccup must never be allowed to wipe real, previously-confirmed CVE data.
+    Returns how many entries actually changed (added, updated in place, or removed).
+    """
+    new_ids = {entry["id"] for entry in new_entries}
+    stale_ids = {
+        item.get("id") for item in state["cves"]
+        if item.get("advisoryId") == advisory_id and item.get("id") not in new_ids
+    }
+    changed = len(stale_ids)
+    if stale_ids:
+        state["cves"] = [item for item in state["cves"] if item.get("id") not in stale_ids]
+    for entry in new_entries:
+        if upsert_cve(state, entry):
+            changed += 1
+    return changed
+
+
 def collect_cve_catalog(
     existing_advisory_ids: set[str],
     timeout: int,
     backfill: bool = False,
     backfill_max_pages: int = 30,
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """CVE entries to upsert, plus a skipped-id list.
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    """Per-advisory CVE entries to reconcile (keyed by advisory_id), plus a skipped-id list.
+
+    An advisory_id present in the returned dict got a DEFINITIVE, successfully-parsed CSAF
+    result this run (see collect_cve_entries_for_advisory()) — its entries are the complete,
+    current set of CVEs for that advisory among our tracked products, so the caller should
+    replace whatever it previously had for that advisory_id, dropping anything no longer
+    present (see replace_cves_for_advisory()). An advisory_id in `skipped` (or simply absent
+    because it wasn't looked at this run) must have its existing CVEs left completely alone.
 
     Daily use (backfill=False) only looks at the PSIRT RSS feed (last ~50 advisories across all
     Fortinet products) — cheap, and plenty since real advisories publish far slower than that.
     Re-fetches every advisory from that feed every time, even already-known ones: Fortinet
-    regularly revises severity/CVSS/affected versions on an advisory well after first publishing
-    it, and upsert_cve() already replaces an entry in place when its content actually changed, so
-    re-checking ~50 advisories a day is worth the trivial extra cost to avoid silently freezing
-    stale data forever.
+    regularly revises severity/CVSS/affected versions (or drops a product's relevance entirely)
+    on an advisory well after first publishing it, so re-checking ~50 advisories a day is worth
+    the trivial extra cost to avoid silently freezing stale data forever.
     backfill=True instead walks the paginated, per-product PSIRT listing to seed deep history —
     hundreds of advisories worth of requests, so it's still bounded to genuinely new ids there;
     meant to be run manually/occasionally, not from the daily timer.
@@ -1205,15 +1256,19 @@ def collect_cve_catalog(
     else:
         advisory_ids = discover_advisory_ids_from_rss(timeout)
 
-    entries: list[dict[str, Any]] = []
+    results: dict[str, list[dict[str, Any]]] = {}
     skipped: list[str] = []
     for advisory_id in advisory_ids:
         try:
-            entries.extend(collect_cve_entries_for_advisory(advisory_id, timeout))
+            entries = collect_cve_entries_for_advisory(advisory_id, timeout)
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            entries = None
+        if entries is None:
             skipped.append(advisory_id)
+        else:
+            results[advisory_id] = entries
         time.sleep(0.2)
-    return entries, skipped
+    return results, skipped
 
 
 def read_forticare_json(path: Path) -> dict[str, Any]:
@@ -1250,6 +1305,35 @@ class UnsupportedExportShape(ValueError):
     used to get mistaken for a hop)."""
 
 
+def is_valid_version_string(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", value) is not None
+
+
+def validated_hops_from_path_items(path_items: list[Any]) -> list[str]:
+    """Extract and validate every element of a recognized path array. Every element must be
+    either a valid version string, or a dict with a "version" key that's a valid version string
+    — anything else (a dict missing "version", a non-string/malformed version like the int 123,
+    a bare number, a stray note...) raises rather than being silently dropped, since silently
+    skipping one bad element would delete a real mandatory hop without any signal (exactly what
+    {"path": ["7.2.10", {"note": "hop manquant"}, "7.4.11"]} used to do, turning into
+    7.2.10 -> 7.4.11). Also requires at least two valid hops.
+    """
+    hops: list[str] = []
+    for item in path_items:
+        if isinstance(item, str):
+            version = item
+        elif isinstance(item, dict):
+            version = item.get("version")
+        else:
+            raise UnsupportedExportShape(f"Élément de chemin invalide : {item!r}")
+        if not is_valid_version_string(version):
+            raise UnsupportedExportShape(f"Version invalide dans le chemin : {version!r}")
+        hops.append(version)
+    if len(hops) < 2:
+        raise UnsupportedExportShape("Chemin JSON avec moins de deux versions valides.")
+    return hops
+
+
 def parse_upgrade_export_json(text: str) -> list[str] | None:
     """Extract hops from `text` if it's JSON in one of two explicitly recognized shapes:
     - the raw Fortinet Upgrade Path Tool API response, result.path[].version (the same shape
@@ -1259,9 +1343,11 @@ def parse_upgrade_export_json(text: str) -> list[str] | None:
     Returns None (not []) when `text` isn't valid JSON at all, so the caller falls back to the
     loose regex scan — still needed for the .csv/.txt exports this same import also accepts (see
     README "Ajouter un export Fortinet Upgrade Path Tool"). Raises UnsupportedExportShape when
-    `text` IS valid JSON but matches neither shape: that case must never fall back to the regex
-    scan over the same document, since a real path field sitting next to an unrelated field like
-    "note": "fixed since 6.4.15" would otherwise both get scanned indiscriminately.
+    `text` IS valid JSON but matches neither shape, or matches a shape with an invalid element:
+    that case must never fall back to the regex scan over the same document, since a real path
+    field sitting next to an unrelated field like "note": "fixed since 6.4.15" would otherwise
+    both get scanned indiscriminately, and a partially-invalid path must never be silently
+    trimmed down to whatever elements happened to look valid.
     """
     try:
         payload = json.loads(text)
@@ -1271,17 +1357,11 @@ def parse_upgrade_export_json(text: str) -> list[str] | None:
     if isinstance(payload, dict):
         result = payload.get("result")
         if isinstance(result, dict) and isinstance(result.get("path"), list):
-            return [item["version"] for item in result["path"] if isinstance(item, dict) and item.get("version")]
+            return validated_hops_from_path_items(result["path"])
 
         path_field = payload.get("path")
         if isinstance(path_field, list):
-            hops: list[str] = []
-            for item in path_field:
-                if isinstance(item, str):
-                    hops.append(item)
-                elif isinstance(item, dict) and item.get("version"):
-                    hops.append(item["version"])
-            return hops
+            return validated_hops_from_path_items(path_field)
 
     raise UnsupportedExportShape(
         "JSON valide mais structure non reconnue (attendu result.path[].version ou path[])."
@@ -1604,15 +1684,18 @@ def main(argv: list[str]) -> int:
     skipped_cves: list[str] = []
     if (args.cve_catalog or args.cve_backfill) and not args.skip_network:
         existing_advisory_ids = {item.get("advisoryId") for item in state.get("cves", [])}
-        new_cve_entries, skipped_cves = collect_cve_catalog(
+        cve_results_by_advisory, skipped_cves = collect_cve_catalog(
             existing_advisory_ids,
             args.timeout,
             backfill=args.cve_backfill,
             backfill_max_pages=args.cve_backfill_max_pages,
         )
-        for entry in new_cve_entries:
-            if upsert_cve(state, entry):
-                added_cves += 1
+        # Each advisory here got a definitive CSAF result this run: replace (not just upsert)
+        # whatever we had for it, so a CVE Fortinet has since removed/reattributed away from our
+        # tracked products actually disappears instead of lingering forever. Advisories in
+        # skipped_cves are left completely untouched.
+        for advisory_id, entries in cve_results_by_advisory.items():
+            added_cves += replace_cves_for_advisory(state, advisory_id, entries)
 
     # This run started from a read of args.output taken potentially minutes ago (network
     # scraping in between) — fortios_server.py or import_forticlient_compat.py may have written
