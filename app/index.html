@@ -269,7 +269,15 @@
     }
 
     function saveState() {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state, null, 2));
+      // Just a client-side cache for next page load, never the source of truth — a quota/private-
+      // browsing failure here must never bubble up and get mistaken by a caller's catch block for
+      // the live Fortinet call or catalog fetch itself having failed (see autoLoadGeneratedData()
+      // and fetchOfficialPath(), both of which call this right after a successful live fetch).
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state, null, 2));
+      } catch (error) {
+        console.warn("saveState: localStorage indisponible, cache local non mis à jour.", error);
+      }
     }
 
     function normalizeState(nextState) {
