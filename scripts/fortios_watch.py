@@ -217,6 +217,10 @@ def upsert_firmware(state: dict[str, Any], item: Firmware) -> bool:
         "version": item.version,
         "build": item.build,
         "notes": list(item.notes),
+        # Stamped only here, at first sight of this version — lets the frontend show a
+        # "new" badge for a couple weeks. Never touched again once the entry exists, so a
+        # daily rescan of an already-known version doesn't reset it.
+        "discoveredAt": dt.date.today().isoformat(),
     }
     if item.links:
         entry["links"] = dict(item.links)

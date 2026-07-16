@@ -262,6 +262,21 @@ h1 {
   color: var(--danger);
 }
 
+.new-badge {
+  display: inline-block;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--soft-green);
+  color: var(--ok);
+  font-weight: 800;
+  font-size: 7px;
+  line-height: 1.5;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  vertical-align: 1px;
+  margin-left: 3px;
+}
+
 .field {
   margin-bottom: 14px;
 }

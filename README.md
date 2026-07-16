@@ -234,7 +234,7 @@ Le champ description accepte une mise en forme légère, avec aperçu en direct 
 
 Le rendu (dans `/app/alerte/` comme dans l'outil principal) est toujours construit en DOM à partir de ce texte brut, jamais en interprétant du HTML.
 
-Les images sont envoyées à `POST /api/advisory-images`, stockées dans `data/advisory-images/` (non versionné dans Git — voir `.gitignore`, pour ne pas alourdir le dépôt avec des captures potentiellement sensibles) et référencées dans la description via `![alt](/data/advisory-images/...)`. Supprimer une alerte supprime aussi les images qu'elle référence. Modifier une alerte ne nettoie pas les images retirées de la description à cette occasion (à faire manuellement dans `data/advisory-images/` si besoin).
+Les images sont envoyées à `POST /api/advisory-images`, stockées dans `data/advisory-images/` (non versionné dans Git — voir `.gitignore`, pour ne pas alourdir le dépôt avec des captures potentiellement sensibles) et référencées dans la description via `![alt](/data/advisory-images/...)`. Supprimer une alerte supprime aussi les images qu'elle référence, et modifier une alerte supprime celles qui ne sont plus référencées dans la nouvelle description (une image encore utilisée par une autre alerte n'est jamais supprimée).
 
 Deux champs optionnels, **Bug ID / Change Fortinet** et **Version où identifié**, permettent de noter le numéro de bug/change interne Fortinet et la ou les versions où il a été vu (ex: `1004258` / `7.2.11, 7.4.5, 7.6.1`), pour le retrouver facilement plus tard dans les sections Resolved/Known issues des release notes. Purement informatif : ces champs n'influencent pas le déclenchement de l'alerte, contrairement aux versions concernées.
 
@@ -263,6 +263,22 @@ end",Base interne SNS
 ```
 
 Puis lancer `python3 scripts/fortios_watch.py --base data/fortios-data.generated.json`. La colonne `version` ne prend qu'une seule version par ligne ; pour cibler plusieurs versions avec la même alerte, passer par la page `/app/alerte/` (colonne `versions`, tableau) ou dupliquer la ligne CSV.
+
+## CVE PSIRT Fortinet
+
+En plus des alertes internes (bugs remontés par l'équipe), l'outil croise automatiquement les versions avec les **CVE publiées par le Fortinet PSIRT** pour FortiOS, FortiAnalyzer, FortiManager, FortiClient et FortiClient EMS. Fortinet publie pour chaque advisory (`FG-IR-xx-xxx`) un export **CSAF** (Common Security Advisory Framework, un format JSON standard et structuré) qui donne, pour chaque CVE, la ou les plages de versions exactement affectées par branche (ex: `FortiOS >=7.6.0|<=7.6.4`, ou `FortiClientEMS 7.0 all versions` quand toute la branche est concernée) — bien plus fiable qu'un scraping de la page HTML humaine.
+
+Affichage :
+
+- Sur l'outil principal (`/app/`), chaque version du chemin affiche un badge `🛡 CVE-xxxx-xxxxx` si elle est concernée, et une section dédiée liste les CVE du chemin avec sévérité CVSS, score, lien vers la fiche PSIRT, et indique si le chemin choisi corrige la CVE ou si la version cible reste vulnérable.
+- Sur `/app/forticlient/`, les cartes de combinaisons EMS ↔ FortiClient affichent la même pastille et le même détail si l'une des versions du couple est concernée.
+
+Collecte (`scripts/fortios_watch.py`) :
+
+- `--cve-catalog` : rafraîchissement quotidien, incrémental. Ne regarde que le flux RSS PSIRT (`https://www.fortiguard.com/rss/ir.xml`, les ~50 dernières advisories tous produits confondus) et ne va chercher le CSAF que pour les advisories pas encore connues — quelques requêtes par jour dans l'usage normal. Branché sur le timer quotidien (`deploy/fortios-catalog-refresh.service`).
+- `--cve-backfill [--cve-backfill-max-pages N]` : backfill historique complet, à lancer manuellement de temps en temps. Parcourt la liste paginée PSIRT filtrée par produit (`fortiguard.fortinet.com/psirt?product=...`) pour chacun des 5 produits suivis, donc bien plus de requêtes (plusieurs centaines) — pas dans le timer quotidien.
+
+Une CVE n'est retenue que si elle touche au moins un des 5 produits suivis par l'outil (le reste du catalogue PSIRT — FortiWeb, FortiMail, FortiSandbox, etc. — est ignoré). Une même CVE peut apparaître dans plusieurs `vulnerabilities[]` du CSAF (une par plateforme FortiClient par exemple) : elles sont fusionnées en une seule entrée avant d'être stockées, sinon la dernière écraserait les précédentes.
 
 ## Automatisation FortiCare / FNDN
 
@@ -300,11 +316,11 @@ Si l'API existe, elle doit alimenter directement le format JSON ci-dessus. Si el
 Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h15, en deux étapes :
 
 ```bash
-python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog
+python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog --cve-catalog
 .venv-compat/bin/python3 scripts/import_forticlient_compat.py --commit
 ```
 
-La première commande détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool, ainsi que les nouvelles versions FortiClient/FortiClient EMS via leurs release notes publiques. La seconde réimporte la grille de compatibilité officielle EMS ↔ FortiClient (voir ci-dessus). Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`. Si la première étape échoue, systemd n'enchaîne pas sur la seconde (`ExecStart=` multiples) — sans gravité, le timer réessaie le lendemain.
+La première commande détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool, les nouvelles versions FortiClient/FortiClient EMS via leurs release notes publiques, et les nouvelles CVE PSIRT (voir ci-dessus). La seconde réimporte la grille de compatibilité officielle EMS ↔ FortiClient (voir plus haut). Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`. Si la première étape échoue, systemd n'enchaîne pas sur la seconde (`ExecStart=` multiples) — sans gravité, le timer réessaie le lendemain.
 
 Important : `--base data/fortios-data.generated.json` est indispensable en tâche planifiée. Sans lui, le script repart de `data/fortios-data.sample.json` (le petit exemple) et écraserait les chemins déjà récupérés via l'interface.
 

@@ -16,6 +16,7 @@ let editingId = null;
 let checkedClientVersions = new Set();
 
 const els = {
+  briefingPanel: document.getElementById("briefingPanel"),
   emsVersionSelect: document.getElementById("emsVersionSelect"),
   clientVersionSearch: document.getElementById("clientVersionSearch"),
   clientVersionList: document.getElementById("clientVersionList"),
@@ -96,6 +97,51 @@ function loadState(state) {
   renderCompatList();
   renderAdvisoryList();
   renderVersionSummaries(fortclient, emsModel);
+  renderBriefingPanel();
+}
+
+// Mirrors the FortiOS/FortiAnalyzer/FortiManager briefing bar on app/index.html, but scoped to
+// FortiClient/EMS CVEs — those never show over there (see NO_PATH_PRODUCT_IDS filtering in
+// app/index.html's latestCves()) since this page is the one place they belong.
+const NEW_BADGE_WINDOW_DAYS = 14;
+
+function isRecent(dateStr) {
+  if (!dateStr) return false;
+  const ageDays = (Date.now() - new Date(`${dateStr}T00:00:00Z`).getTime()) / 86400000;
+  return ageDays >= 0 && ageDays <= NEW_BADGE_WINDOW_DAYS;
+}
+
+function latestCves(limit) {
+  return [...cves]
+    .sort((a, b) => (b.publishedAt || "").localeCompare(a.publishedAt || ""))
+    .slice(0, limit);
+}
+
+function renderBriefingPanel() {
+  if (!els.briefingPanel) return;
+  els.briefingPanel.replaceChildren();
+  els.briefingPanel.appendChild(el("span", { className: "briefing-label", text: "Dernières CVE" }));
+
+  const latest = latestCves(6);
+  if (!latest.length) {
+    els.briefingPanel.appendChild(el("span", { className: "muted", text: "Aucune CVE connue pour FortiClient / EMS." }));
+    return;
+  }
+  for (const cve of latest) {
+    const scoreLabel = typeof cve.cvssScore === "number" ? ` CVSS ${cve.cvssScore}` : "";
+    const badge = document.createElement("a");
+    badge.className = `badge ${cveBadgeClass(cve.severity)}`;
+    badge.href = cve.url;
+    badge.target = "_blank";
+    badge.rel = "noopener noreferrer";
+    badge.title = `${cve.title} — ${CVE_SEVERITY_LABEL[cve.severity] || "Inconnue"}${scoreLabel}`;
+    badge.appendChild(document.createTextNode(`🛡 ${cve.id}`));
+    if (isRecent(cve.publishedAt)) {
+      badge.appendChild(document.createTextNode(" "));
+      badge.appendChild(el("span", { className: "new-badge", text: "New" }));
+    }
+    els.briefingPanel.appendChild(badge);
+  }
 }
 
 function renderVersionSummaries(fortclient, emsModel) {

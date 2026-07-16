@@ -6,5 +6,5 @@ Type=oneshot
 User=tetrax
 Group=tetrax
 WorkingDirectory=/home/tetrax/workspace/upgrade_path
-ExecStart=/usr/bin/python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog
+ExecStart=/usr/bin/python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog --cve-catalog
 ExecStart=/home/tetrax/workspace/upgrade_path/.venv-compat/bin/python3 scripts/import_forticlient_compat.py --commit

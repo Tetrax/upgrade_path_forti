@@ -102,6 +102,9 @@
   <script>
     const STORAGE_KEY = "fortios-upgrade-intelligence-v1";
     const GENERATED_DATA_URL = "../data/fortios-data.generated.json";
+    // How long a "New" badge stays on a freshly-seen FortiOS version or CVE in the
+    // briefing bar before it blends back into the crowd.
+    const NEW_BADGE_WINDOW_DAYS = 14;
     // FortiClient/EMS have no Fortinet Upgrade Path Tool support, so no "Afficher le chemin" here
     // — they get their own catalog/advisories/compatibility page instead (app/forticlient/).
     const NO_PATH_PRODUCT_IDS = ["forticlient", "forticlient-ems"];
@@ -193,6 +196,10 @@
     };
 
     let state = loadState();
+    // Gates whether renderResult() shows a cached path: false right after any selection change,
+    // true only once the technician explicitly asks for it (button click, or replaying a past
+    // search) — changing a dropdown must never surface a result on its own.
+    let pathRequested = false;
 
     const els = {
       product: document.getElementById("productSelect"),
@@ -219,19 +226,28 @@
       els.modelSearch.value = "";
       populateModels();
       populateVersions();
+      pathRequested = false;
       renderResult();
     });
     els.modelSearch.addEventListener("input", () => {
       populateModels();
       populateVersions();
+      pathRequested = false;
       renderResult();
     });
     els.model.addEventListener("change", () => {
       populateVersions();
+      pathRequested = false;
       renderResult();
     });
-    els.current.addEventListener("change", renderResult);
-    els.target.addEventListener("change", renderResult);
+    els.current.addEventListener("change", () => {
+      pathRequested = false;
+      renderResult();
+    });
+    els.target.addEventListener("change", () => {
+      pathRequested = false;
+      renderResult();
+    });
 
     init();
 
@@ -370,6 +386,7 @@
     // model/version dropdowns. Every "Afficher le chemin" click re-queries Fortinet live, so the
     // hops shown always reflect the official service, not a possibly-stale cached copy.
     async function showPath() {
+      pathRequested = true;
       renderResult();
       if (currentModel()) {
         await fetchOfficialPath();
@@ -513,11 +530,15 @@
         els.sideMessage.textContent = "Aucun modèle trouvé avec ce filtre.";
         return;
       }
-      const path = currentPath();
+      // Cached path only ever shown once explicitly requested (button click / replayed search) —
+      // otherwise picking a version from the dropdown would silently surface a stale result.
+      const path = pathRequested ? currentPath() : null;
 
       if (!path) {
         els.result.innerHTML = `<div class="content-band">${offlineBanner}${renderChecklist()}</div>`;
-        els.sideMessage.textContent = "Chemin absent du catalogue pour ce modèle et ce couple de versions.";
+        els.sideMessage.textContent = pathRequested
+          ? "Chemin absent du catalogue pour ce modèle et ce couple de versions."
+          : "Sélectionnez les versions puis cliquez sur « Afficher le chemin ».";
         return;
       }
 
@@ -758,7 +779,8 @@
             else if (daysLeft <= 183) lifecycleTag = ` <span class="briefing-tag warn">Support → ${escapeHtml(lifecycle.support)}</span>`;
           }
         }
-        const label = `${escapeHtml(firmware.version)}${maturityTag}${lifecycleTag}`;
+        const newTag = isRecent(firmware.discoveredAt) ? ` <span class="new-badge">New</span>` : "";
+        const label = `${escapeHtml(firmware.version)}${maturityTag}${lifecycleTag}${newTag}`;
         return releaseNotesUrl
           ? `<a class="briefing-chip" href="${escapeAttr(releaseNotesUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">${label}</a>`
           : `<span class="briefing-chip" title="${escapeAttr(tooltip)}">${label}</span>`;
@@ -768,7 +790,8 @@
         const scoreLabel = typeof cve.cvssScore === "number" ? ` CVSS ${cve.cvssScore}` : "";
         const products = cveProductLabels(cve).join(", ") || "Produit inconnu";
         const tooltip = `${cve.title} — ${products} · ${cveSeverityLabel(cve.severity)}${scoreLabel}`;
-        return `<a class="badge ${cveBadgeClass(cve.severity)}" href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">🛡 ${escapeHtml(cve.id)}</a>`;
+        const newTag = isRecent(cve.publishedAt) ? ` <span class="new-badge">New</span>` : "";
+        return `<a class="badge ${cveBadgeClass(cve.severity)}" href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">🛡 ${escapeHtml(cve.id)}${newTag}</a>`;
       }).join(" ");
 
       els.briefingPanel.innerHTML = `
@@ -790,6 +813,12 @@
 
     function daysUntil(dateStr) {
       return Math.round((new Date(`${dateStr}T00:00:00Z`).getTime() - Date.now()) / 86400000);
+    }
+
+    function isRecent(dateStr) {
+      if (!dateStr) return false;
+      const ageDays = (Date.now() - new Date(`${dateStr}T00:00:00Z`).getTime()) / 86400000;
+      return ageDays >= 0 && ageDays <= NEW_BADGE_WINDOW_DAYS;
     }
 
     // Mature/Feature status comes straight from the Upgrade Path Tool's own API (see
@@ -815,8 +844,11 @@
         .slice(0, limit);
     }
 
+    // FortiClient/EMS CVEs have their own briefing bar on app/forticlient/ (no recommended-path
+    // support there, so they don't belong mixed in with FortiOS/FortiAnalyzer/FortiManager here).
     function latestCves(limit) {
       return [...(state.cves || [])]
+        .filter(cve => (cve.affected || []).some(range => !NO_PATH_PRODUCT_IDS.includes(range.product)))
         .sort((a, b) => (b.publishedAt || "").localeCompare(a.publishedAt || ""))
         .slice(0, limit);
     }

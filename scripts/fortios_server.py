@@ -177,14 +177,19 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         from this same host. Not a full token-based scheme, but it closes off the "any page the
         browser visits can silently fetch() this API" hole a bare Content-Type check leaves open,
         since a Content-Type of text/plain would otherwise sail through as a CORS-simple request.
+
+        Compared on hostname only (not port): behind the nginx reverse proxy, the forwarded Host
+        header loses the original port (nginx's $host strips it) while the browser's Origin keeps
+        it (valdev.me:3001 is not the default HTTPS port) — comparing full netloc rejected every
+        single legitimate request.
         """
-        host = self.headers.get("Host", "")
+        host = self.headers.get("Host", "").split(":", 1)[0]
         origin = self.headers.get("Origin")
         if origin is not None:
-            return urllib.parse.urlsplit(origin).netloc == host
+            return urllib.parse.urlsplit(origin).hostname == host
         referer = self.headers.get("Referer")
         if referer is not None:
-            return urllib.parse.urlsplit(referer).netloc == host
+            return urllib.parse.urlsplit(referer).hostname == host
         return True  # neither header present — a same-origin browser navigation, not fetch()
 
     def do_POST(self) -> None:
