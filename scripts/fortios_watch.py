@@ -34,7 +34,7 @@ import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 VERSION_RE = re.compile(r"\b\d+\.\d+\.\d+(?:\.\d+)?\b")
@@ -116,11 +116,62 @@ def utc_now() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def utc_now_precise() -> str:
+    """Same as utc_now() but keeps microsecond resolution. Used only for the health-tracking
+    subsystem's started_at/lastAttemptAt, which double as the ordering key that decides whether
+    an older, slower attempt is allowed to clobber a newer one's result (see
+    _merge_health_source()) -- two attempts starting within the same whole second are otherwise
+    indistinguishable by that comparison, letting a stale write win over a fresher one. Every
+    other timestamp in the app (generatedAt, createdAt, requestedAt...) keeps using utc_now()
+    unchanged; this isn't a global format change.
+    """
+    return dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
+
+
 def read_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _archive_corrupt_file(path: Path, suffix: str) -> None:
+    """Rename a bad file aside instead of silently overwriting it in place, so evidence of the
+    corruption survives the next successful write. Best-effort: losing the forensic copy (e.g. a
+    read-only directory) is never worth failing the run over.
+    """
+    try:
+        archived = path.with_name(f"{path.name}.{suffix}-{int(time.time())}")
+        os.replace(path, archived)
+    except OSError:
+        pass
+
+
+def read_json_tolerant(
+    path: Path,
+    default: Any,
+    *,
+    validate: "Callable[[Any], bool] | None" = None,
+    archive_suffix: str = "corrupt",
+) -> Any:
+    """Best-effort JSON read for files that must never be allowed to break the process reading
+    them: a missing file returns `default` (like read_json()); a file that exists but is corrupt
+    (invalid JSON, wrong encoding), the wrong top-level type, or fails the optional `validate`
+    structure check also returns `default` instead of raising. The bad file is archived aside
+    (see _archive_corrupt_file()) for diagnosis rather than left in place or clobbered blind.
+    """
+    if not path.exists():
+        return default
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        _archive_corrupt_file(path, archive_suffix)
+        return default
+    if validate is not None and not validate(payload):
+        _archive_corrupt_file(path, archive_suffix)
+        return default
+    return payload
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -205,6 +256,25 @@ HEALTH_SOURCE_LABELS = {
 DEFAULT_HEALTH_PATH = Path("data/fortios-health.json")
 DEFAULT_NOTIFY_HISTORY_PATH = Path("data/fortios-notify-history.json")
 
+
+def _is_valid_health_state(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    sources = payload.get("sources", {})
+    if not isinstance(sources, dict):
+        return False
+    return all(isinstance(record, dict) for record in sources.values())
+
+
+def read_health_state(path: Path) -> dict[str, Any]:
+    """Tolerant read of the health-tracking file: corrupt JSON, a wrong top-level type, or a
+    malformed "sources" map is treated as a fresh empty state rather than raised. Health tracking
+    is diagnostic, never allowed to abort the actual catalog collection it watches over -- a
+    truncated or garbled fortios-health.json used to raise JSONDecodeError right here and take
+    the whole run down with it.
+    """
+    return read_json_tolerant(path, {"sources": {}}, validate=_is_valid_health_state, archive_suffix="corrupt")
+
 # A health entry is meant to be a short, human-readable summary shown directly in the UI, never
 # a debugging dump -- scrub anything that looks like a credential/token before it's ever
 # persisted, and never let a full traceback or SMTP auth detail leak through.
@@ -247,7 +317,14 @@ class HealthSourceResult:
 def _merge_health_source(existing: dict[str, Any], result: HealthSourceResult) -> dict[str, Any]:
     # An older/slower run's result must never clobber what a later attempt already recorded --
     # lastAttemptAt is the ordering key (this run's own started_at vs whatever's on disk).
-    if existing.get("lastAttemptAt") and existing["lastAttemptAt"] > result.started_at:
+    # Compared as parsed datetimes, not raw strings: started_at now carries microsecond
+    # resolution (see utc_now_precise()) so two attempts beginning within the same whole second
+    # are still distinguishable, but a handful of pre-existing records on disk may still be at
+    # the old whole-second precision -- as plain strings, "...:00Z" sorts AFTER "...:00.5...Z"
+    # ('.' < 'Z' in ASCII) even though .0 is chronologically earlier than .5, which would wrongly
+    # reject a legitimate same-second update. Parsing both sides sidesteps that entirely.
+    existing_attempt_at = existing.get("lastAttemptAt")
+    if existing_attempt_at and parse_health_timestamp(existing_attempt_at) > parse_health_timestamp(result.started_at):
         return existing
 
     record = dict(existing)
@@ -291,10 +368,10 @@ def health_mark_running(health_path: Path, source_id: str) -> str:
     Returns the started_at timestamp — reuse it when building this source's HealthSourceResult
     so both writes agree on the same attempt's identity.
     """
-    started_at = utc_now()
+    started_at = utc_now_precise()
     try:
         with cross_process_lock(health_path):
-            state = read_json(health_path, {"sources": {}})
+            state = read_health_state(health_path)
             sources = state.setdefault("sources", {})
             existing = sources.get(source_id, {})
             record = dict(existing)
@@ -313,7 +390,7 @@ def record_health_results(health_path: Path, results: dict[str, HealthSourceResu
     under the same cross-process lock as every other writer.
     """
     with cross_process_lock(health_path):
-        state = read_json(health_path, {"sources": {}})
+        state = read_health_state(health_path)
         sources = state.setdefault("sources", {})
         for source_id, result in results.items():
             sources[source_id] = _merge_health_source(sources.get(source_id, {}), result)
@@ -1890,9 +1967,8 @@ def main(argv: list[str]) -> int:
     # very end (see the "Notifications" block below) — every event is a diff against these, never
     # a re-scan of the whole catalog, which is what keeps a first activation or a --cve-backfill
     # from spamming years of pre-existing history.
-    health_before = read_json(args.health_output, {}).get("sources", {})
+    health_before = read_health_state(args.health_output).get("sources", {})
     cves_before_by_id = {item["id"]: item for item in before.get("cves", []) if item.get("id")}
-    lifecycle_before = dict(before.get("fortiosLifecycle", {}))
 
     # Populated as each source below finishes (success, failure, or deliberate skip), then
     # applied to args.health_output in one batch near the end — same delta pattern as the
@@ -1947,7 +2023,7 @@ def main(argv: list[str]) -> int:
         if skip_reason:
             skipped_docs_versions = [skip_reason]
         for source_id in (SOURCE_FORTIOS_DOCS, SOURCE_FORTIOS_LIFECYCLE):
-            record_source(source_id, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+            record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
 
     tool_products = [item.strip() for item in args.tool_products.split(",") if item.strip()]
     tool_product_health_sources = {"fortianalyzer": SOURCE_FORTIANALYZER, "fortimanager": SOURCE_FORTIMANAGER}
@@ -1957,7 +2033,7 @@ def main(argv: list[str]) -> int:
                 continue
             source_id = tool_product_health_sources.get(product_id)
             t0 = time.monotonic()
-            started_at = health_mark_running(args.health_output, source_id) if source_id else utc_now()
+            started_at = health_mark_running(args.health_output, source_id) if source_id else utc_now_precise()
             try:
                 product_state = collect_tool_catalog(product_id, args.timeout)
                 items = count_firmwares_for_product(product_state, product_id)
@@ -1974,10 +2050,10 @@ def main(argv: list[str]) -> int:
                     record_source(source_id, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
         for product_id, source_id in tool_product_health_sources.items():
             if product_id not in tool_products:
-                record_source(source_id, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+                record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
     else:
         for source_id in tool_product_health_sources.values():
-            record_source(source_id, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+            record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
 
     skipped_forticlient: list[str] = []
     if args.forticlient_catalog and not args.skip_network:
@@ -2009,7 +2085,7 @@ def main(argv: list[str]) -> int:
         if args.forticlient_catalog:
             skipped_forticlient = ["collecte ignorée avec --skip-network"]
         for source_id in (SOURCE_FORTICLIENT, SOURCE_FORTICLIENT_EMS):
-            record_source(source_id, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+            record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
 
     # Advisories and paths are the two fields a live user can create/edit/delete through
     # fortios_server.py at any moment, including during this run's multi-minute network
@@ -2095,7 +2171,7 @@ def main(argv: list[str]) -> int:
         except Exception as error:  # noqa: BLE001 - recorded, not re-raised.
             record_source(SOURCE_CVE_PSIRT, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
     else:
-        record_source(SOURCE_CVE_PSIRT, utc_now(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+        record_source(SOURCE_CVE_PSIRT, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
 
     # This run started from a read of args.output taken potentially minutes ago (network
     # scraping in between) — fortios_server.py or import_forticlient_compat.py may have written
@@ -2162,7 +2238,7 @@ def main(argv: list[str]) -> int:
         daily_run_error = None
     health_results[SOURCE_DAILY_RUN] = HealthSourceResult(
         status=daily_run_status,
-        started_at=utc_now(),
+        started_at=utc_now_precise(),
         duration_seconds=round(time.monotonic() - run_started_at_monotonic, 3),
         items_collected=count_firmwares(final_state),
         error=daily_run_error,
@@ -2178,13 +2254,16 @@ def main(argv: list[str]) -> int:
     # exit code — every event below is a diff against a snapshot taken before this run's own
     # collection started, never a re-scan of the whole catalog, which is what keeps a first
     # activation (or a --cve-backfill, explicitly excluded below) from spamming years of
-    # pre-existing history in one email.
+    # pre-existing history in one email. New events are queued into a persistent outbox BEFORE
+    # any send attempt (see fortios_notify.enqueue_and_claim()), so an SMTP failure here can
+    # never lose them -- they're retried on the next run instead of silently vanishing.
     try:
         import fortios_notify  # deferred: avoids a load-time circular import with this module
+        import uuid
 
         email_config = fortios_notify.load_email_config()
         if email_config.enabled:
-            health_after = read_json(args.health_output, {}).get("sources", {})
+            health_after = read_health_state(args.health_output).get("sources", {})
             events: list[Any] = []
             if not args.cve_backfill:
                 product_labels = {p.get("id"): p.get("label", p.get("id")) for p in final_state.get("products", [])}
@@ -2198,19 +2277,28 @@ def main(argv: list[str]) -> int:
                 events += fortios_notify.derive_new_cve_events(newly_added_cves)
                 cves_after_by_id = {item["id"]: item for item in final_state.get("cves", []) if item.get("id")}
                 events += fortios_notify.derive_cve_modification_events(cves_before_by_id, cves_after_by_id)
-                events += fortios_notify.derive_eol_events(lifecycle_before, final_state.get("fortiosLifecycle", {}))
+
+                notify_state = fortios_notify.load_notify_state(args.notify_history_output)
+                eol_events, eol_state_after = fortios_notify.derive_eol_events(
+                    final_state.get("fortiosLifecycle", {}), notify_state.get("eolState", {}),
+                    now=final_state["generatedAt"],
+                )
+                events += eol_events
+                fortios_notify.save_eol_state(args.notify_history_output, eol_state_after)
             events += fortios_notify.derive_source_health_events(health_before, health_after, HEALTH_SOURCE_LABELS)
 
-            if events:
-                history = fortios_notify.load_notify_history(args.notify_history_output)
-                new_events = fortios_notify.filter_new_events(events, history)
+            claimant = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+            pending = fortios_notify.enqueue_and_claim(args.notify_history_output, events, claimant=claimant)
+            if pending:
                 composed = fortios_notify.compose_email(
-                    new_events, app_url=email_config.app_url, run_timestamp=final_state["generatedAt"],
+                    pending, app_url=email_config.app_url, run_timestamp=final_state["generatedAt"],
                 )
                 if composed:
                     subject, body = composed
                     if fortios_notify.send_email(email_config, subject, body):
-                        fortios_notify.record_sent_events(args.notify_history_output, new_events)
+                        fortios_notify.finalize_sent_events(args.notify_history_output, pending)
+                    else:
+                        fortios_notify.release_claim(args.notify_history_output, claimant)
     except Exception as error:  # noqa: BLE001 - a broken notification path must never fail the run.
         sys.stderr.write(f"Avertissement : notification email non envoyée ({error}).\n")
 

@@ -18,6 +18,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import fortios_watch as fw  # noqa: E402
 
 
+def _concurrent_write_worker(path, source_id, started_at, hold_seconds, barrier):
+    """Module-level on purpose: multiprocessing's "spawn" start method (macOS and Windows
+    defaults, and the only option left on Python 3.14) needs to locate the worker by its
+    import path in the child process, which only works for a plain module-level function --
+    one nested inside a test method has no such path and the child fails to start with it,
+    even though "fork" (Linux's historical default) never cared. Defining it here instead of
+    inside the test keeps the test meaningful on every platform without forcing a start method
+    the test wouldn't otherwise run under in CI.
+    """
+    barrier.wait()
+    with fw.cross_process_lock(path):
+        state = fw.read_json(path, {"sources": {}})
+        time.sleep(hold_seconds)  # widen the window a real race would need to slip through
+        state.setdefault("sources", {})[source_id] = {"status": "ok", "lastAttemptAt": started_at}
+        fw.write_json(path, state)
+
+
 class HealthResultMergeTests(unittest.TestCase):
     def test_first_successful_collection(self):
         result = fw.HealthSourceResult(
@@ -100,6 +117,47 @@ class HealthResultMergeTests(unittest.TestCase):
         ))
         self.assertEqual(stale_write, newer, "an older attempt must never overwrite a newer result")
 
+    def test_same_second_attempts_finishing_in_reverse_order_do_not_clobber(self):
+        """Regression: utc_now() used to round lastAttemptAt/started_at down to the whole
+        second, so two attempts beginning within the same second were indistinguishable by the
+        clobber-guard above -- whichever one happened to *write* last would win, even if it had
+        actually *started* first (i.e. was the stale one). Health timestamps now carry
+        microsecond resolution (utc_now_precise()) specifically so this can't happen: B starts
+        slightly after A within the same second but finishes (writes) first; A's write -- for an
+        attempt that began before B -- must never overwrite B's already-recorded result.
+        """
+        state_after_b = fw._merge_health_source({}, fw.HealthSourceResult(
+            status=fw.HEALTH_STATUS_OK, started_at="2026-07-16T07:15:00.400000Z", duration_seconds=0.1,
+        ))
+        state_after_a = fw._merge_health_source(state_after_b, fw.HealthSourceResult(
+            status=fw.HEALTH_STATUS_ERROR, started_at="2026-07-16T07:15:00.100000Z", duration_seconds=5.0,
+            error="a slower attempt that began before B, finishing after it",
+        ))
+        self.assertEqual(
+            state_after_a, state_after_b,
+            "an attempt that started earlier must never clobber a later one's result, even within the same second",
+        )
+
+    def test_legacy_whole_second_record_does_not_block_a_same_second_precise_update(self):
+        """Regression: comparing lastAttemptAt as raw strings breaks the instant a
+        microsecond-precision timestamp meets an older whole-second-precision one (pre-migration
+        data) from the same wall-clock second -- '.' sorts before 'Z' in ASCII, so
+        "...:00Z" > "...:00.500000Z" as plain strings even though .000000 is chronologically
+        earlier than .500000. The comparison must parse both sides as datetimes instead.
+        """
+        existing = fw._merge_health_source({}, fw.HealthSourceResult(
+            status=fw.HEALTH_STATUS_ERROR, started_at="2026-07-16T07:15:00Z", duration_seconds=1.0,
+            error="an old, pre-migration whole-second record",
+        ))
+        updated = fw._merge_health_source(existing, fw.HealthSourceResult(
+            status=fw.HEALTH_STATUS_OK, started_at="2026-07-16T07:15:00.500000Z", duration_seconds=1.0,
+        ))
+        self.assertEqual(updated["status"], fw.HEALTH_STATUS_OK, "a same-second, higher-precision update must not be rejected")
+
+    def test_utc_now_precise_carries_microseconds(self):
+        value = fw.utc_now_precise()
+        self.assertRegex(value, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
+
     def test_error_message_is_sanitized(self):
         record = fw._merge_health_source({}, fw.HealthSourceResult(
             status=fw.HEALTH_STATUS_ERROR, started_at="2026-07-16T07:15:00Z", duration_seconds=0.1,
@@ -163,20 +221,12 @@ class RecordHealthResultsIntegrationTests(unittest.TestCase):
             )
 
     def test_concurrent_updates_are_serialized(self):
-        def writer(path, source_id, started_at, hold_seconds, barrier):
-            barrier.wait()
-            with fw.cross_process_lock(path):
-                state = fw.read_json(path, {"sources": {}})
-                time.sleep(hold_seconds)  # widen the window a real race would need to slip through
-                state.setdefault("sources", {})[source_id] = {"status": "ok", "lastAttemptAt": started_at}
-                fw.write_json(path, state)
-
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "health.json"
             fw.write_json(path, {"sources": {}})
             barrier = multiprocessing.Barrier(2)
-            p1 = multiprocessing.Process(target=writer, args=(path, "source-a", "t1", 0.3, barrier))
-            p2 = multiprocessing.Process(target=writer, args=(path, "source-b", "t2", 0.3, barrier))
+            p1 = multiprocessing.Process(target=_concurrent_write_worker, args=(path, "source-a", "t1", 0.3, barrier))
+            p2 = multiprocessing.Process(target=_concurrent_write_worker, args=(path, "source-b", "t2", 0.3, barrier))
             p1.start()
             p2.start()
             p1.join(timeout=5)
@@ -187,6 +237,99 @@ class RecordHealthResultsIntegrationTests(unittest.TestCase):
             # read-modify-write could have clobbered the other's addition entirely.
             self.assertIn("source-a", state["sources"])
             self.assertIn("source-b", state["sources"])
+
+
+class TolerantHealthReadTests(unittest.TestCase):
+    """A corrupt data/fortios-health.json must never take the whole collection down with it --
+    health tracking is diagnostic, not load-bearing (see read_health_state()/read_json_tolerant()
+    in fortios_watch.py)."""
+
+    def test_missing_file_returns_empty_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_truncated_json_is_treated_as_empty_and_archived(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text('{"sources": {"fortios-docs": {"status": "ok"', encoding="utf-8")
+            state = fw.read_health_state(path)
+            self.assertEqual(state, {"sources": {}})
+            # The bad file must survive somewhere for diagnosis, not vanish or get clobbered blind.
+            archived = list(Path(tmp).glob("health.json.corrupt-*"))
+            self.assertEqual(len(archived), 1)
+            self.assertIn("fortios-docs", archived[0].read_text(encoding="utf-8"))
+            self.assertFalse(path.exists(), "the corrupt file must be moved aside, not left at the original path")
+
+    def test_invalid_json_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text("not json at all, just garbage \x00\x01", encoding="utf-8")
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_wrong_top_level_type_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text("[1, 2, 3]", encoding="utf-8")
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_sources_wrong_type_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text('{"sources": "not-a-dict"}', encoding="utf-8")
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_source_record_wrong_type_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text('{"sources": {"daily-run": "oops, a string not a record"}}', encoding="utf-8")
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_health_mark_running_recovers_from_a_corrupt_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text("{corrupt", encoding="utf-8")
+            started_at = fw.health_mark_running(path, fw.SOURCE_FORTIOS_DOCS)
+            state = fw.read_json(path, None)
+            self.assertIsNotNone(state, "a fresh, valid file must be written despite starting from corruption")
+            self.assertEqual(state["sources"][fw.SOURCE_FORTIOS_DOCS]["lastAttemptAt"], started_at)
+
+    def test_record_health_results_recovers_from_a_corrupt_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text('{"sources": [1, 2, 3]}', encoding="utf-8")
+            fw.record_health_results(path, {
+                fw.SOURCE_FORTIOS_DOCS: fw.HealthSourceResult(
+                    status=fw.HEALTH_STATUS_OK, started_at="2026-07-17T07:15:00.000000Z", duration_seconds=1.0,
+                    items_collected=10,
+                ),
+            })
+            state = fw.read_json(path, None)
+            self.assertEqual(state["sources"][fw.SOURCE_FORTIOS_DOCS]["itemsCollected"], 10)
+
+    def test_main_completes_and_writes_a_catalog_despite_a_corrupt_health_file(self):
+        """The literal bug report: a garbled fortios-health.json used to raise JSONDecodeError
+        at the very top of main() (reading health_before), before any collection even started,
+        taking the whole run down with it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "state.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            health_path = Path(tmp) / "health.json"
+            health_path.write_text('{"sources": {"broken": [1, 2, 3]}}, trailing garbage', encoding="utf-8")
+
+            exit_code = fw.main([
+                "--skip-network",
+                "--base", str(base_path), "--output", str(base_path),
+                "--report", str(Path(tmp) / "report.md"), "--health-output", str(health_path),
+            ])
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(base_path.exists())
+            final_state = fw.read_json(base_path, None)
+            self.assertIsNotNone(final_state, "the catalog must still be produced despite the corrupt health file")
+            # And health tracking must have self-healed: a fresh, valid file now exists.
+            health_state = fw.read_json(health_path, None)
+            self.assertIsNotNone(health_state)
+            self.assertIn("sources", health_state)
 
 
 class SourceSeverityClassificationTests(unittest.TestCase):

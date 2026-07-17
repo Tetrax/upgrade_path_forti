@@ -282,11 +282,11 @@ Une CVE n'est retenue que si elle touche au moins un des 5 produits suivis par l
 
 ## État de santé des collectes
 
-`data/fortios-health.json` (gitignored, généré automatiquement, séparé du catalogue principal) suit l'état de chaque source de collecte : `fortios-docs`, `fortianalyzer`, `fortimanager`, `forticlient`, `forticlient-ems`, `cve-psirt`, `fortios-lifecycle`, `compat-matrix`, et `daily-run` (résumé global). Pour chaque source : statut (`ok`/`warning`/`error`/`running`/`skipped`), date de dernière tentative/dernier succès/dernière erreur, message d'erreur court (jamais de traceback ni de secret), durée, nombre d'éléments collectés, et compteur d'échecs consécutifs.
+`data/fortios-health.json` (gitignored, généré automatiquement, séparé du catalogue principal) suit l'état de chaque source de collecte : `fortios-docs`, `fortianalyzer`, `fortimanager`, `forticlient`, `forticlient-ems`, `cve-psirt`, `fortios-lifecycle`, `compat-matrix`, et `daily-run` (résumé global). Pour chaque source : statut (`ok`/`warning`/`error`/`running`/`skipped`), date de dernière tentative/dernier succès/dernière erreur (résolution à la microseconde — nécessaire pour que deux tentatives démarrées la même seconde ne s'écrasent jamais l'une l'autre), message d'erreur court (jamais de traceback ni de secret), durée, nombre d'éléments collectés, et compteur d'échecs consécutifs.
 
-Écrit par `scripts/fortios_watch.py` (une source par étape de collecte) et par `scripts/import_forticlient_compat.py` (source `compat-matrix`), sous le même verrou interprocessus que le catalogue principal (`cross_process_lock`). Une source « ignorée » (flag désactivé, ou `--skip-network`) n'est jamais comptée comme un échec ; un échec n'efface jamais la date du dernier succès connu ; l'écriture de l'état de santé ne peut jamais faire échouer la collecte elle-même.
+Écrit par `scripts/fortios_watch.py` (une source par étape de collecte) et par `scripts/import_forticlient_compat.py` (source `compat-matrix`, exécuté dans une étape séparée APRÈS `fortios_watch.py` — voir "Planification" plus bas), sous le même verrou interprocessus que le catalogue principal (`cross_process_lock`). Une source « ignorée » (flag désactivé, ou `--skip-network`) n'est jamais comptée comme un échec ; un échec n'efface jamais la date du dernier succès connu ; l'écriture de l'état de santé ne peut jamais faire échouer la collecte elle-même — un fichier corrompu, tronqué ou de structure invalide est traité comme un état vide (jamais une exception qui interromprait la collecte), et archivé aside (`fortios-health.json.corrupt-<timestamp>`) pour diagnostic plutôt que silencieusement écrasé.
 
-Affiché dans `/app/` sous le bandeau de briefing : section repliable « État des données » avec un point vert/orange/rouge par source (rouge = échecs répétés ou données de plus de 48h, orange = source vieillissante/ignorée/échec isolé, vert = collecte récente réussie), un bandeau d'avertissement si une source est en rouge, et le détail complet par source dans un tableau replié par défaut.
+Affiché dans `/app/` sous le bandeau de briefing : section repliable « État des données » avec un point vert/orange/rouge par source (rouge = échecs répétés ou données de plus de 48h, orange = source vieillissante/ignorée/échec isolé, vert = collecte récente réussie), un bandeau d'avertissement si une source est en rouge, et le détail complet par source dans un tableau replié par défaut. Le point global du bandeau (`#healthSummaryDot`) reflète TOUTES les sources, pas seulement `daily-run` : comme `compat-matrix` tourne dans une étape séparée après que `fortios_watch.py` a déjà figé son propre statut `daily-run`, un échec de `compat-matrix` seul doit quand même faire passer le point global au rouge — `daily-run` structurellement ne peut pas savoir ce qu'une étape ultérieure va faire.
 
 ## Notifications email
 
@@ -297,10 +297,32 @@ Variables : `FORTIOS_EMAIL_ENABLED` (`false` par défaut), `FORTIOS_SMTP_HOST/PO
 Un seul email synthétique par collecte (jamais un email par événement), avec un objet reflétant la catégorie la plus grave présente :
 
 - **CRITICAL** : nouvelle CVE critique, ou CVE existante dont la sévérité passe à critique.
-- **DAILY** : nouvelles versions FortiOS/FortiAnalyzer/FortiManager (FortiClient/EMS exclus, trop bruyant), changement de sévérité d'une CVE existante, branche passant en fin de support.
+- **DAILY** : nouvelles versions FortiOS/FortiAnalyzer/FortiManager (FortiClient/EMS exclus, trop bruyant), modification significative d'une CVE existante (voir ci-dessous), branche passant en fin de support.
 - **OPERATIONS** : une source en échec depuis ≥ 2 exécutions consécutives, ou son retour à la normale.
 
-Chaque événement a une clé de déduplication stable (`type|source|resource_id|new_value`, ex: `new-cve|psirt|CVE-2026-12345|critical`) conservée dans `data/fortios-notify-history.json` (gitignored, avec purge après 180 jours) — un même événement n'est donc jamais renvoyé deux fois. Les événements sont toujours calculés par différence entre l'état avant/après la collecte en cours, jamais par re-scan du catalogue entier : ni la première activation, ni un `--cve-backfill` historique, ne déclenchent d'email pour des données déjà existantes. Un échec SMTP (réseau, STARTTLS, authentification) est journalisé sans jamais faire échouer la collecte, et sans jamais afficher le mot de passe.
+Une CVE déjà connue déclenche un événement dès qu'un changement significatif est détecté, pas seulement un changement de sévérité : extension ou réduction du périmètre affecté (produits/modèles/plage de versions — l'apparition d'une version corrigée, `to` passant de `null` à une valeur, est simplement un cas particulier d'extension de plage), ou variation du score CVSS ≥ 1.0 point. Un changement purement technique (reformulation du titre, `updatedAt`, un score CVSS qui bouge de 0.1) ne déclenche jamais d'email à lui seul. Plusieurs changements simultanés sur la même CVE sont regroupés dans un seul événement, pas un par champ modifié.
+
+Une branche FortiOS franchissant sa date de fin de support déclenche un événement même si aucune donnée du catalogue n'a changé ce jour-là (`fortios_watch.py`/`endoflife.date` renvoient la même date de fin de support avant et après — seule l'avancée du calendrier fait la différence) : l'état « cette branche est-elle en fin de support » est donc suivi séparément d'une collecte à l'autre (`eolState` dans `data/fortios-notify-history.json`), pas dérivé d'une comparaison avant/après catalogue. Une branche vue pour la première fois initialise silencieusement cet état sans envoyer d'email, pour ne pas spammer toutes les fins de support déjà passées lors de la toute première activation ; ensuite, l'événement part exactement une fois au moment du franchissement, y compris après plusieurs jours sans collecte.
+
+Chaque événement a une clé de déduplication stable (`type|source|resource_id|new_value`, ex: `new-cve|psirt|CVE-2026-12345|critical`) — un même événement n'est donc jamais renvoyé deux fois. Les événements sont toujours calculés par différence entre l'état avant/après la collecte en cours, jamais par re-scan du catalogue entier : ni la première activation, ni un `--cve-backfill` historique, ne déclenchent d'email pour des données déjà existantes.
+
+**Outbox persistante (`data/fortios-notify-history.json`, gitignored)** — un échec SMTP (réseau, STARTTLS, authentification) est journalisé sans jamais faire échouer la collecte ni afficher le mot de passe, et ne fait plus perdre l'événement : celui-ci est écrit dans une file d'attente persistante *avant* toute tentative d'envoi, et n'en est retiré qu'après un envoi réussi. Une collecte suivante — même sans aucun changement neuf dans le catalogue — reprend automatiquement tout ce qui est resté en attente et retente l'envoi avec les événements de ce nouveau run. Le fichier tient trois choses sous le même verrou interprocessus (`cross_process_lock`) :
+
+```json
+{
+  "sentKeys": {"new-cve|psirt|CVE-2026-12345|critical": "2026-07-17T07:23:36Z"},
+  "outbox": [{"category": "CRITICAL", "dedupKey": "...", "summary": "...", "queuedAt": "...", "claimedBy": null, "claimedAt": null}],
+  "eolState": {"7.6": true}
+}
+```
+
+- `sentKeys` : historique de déduplication (purge après 180 jours), comme avant.
+- `outbox` : file d'attente des événements pas encore envoyés avec succès.
+- `eolState` : dernier état connu « branche en fin de support ou non » par branche (voir ci-dessus).
+
+Chaque collecte réserve («&nbsp;réclame&nbsp;») les entrées de l'outbox qui ne sont pas déjà tenues par une autre exécution encore en cours (`claimedBy`/`claimedAt`, expire après 10&nbsp;minutes — largement au-delà du pire timeout SMTP réaliste — pour qu'une exécution plantée ne bloque pas indéfiniment les tentatives suivantes) : deux collectes qui se chevauchent ne peuvent donc jamais envoyer le même événement en double, la seconde ne réclamant rien de ce que la première tient déjà. Sur un succès d'envoi, les événements réclamés sont retirés de l'outbox et leur clé passe dans `sentKeys` ; sur un échec, la réclamation est simplement relâchée pour la prochaine collecte.
+
+Un fichier `fortios-notify-history.json` corrompu, tronqué ou de structure invalide est traité comme un état vide (jamais une exception), et archivé aside (`fortios-notify-history.json.corrupt-<timestamp>`) pour diagnostic. **Procédure de récupération** en cas de doute sur son intégrité : supprimer ou déplacer le fichier — la prochaine collecte en régénère un vide automatiquement ; au pire, cela ne fait que renvoyer une notification déjà connue une fois de plus (jamais en perdre), puisque les événements eux-mêmes restent dérivés du catalogue et de l'état de santé, pas du fichier de dédoublonnage lui-même.
 
 Tester la configuration sans lancer de collecte ni toucher aux données :
 

@@ -234,3 +234,36 @@ def test_health_state_display(app_page, fortios_server):
 
     app_page.click("#healthDetails summary")
     expect(app_page.locator("#healthTableContainer")).to_contain_text("PSIRT unreachable")
+
+
+# 16. Global health dot must reflect ALL sources, not just daily-run ----------------------
+
+def test_health_dot_is_red_when_compat_matrix_fails_even_if_daily_run_is_ok(app_page, fortios_server):
+    """Regression: import_forticlient_compat.py's compat-matrix step runs as a separate
+    ExecStart= AFTER fortios_watch.py finishes and stamps daily-run's own aggregate status --
+    so daily-run can be "ok" while compat-matrix itself failed that same day. The summary dot
+    must still turn red in that case, not stay green."""
+    health_payload = {
+        "sources": {
+            "daily-run": {
+                "status": "ok", "lastAttemptAt": "2026-07-16T07:15:00Z",
+                "lastSuccessAt": "2026-07-16T07:15:00Z", "consecutiveFailures": 0,
+                "durationSeconds": 5.0,
+            },
+            "compat-matrix": {
+                "status": "error", "lastAttemptAt": "2026-07-16T07:23:00Z",
+                "lastSuccessAt": "2026-07-10T07:23:00Z", "consecutiveFailures": 3,
+                "lastError": "PDF de compatibilité introuvable", "durationSeconds": 1.0,
+            },
+        },
+        "updatedAt": "2026-07-16T07:23:05Z",
+    }
+    (fortios_server.data_dir / "fortios-health.json").write_text(__import__("json").dumps(health_payload))
+
+    app_page.reload()
+    app_page.wait_for_selector("#healthSummaryText:not(:text('Chargement'))")
+    expect(app_page.locator("#healthSummaryDot")).to_have_class(re.compile("error"))
+    expect(app_page.locator("#healthSummaryDot")).not_to_have_class(re.compile("\\bok\\b"))
+
+    app_page.click("#healthDetails summary")
+    expect(app_page.locator("#healthTableContainer")).to_contain_text("PDF de compatibilité introuvable")

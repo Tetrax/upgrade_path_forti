@@ -47,6 +47,24 @@ class ConfigLoadingTests(unittest.TestCase):
         ).is_complete())
         self.assertTrue(make_config().is_complete())
 
+    def test_is_complete_rejects_out_of_range_port(self):
+        self.assertFalse(make_config(smtp_port=0).is_complete())
+        self.assertFalse(make_config(smtp_port=70000).is_complete())
+        self.assertFalse(make_config(smtp_port=-1).is_complete())
+
+    def test_is_complete_rejects_non_positive_timeout(self):
+        self.assertFalse(make_config(smtp_timeout=0).is_complete())
+        self.assertFalse(make_config(smtp_timeout=-5).is_complete())
+
+    def test_is_complete_rejects_malformed_from_address(self):
+        self.assertFalse(make_config(smtp_from="not-an-email").is_complete())
+        self.assertFalse(make_config(smtp_from="has a space@example.com").is_complete())
+        self.assertFalse(make_config(smtp_from="evil\nBcc: x@evil.com@example.com").is_complete())
+
+    def test_is_complete_rejects_malformed_to_address(self):
+        self.assertFalse(make_config(smtp_to=("not-an-email",)).is_complete())
+        self.assertFalse(make_config(smtp_to=("alice@example.com", "not-an-email")).is_complete())
+
 
 class SendEmailTests(unittest.TestCase):
     def test_disabled_config_never_touches_smtplib(self):
@@ -108,6 +126,19 @@ class SendEmailTests(unittest.TestCase):
         with patch("smtplib.SMTP", return_value=client):
             result = notify.send_email(make_config(), "subj", "body")
         self.assertFalse(result)
+
+    def test_subject_with_embedded_newline_does_not_raise(self):
+        """Regression: EmailMessage construction used to happen BEFORE send_email()'s try block,
+        so a header value containing a raw newline (e.g. a CVE title that somehow made it into
+        the subject un-sanitized, or a header-injection attempt) raised ValueError straight out
+        of the function instead of being caught like every other send failure."""
+        with patch("smtplib.SMTP") as smtp_mock:
+            try:
+                result = notify.send_email(make_config(), "Subject line\nBcc: attacker@evil.com", "body")
+            except Exception as error:  # noqa: BLE001
+                self.fail(f"send_email() must never raise, got {error!r}")
+        self.assertFalse(result)
+        smtp_mock.assert_not_called()
 
     def test_smtp_failure_never_raises_up_to_the_caller(self):
         """The literal guarantee: whatever goes wrong in smtplib must never propagate as an
@@ -225,6 +256,115 @@ class CveEventDerivationTests(unittest.TestCase):
         # cvssScore changed but severity did not -- not significant enough to notify.
         self.assertEqual(notify.derive_cve_modification_events(before, after), [])
 
+    def test_affected_scope_extension_is_flagged(self):
+        before = {"CVE-2026-00005": {
+            "id": "CVE-2026-00005", "severity": "medium",
+            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
+        }}
+        after = {"CVE-2026-00005": {
+            "id": "CVE-2026-00005", "severity": "medium",
+            "affected": [
+                {"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"},
+                {"product": "fortianalyzer", "branch": "7.2", "from": "7.2.0", "to": "7.2.3"},
+            ],
+        }}
+        events = notify.derive_cve_modification_events(before, after)
+        self.assertEqual(len(events), 1)
+        self.assertIn("périmètre étendu", events[0].summary)
+
+    def test_affected_scope_reduction_is_flagged(self):
+        before = {"CVE-2026-00006": {
+            "id": "CVE-2026-00006", "severity": "medium",
+            "affected": [
+                {"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"},
+                {"product": "fortianalyzer", "branch": "7.2", "from": "7.2.0", "to": "7.2.3"},
+            ],
+        }}
+        after = {"CVE-2026-00006": {
+            "id": "CVE-2026-00006", "severity": "medium",
+            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
+        }}
+        events = notify.derive_cve_modification_events(before, after)
+        self.assertEqual(len(events), 1)
+        self.assertIn("périmètre réduit", events[0].summary)
+
+    def test_version_range_change_is_flagged_as_scope_change(self):
+        before = {"CVE-2026-00007": {
+            "id": "CVE-2026-00007", "severity": "medium",
+            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
+        }}
+        after = {"CVE-2026-00007": {
+            "id": "CVE-2026-00007", "severity": "medium",
+            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.8"}],
+        }}
+        events = notify.derive_cve_modification_events(before, after)
+        self.assertEqual(len(events), 1)
+
+    def test_fixed_version_becoming_known_is_flagged(self):
+        """A `to` bound appearing for the first time (open-ended -> a fix is now identified) is
+        itself a version-range change and must notify, even with severity/CVSS unchanged."""
+        before = {"CVE-2026-00008": {
+            "id": "CVE-2026-00008", "severity": "high", "cvssScore": 7.0,
+            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": None}],
+        }}
+        after = {"CVE-2026-00008": {
+            "id": "CVE-2026-00008", "severity": "high", "cvssScore": 7.0,
+            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.9"}],
+        }}
+        events = notify.derive_cve_modification_events(before, after)
+        self.assertEqual(len(events), 1)
+
+    def test_significant_cvss_change_is_flagged(self):
+        before = {"CVE-2026-00009": {"id": "CVE-2026-00009", "severity": "medium", "cvssScore": 5.0, "affected": []}}
+        after = {"CVE-2026-00009": {"id": "CVE-2026-00009", "severity": "medium", "cvssScore": 6.5, "affected": []}}
+        events = notify.derive_cve_modification_events(before, after)
+        self.assertEqual(len(events), 1)
+        self.assertIn("CVSS 5.0 → 6.5", events[0].summary)
+
+    def test_small_cvss_change_alone_is_not_flagged(self):
+        before = {"CVE-2026-00010": {"id": "CVE-2026-00010", "severity": "medium", "cvssScore": 5.0, "affected": []}}
+        after = {"CVE-2026-00010": {"id": "CVE-2026-00010", "severity": "medium", "cvssScore": 5.9, "affected": []}}
+        self.assertEqual(notify.derive_cve_modification_events(before, after), [])
+
+    def test_multiple_simultaneous_changes_produce_a_single_combined_event(self):
+        before = {"CVE-2026-00011": {
+            "id": "CVE-2026-00011", "severity": "medium", "cvssScore": 5.0,
+            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
+        }}
+        after = {"CVE-2026-00011": {
+            "id": "CVE-2026-00011", "severity": "critical", "cvssScore": 9.0,
+            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.8"}],
+        }}
+        events = notify.derive_cve_modification_events(before, after)
+        self.assertEqual(len(events), 1, "one combined notification, not one per changed field")
+        self.assertEqual(events[0].category, "CRITICAL")
+        self.assertIn("sévérité medium → critical", events[0].summary)
+        self.assertIn("CVSS 5.0 → 9.0", events[0].summary)
+
+    def test_purely_technical_or_ordering_change_is_not_flagged(self):
+        """Only title/description wording or updatedAt changed -- severity, CVSS, and affected
+        scope are all identical, so this must never generate a notification."""
+        before = {"CVE-2026-00012": {
+            "id": "CVE-2026-00012", "severity": "medium", "cvssScore": 5.0, "title": "Old title",
+            "updatedAt": "2026-07-01", "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
+        }}
+        after = {"CVE-2026-00012": {
+            "id": "CVE-2026-00012", "severity": "medium", "cvssScore": 5.0, "title": "Reworded title",
+            "updatedAt": "2026-07-16", "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
+        }}
+        self.assertEqual(notify.derive_cve_modification_events(before, after), [])
+
+    def test_different_dedup_keys_for_different_change_states(self):
+        """Two DIFFERENT changes to the same CVE (e.g. weeks apart) must each get their own,
+        distinct dedup key -- otherwise the second, genuinely new change would be silently
+        swallowed by the history left behind by the first."""
+        state_a = {"id": "CVE-2026-00013", "severity": "medium", "cvssScore": 5.0, "affected": []}
+        state_b = {"id": "CVE-2026-00013", "severity": "high", "cvssScore": 5.0, "affected": []}
+        state_c = {"id": "CVE-2026-00013", "severity": "critical", "cvssScore": 5.0, "affected": []}
+        events_1 = notify.derive_cve_modification_events({"CVE-2026-00013": state_a}, {"CVE-2026-00013": state_b})
+        events_2 = notify.derive_cve_modification_events({"CVE-2026-00013": state_b}, {"CVE-2026-00013": state_c})
+        self.assertNotEqual(events_1[0].dedup_key, events_2[0].dedup_key)
+
 
 class SourceHealthEventDerivationTests(unittest.TestCase):
     LABELS = {"forticlient": "FortiClient"}
@@ -338,6 +478,73 @@ class MainIntegrationTests(unittest.TestCase):
             self.assertEqual(fw.read_json(base_path, None), original_catalog)
             self.assertFalse(health_path.exists(), "--test-email must never run a collection")
             self.assertFalse(history_path.exists(), "--test-email must never touch dedup history")
+
+    def test_smtp_failure_queues_the_event_and_a_later_run_retries_it_successfully(self):
+        """The literal bug this whole outbox exists to fix: a new critical CVE is detected, SMTP
+        is down that day, and the notification must NOT be lost -- a later run (even with no new
+        catalog changes at all) must still pick it up from the outbox and send it.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+
+            fake_cve = {
+                "id": "CVE-2026-00099", "advisoryId": "FG-IR-26-099", "title": "t",
+                "severity": "critical", "affected": [], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
+            }
+            original_collect = fw.collect_cve_catalog
+            fw.collect_cve_catalog = lambda *a, **k: ({"FG-IR-26-099": [fake_cve]}, [])
+            try:
+                # Run 1: SMTP is down.
+                with patch.dict(os.environ, self.ENV, clear=False), patch("smtplib.SMTP", side_effect=ConnectionRefusedError("refused")):
+                    exit_code_1 = fw.main([
+                        "--cve-catalog",
+                        "--base", str(base_path), "--output", str(base_path),
+                        "--report", str(tmp / "report.md"), "--health-output", str(health_path),
+                        "--notify-history-output", str(history_path),
+                        # Point every other input at paths that don't exist inside this isolated
+                        # tmp dir -- the real repo's data/official-path-requests.csv would
+                        # otherwise get picked up by its own default path and trigger a real
+                        # network call to Fortinet, which this test must never depend on.
+                        "--official-paths-csv", str(tmp / "no-official-paths.csv"),
+                        "--advisories-csv", str(tmp / "no-advisories.csv"),
+                        "--upgrade-exports", str(tmp / "no-upgrade-exports"),
+                    ])
+                self.assertEqual(exit_code_1, 0, "a notification failure must never fail the run")
+                state_after_run_1 = notify.load_notify_state(history_path)
+                self.assertEqual(len(state_after_run_1["outbox"]), 1, "the event must be queued, not lost")
+                self.assertNotIn("new-cve|psirt|CVE-2026-00099|critical", state_after_run_1["sentKeys"])
+
+                # Run 2: nothing new in the catalog (the CVE is already known), but SMTP is back up.
+                client = _mock_smtp_client()
+                with patch.dict(os.environ, self.ENV, clear=False), patch("smtplib.SMTP", return_value=client):
+                    exit_code_2 = fw.main([
+                        "--cve-catalog",
+                        "--base", str(base_path), "--output", str(base_path),
+                        "--report", str(tmp / "report.md"), "--health-output", str(health_path),
+                        "--notify-history-output", str(history_path),
+                        # Point every other input at paths that don't exist inside this isolated
+                        # tmp dir -- the real repo's data/official-path-requests.csv would
+                        # otherwise get picked up by its own default path and trigger a real
+                        # network call to Fortinet, which this test must never depend on.
+                        "--official-paths-csv", str(tmp / "no-official-paths.csv"),
+                        "--advisories-csv", str(tmp / "no-advisories.csv"),
+                        "--upgrade-exports", str(tmp / "no-upgrade-exports"),
+                    ])
+            finally:
+                fw.collect_cve_catalog = original_collect
+
+            self.assertEqual(exit_code_2, 0)
+            self.assertTrue(client.send_message.called, "the retried event must actually be sent this time")
+            sent_body = client.send_message.call_args[0][0].get_content()
+            self.assertIn("CVE-2026-00099", sent_body)
+
+            state_after_run_2 = notify.load_notify_state(history_path)
+            self.assertEqual(state_after_run_2["outbox"], [], "sent event must be cleared from the outbox")
+            self.assertIn("new-cve|psirt|CVE-2026-00099|critical", state_after_run_2["sentKeys"])
 
 
 if __name__ == "__main__":

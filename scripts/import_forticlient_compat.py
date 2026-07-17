@@ -46,6 +46,7 @@ from fortios_watch import (  # noqa: E402
     upsert_compatibility,
     urlopen_with_retry,
     utc_now,
+    utc_now_precise,
     write_json,
 )
 
@@ -115,7 +116,7 @@ def main(argv: list[str]) -> int:
     # never touches persisted data, so it shouldn't affect "when did we last actually refresh
     # this source" freshness tracking either.
     t0 = time.monotonic()
-    started_at = utc_now()
+    started_at = utc_now_precise()
 
     def record_and_return(status: str, code: int, *, items: int | None = None, error: Any = None) -> int:
         if args.commit:

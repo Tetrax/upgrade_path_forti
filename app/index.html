@@ -419,10 +419,19 @@
         id => id !== "daily-run" && sources[id] && classifySourceSeverity(sources[id], now) === "error"
       );
 
-      // The top-line dot is a simple pass/fail signal (vert = la dernière collecte a abouti,
-      // rouge = non) -- "warning" (succeeded but flagged as suspicious) still counts as a pass
-      // here; the detailed table below keeps the 3-way ok/warning/error breakdown per source.
-      const overallSucceeded = classifySourceSeverity(dailyRun, now) !== "error";
+      // The top-line dot must reflect the TRUE overall health, not just daily-run's own status.
+      // compat-matrix (import_forticlient_compat.py) runs as a separate step AFTER
+      // fortios_watch.py finishes and stamps daily-run's own aggregate, so daily-run can be "ok"
+      // while compat-matrix itself failed -- daily-run structurally can't know about a source
+      // that hasn't run yet. Red if daily-run's own aggregate is in error, OR any other tracked
+      // source is (erroredSources, same list already used for the "N source(s) en erreur" text
+      // below, so the two can never disagree). "warning" (succeeded but flagged as suspicious),
+      // "skipped" (deliberately not run) and "running" (mid-collection) all still count as a
+      // pass here, same as before -- only a real "error" verdict turns the dot red. A source
+      // absent from the health file entirely (never run yet) is likewise not an error: it's
+      // simply not in HEALTH_SOURCE_ORDER.filter(id => sources[id]), same exclusion the detailed
+      // table below already uses.
+      const overallSucceeded = classifySourceSeverity(dailyRun, now) !== "error" && erroredSources.length === 0;
       els.healthSummaryDot.className = `health-dot ${overallSucceeded ? "ok" : "error"}`;
       const ageText = dailyRun && dailyRun.lastSuccessAt
         ? `dernière collecte globale réussie le ${formatDateTime(dailyRun.lastSuccessAt)}`
