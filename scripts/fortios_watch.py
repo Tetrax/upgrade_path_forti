@@ -166,7 +166,19 @@ def read_json_tolerant(
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        # The file WAS read -- its CONTENT is corrupt. That's evidence of a bug (ours or a
+        # writer's) worth preserving, so archive it aside for diagnosis.
         _archive_corrupt_file(path, archive_suffix)
+        return default
+    except OSError as error:
+        # The file itself couldn't be read at all: permission denied, or it disappeared between
+        # the exists() check above and open() (a TOCTOU race -- also OSError, as
+        # FileNotFoundError). Nothing to archive here: renaming a file this process can't even
+        # open would likely fail the exact same way, and unlike corrupt JSON this isn't evidence
+        # of a bug in our own writer -- it's an environment/permissions issue outside this
+        # process's control. Best-effort: log a short warning (no traceback, no secrets) and
+        # carry on exactly as if the file were simply absent.
+        sys.stderr.write(f"Avertissement : lecture de {path} impossible ({sanitize_health_error(error)}), traité comme absent.\n")
         return default
     if validate is not None and not validate(payload):
         _archive_corrupt_file(path, archive_suffix)
@@ -460,7 +472,21 @@ def record_health_results(health_path: Path, results: dict[str, HealthSourceResu
 
 
 def parse_health_timestamp(value: str) -> dt.datetime:
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    """Always returns a timezone-aware datetime normalized to UTC -- raises ValueError for
+    anything that isn't unambiguously one (a naive timestamp with no "Z"/explicit offset, e.g.
+    "2026-07-17T07:00:00", or a bare date like "2026-07-17"), rather than silently guessing what
+    timezone a naive value meant. Every comparison in this module (classify_source_severity(),
+    _merge_health_source()'s clobber-guard) works against dt.datetime.now(dt.UTC) -- an aware
+    value -- and comparing that to a naive one raises TypeError deep inside those functions
+    instead of the much-earlier, already-handled ValueError this raises here. Both
+    _is_valid_health_timestamp() (fortios_watch.py) and outbox timestamp validation
+    (fortios_notify.py, via this same function) rely on that ValueError to reject a bad value up
+    front.
+    """
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"Horodatage sans fuseau horaire : {value!r}")
+    return parsed.astimezone(dt.UTC)
 
 
 def classify_source_severity(
@@ -2031,6 +2057,32 @@ def main(argv: list[str]) -> int:
     health_before = read_health_state(args.health_output).get("sources", {})
     cves_before_by_id = {item["id"]: item for item in before.get("cves", []) if item.get("id")}
 
+    # Establish the notify checkpoint BEFORE any collection below can change the catalog --
+    # not merely when it happens to still be missing once the notification block at the end of
+    # this function runs. Picture the very first run ever with email enabled, which also happens
+    # to be the run that discovers a new CVE, and then crashes before ever reaching that later
+    # block: if the checkpoint were only established there, the next run would fall back to
+    # reading `before` fresh off disk -- but that `before` would already reflect this run's own
+    # (successful) catalog write, so the diff would find nothing new and the notification would
+    # be lost exactly like before this fix existed. Bootstrapping immediately, before collection
+    # can change anything, closes that crack: even if literally everything after this fails, the
+    # pre-collection baseline is already safely anchored (see
+    # fortios_notify.ensure_checkpoint()'s docstring for the full reasoning).
+    notify_checkpoint: dict[str, Any] | None = None
+    try:
+        import fortios_notify
+
+        if fortios_notify.load_email_config().enabled:
+            notify_checkpoint = fortios_notify.ensure_checkpoint(args.notify_history_output, {
+                "versionsByProduct": {
+                    product: sorted(versions) for product, versions in versions_by_product(before).items()
+                },
+                "cvesById": cves_before_by_id,
+                "health": health_before,
+            })
+    except Exception as error:  # noqa: BLE001 - notification bookkeeping must never block collection.
+        sys.stderr.write(f"Avertissement : initialisation du point de contrôle des notifications impossible ({error}).\n")
+
     # Populated as each source below finishes (success, failure, or deliberate skip), then
     # applied to args.health_output in one batch near the end — same delta pattern as the
     # advisories/paths/CVE deltas, and for the same reason: never write partial health state
@@ -2305,41 +2357,68 @@ def main(argv: list[str]) -> int:
         error=daily_run_error,
     )
     # Health tracking is entirely best-effort: a problem writing it (disk full, permissions...)
-    # must never be treated as if the actual collection above had failed.
+    # must never be treated as if the actual collection above had failed. ValueError is caught
+    # too, defensively: read_health_state()'s validator already rejects a record with a
+    # non-timezone-aware timestamp before _merge_health_source() ever sees it, but this is cheap
+    # insurance against that guarantee ever developing a gap.
     try:
         record_health_results(args.health_output, health_results)
-    except OSError as error:
+    except (OSError, ValueError) as error:
         sys.stderr.write(f"Avertissement : échec de l'écriture de l'état de santé ({error}).\n")
 
     # Email notifications: entirely best-effort and additive, never touching the catalog or the
-    # exit code — every event below is a diff against a snapshot taken before this run's own
-    # collection started, never a re-scan of the whole catalog, which is what keeps a first
-    # activation (or a --cve-backfill, explicitly excluded below) from spamming years of
-    # pre-existing history in one email. New events are queued into a persistent outbox BEFORE
-    # any send attempt (see fortios_notify.enqueue_and_claim()), so an SMTP failure here can
-    # never lose them -- they're retried on the next run instead of silently vanishing.
+    # exit code.
+    #
+    # Checkpoint architecture (closes the catalog-vs-outbox loss window): final_state was already
+    # committed to args.output above, well before this block runs. If this process died right
+    # after that commit but before the events derived from it ever reached the outbox, naively
+    # diffing against `before` (this run's own pre-collection snapshot) would be wrong on the
+    # NEXT run -- `before` would then be read fresh from the now-already-updated catalog, so the
+    # version/CVE that was never actually notified about would no longer look new at all. Instead,
+    # every catalog/health-derived event below is diffed against `notify_checkpoint`: a snapshot
+    # of versions/CVEs/health as of the last run whose events genuinely made it into the outbox,
+    # established BEFORE collection even started (see the "Establish the notify checkpoint" block
+    # near the top of this function, and fortios_notify.ensure_checkpoint()'s docstring for why it
+    # can't simply be bootstrapped here instead). commit_events_with_checkpoint() then advances it
+    # and queues the events it produced in one single atomic write -- exactly the same "state +
+    # events together, or neither" guarantee commit_eol_transition() already gives EOL crossings.
+    # A crash between the catalog commit and this commit simply leaves the checkpoint where it
+    # was: the next run's diff (old checkpoint vs current catalog) still finds the version/CVE
+    # "new" and re-derives the same event, which the existing outbox/sentKeys dedup (keyed by a
+    # stable dedup_key, not by which run happened to derive it) makes safe to attempt again from
+    # a different, later run.
     try:
         import fortios_notify  # deferred: avoids a load-time circular import with this module
         import uuid
 
         email_config = fortios_notify.load_email_config()
-        if email_config.enabled:
+        if email_config.enabled and notify_checkpoint is not None:
             health_after = read_health_state(args.health_output).get("sources", {})
+            notify_state = fortios_notify.load_notify_state(args.notify_history_output)
+
+            checkpoint_versions = {
+                product: set(versions) for product, versions in notify_checkpoint["versionsByProduct"].items()
+            }
+            checkpoint_cves_by_id = notify_checkpoint["cvesById"]
+            checkpoint_health = notify_checkpoint["health"]
+
             events: list[Any] = []
+            # cves_after_by_id feeds the new checkpoint below regardless of --cve-backfill, so a
+            # normal run right after a backfill still sees those CVEs as already-known rather
+            # than spamming all of them as "new".
+            cves_after_by_id = {item["id"]: item for item in final_state.get("cves", []) if item.get("id")}
             if not args.cve_backfill:
                 product_labels = {p.get("id"): p.get("label", p.get("id")) for p in final_state.get("products", [])}
                 events += fortios_notify.derive_version_events(
-                    versions_by_product(before), versions_by_product(final_state), product_labels,
+                    checkpoint_versions, versions_by_product(final_state), product_labels,
                 )
                 newly_added_cves = [
                     item for item in final_state.get("cves", [])
-                    if item.get("id") and item["id"] not in cves_before_by_id
+                    if item.get("id") and item["id"] not in checkpoint_cves_by_id
                 ]
                 events += fortios_notify.derive_new_cve_events(newly_added_cves)
-                cves_after_by_id = {item["id"]: item for item in final_state.get("cves", []) if item.get("id")}
-                events += fortios_notify.derive_cve_modification_events(cves_before_by_id, cves_after_by_id)
+                events += fortios_notify.derive_cve_modification_events(checkpoint_cves_by_id, cves_after_by_id)
 
-                notify_state = fortios_notify.load_notify_state(args.notify_history_output)
                 eol_events, eol_state_after = fortios_notify.derive_eol_events(
                     final_state.get("fortiosLifecycle", {}), notify_state.get("eolState", {}),
                     now=final_state["generatedAt"],
@@ -2350,10 +2429,20 @@ def main(argv: list[str]) -> int:
                 fortios_notify.commit_eol_transition(
                     args.notify_history_output, eol_state_after, eol_events, now=final_state["generatedAt"],
                 )
-            events += fortios_notify.derive_source_health_events(health_before, health_after, HEALTH_SOURCE_LABELS)
 
+            events += fortios_notify.derive_source_health_events(checkpoint_health, health_after, HEALTH_SOURCE_LABELS)
+
+            new_checkpoint = {
+                "versionsByProduct": {
+                    product: sorted(versions) for product, versions in versions_by_product(final_state).items()
+                },
+                "cvesById": cves_after_by_id,
+                "health": health_after,
+            }
             claimant = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
-            pending = fortios_notify.enqueue_and_claim(args.notify_history_output, events, claimant=claimant)
+            pending = fortios_notify.commit_events_with_checkpoint(
+                args.notify_history_output, new_checkpoint, events, claimant=claimant,
+            )
             if pending:
                 composed = fortios_notify.compose_email(
                     pending, app_url=email_config.app_url, run_timestamp=final_state["generatedAt"],

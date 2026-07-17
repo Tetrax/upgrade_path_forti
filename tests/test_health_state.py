@@ -7,11 +7,13 @@ check never touches (or risks corrupting) the actual data.
 """
 
 import multiprocessing
+import os
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -33,6 +35,55 @@ def _concurrent_write_worker(path, source_id, started_at, hold_seconds, barrier)
         time.sleep(hold_seconds)  # widen the window a real race would need to slip through
         state.setdefault("sources", {})[source_id] = {"status": "ok", "lastAttemptAt": started_at}
         fw.write_json(path, state)
+
+
+class ParseHealthTimestampTests(unittest.TestCase):
+    """Regression: dt.datetime.fromisoformat() happily parses a timezone-naive string like
+    "2026-07-17T07:00:00" (no "Z", no offset) into a naive datetime -- comparing that against the
+    aware dt.datetime.now(dt.UTC) used everywhere else in this module raises
+    "TypeError: can't compare offset-naive and offset-aware datetimes" deep inside
+    classify_source_severity()/_merge_health_source(), which used to take main() down with it.
+    parse_health_timestamp() must always return an aware UTC datetime, or raise ValueError
+    (which every caller already handles) rather than ever handing back something naive.
+    """
+
+    def test_z_suffixed_timestamp_is_aware(self):
+        parsed = fw.parse_health_timestamp("2026-07-17T07:00:00Z")
+        self.assertIsNotNone(parsed.tzinfo)
+        self.assertIsNotNone(parsed.utcoffset())
+        self.assertEqual(parsed.utcoffset().total_seconds(), 0)
+
+    def test_explicit_offset_timestamp_is_normalized_to_utc(self):
+        parsed = fw.parse_health_timestamp("2026-07-17T09:00:00+02:00")
+        self.assertIsNotNone(parsed.tzinfo)
+        self.assertEqual(parsed.utcoffset().total_seconds(), 0)
+        self.assertEqual(parsed.hour, 7, "09:00 +02:00 must normalize to 07:00 UTC")
+
+    def test_naive_timestamp_is_rejected(self):
+        with self.assertRaises(ValueError):
+            fw.parse_health_timestamp("2026-07-17T07:00:00")
+
+    def test_date_only_string_is_rejected(self):
+        with self.assertRaises(ValueError):
+            fw.parse_health_timestamp("2026-07-17")
+
+    def test_merge_health_source_never_raises_typeerror_on_a_naive_existing_timestamp(self):
+        """_merge_health_source()'s clobber-guard (existing["lastAttemptAt"] vs
+        result.started_at) is the actual call site main() exercises on every run via
+        record_health_results() -- a naive value reaching it used to raise
+        "TypeError: can't compare offset-naive and offset-aware datetimes" since our own
+        started_at is always aware. It now raises the much more benign, already-handled
+        ValueError instead (never TypeError), and in the real read path this can't happen at all
+        since read_health_state()'s validator rejects a naive timestamp before _merge_health_source()
+        is ever called with it."""
+        existing = {"status": fw.HEALTH_STATUS_OK, "lastAttemptAt": "2026-07-17T07:00:00"}
+        result = fw.HealthSourceResult(status=fw.HEALTH_STATUS_OK, started_at="2026-07-17T12:00:00.000000Z", duration_seconds=1.0)
+        try:
+            fw._merge_health_source(existing, result)
+        except TypeError as error:
+            self.fail(f"_merge_health_source() must never raise TypeError, got {error!r}")
+        except ValueError:
+            pass  # acceptable: a naive timestamp is genuinely invalid data
 
 
 class HealthResultMergeTests(unittest.TestCase):
@@ -400,6 +451,30 @@ class TolerantHealthReadTests(unittest.TestCase):
             health_state = fw.read_json(health_path, None)
             self.assertIsNotNone(health_state, "health tracking must self-heal with a fresh, valid file")
 
+    def test_main_completes_despite_a_timezone_naive_timestamp_in_the_health_file(self):
+        """Distinct from the "not-a-date" garbage case above: this timestamp IS a syntactically
+        valid ISO 8601 string (fromisoformat() parses it without raising) -- it's just missing a
+        timezone, which used to slip past the old validator (only checked "does it parse") and
+        raise TypeError once compared against an aware datetime deep inside main()'s health
+        bookkeeping."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "state.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            health_path = Path(tmp) / "health.json"
+            health_path.write_text(
+                '{"sources": {"daily-run": {"status": "ok", "lastAttemptAt": "2026-07-17T07:00:00"}}}',
+                encoding="utf-8",
+            )
+
+            exit_code = fw.main([
+                "--skip-network",
+                "--base", str(base_path), "--output", str(base_path),
+                "--report", str(Path(tmp) / "report.md"), "--health-output", str(health_path),
+            ])
+            self.assertEqual(exit_code, 0)
+            health_state = fw.read_json(health_path, None)
+            self.assertIsNotNone(health_state, "health tracking must self-heal with a fresh, valid file")
+
     def test_health_mark_running_recovers_from_a_corrupt_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "health.json"
@@ -445,6 +520,93 @@ class TolerantHealthReadTests(unittest.TestCase):
             health_state = fw.read_json(health_path, None)
             self.assertIsNotNone(health_state)
             self.assertIn("sources", health_state)
+
+
+class ReadJsonTolerantOSErrorTests(unittest.TestCase):
+    """read_json_tolerant() used to only catch JSON-content errors (JSONDecodeError etc.) -- a
+    filesystem-level failure (no read permission, or the file vanishing between the exists()
+    check and open() -- a TOCTOU race) still raised straight out of it and could abort the whole
+    collection. Every one of these must be treated exactly like a missing file: return `default`,
+    never archive (there's nothing reliably readable to preserve), never raise.
+    """
+
+    def test_permission_denied_file_is_treated_as_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text('{"sources": {}}', encoding="utf-8")
+            path.chmod(0o000)
+            try:
+                if os.access(path, os.R_OK):
+                    self.skipTest("this platform/user (e.g. root) can still read a chmod 000 file")
+                result = fw.read_json_tolerant(path, {"sources": {}}, validate=fw._is_valid_health_state)
+                self.assertEqual(result, {"sources": {}})
+                # Nothing readable to preserve -- must not have tried to archive it.
+                archived = list(Path(tmp).glob("health.json.corrupt-*"))
+                self.assertEqual(archived, [])
+                self.assertTrue(path.exists(), "an unreadable file must be left exactly where it was")
+            finally:
+                path.chmod(0o644)  # restore so the TemporaryDirectory cleanup can remove it
+
+    def test_file_deleted_between_exists_check_and_open_is_treated_as_default(self):
+        """Simulates the TOCTOU race: path.exists() returns True, but the file is gone by the
+        time path.open() actually runs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text('{"sources": {}}', encoding="utf-8")
+
+            original_open = Path.open
+
+            def open_raises_after_first_call(self_path, *args, **kwargs):
+                if self_path == path:
+                    raise FileNotFoundError(f"[Errno 2] No such file or directory: '{path}'")
+                return original_open(self_path, *args, **kwargs)
+
+            with patch.object(Path, "open", open_raises_after_first_call):
+                result = fw.read_json_tolerant(path, {"sources": {}}, validate=fw._is_valid_health_state)
+            self.assertEqual(result, {"sources": {}})
+
+    def test_permission_error_on_open_is_treated_as_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text('{"sources": {}}', encoding="utf-8")
+
+            original_open = Path.open
+
+            def open_denies_this_path(self_path, *args, **kwargs):
+                if self_path == path:
+                    raise PermissionError(f"[Errno 13] Permission denied: '{path}'")
+                return original_open(self_path, *args, **kwargs)
+
+            with patch.object(Path, "open", open_denies_this_path):
+                result = fw.read_json_tolerant(path, {"sources": {}}, validate=fw._is_valid_health_state)
+            self.assertEqual(result, {"sources": {}})
+            # A permission error means we can't reliably read OR rewrite the file -- must not
+            # attempt to archive (rename) it either.
+            archived = list(Path(tmp).glob("health.json.corrupt-*"))
+            self.assertEqual(archived, [])
+
+    def test_main_continues_despite_a_permission_error_reading_the_health_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "state.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            health_path = Path(tmp) / "health.json"
+            health_path.write_text('{"sources": {}}', encoding="utf-8")
+
+            original_open = Path.open
+
+            def open_denies_only_the_health_file(self_path, *args, **kwargs):
+                if self_path == health_path:
+                    raise PermissionError(f"[Errno 13] Permission denied: '{health_path}'")
+                return original_open(self_path, *args, **kwargs)
+
+            with patch.object(Path, "open", open_denies_only_the_health_file):
+                exit_code = fw.main([
+                    "--skip-network",
+                    "--base", str(base_path), "--output", str(base_path),
+                    "--report", str(Path(tmp) / "report.md"), "--health-output", str(health_path),
+                ])
+            self.assertEqual(exit_code, 0, "a health file the process can't even read must never abort the collection")
+            self.assertTrue(base_path.exists())
 
 
 class SourceSeverityClassificationTests(unittest.TestCase):

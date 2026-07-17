@@ -28,6 +28,24 @@ def _claim_worker(path, dedup_key, claimant_id, barrier, result_queue):
     result_queue.put((claimant_id, len(claimed)))
 
 
+def _checkpoint_claim_worker(path, dedup_key, claimant_id, barrier, result_queue):
+    """Module-level so it's picklable under the "spawn" multiprocessing start method."""
+    barrier.wait()
+    event = notify.NotificationEvent(category="DAILY", dedup_key=dedup_key, summary="x")
+    checkpoint = {"versionsByProduct": {}, "cvesById": {}, "health": {}}
+    claimed = notify.commit_events_with_checkpoint(path, checkpoint, [event], claimant=claimant_id)
+    result_queue.put((claimant_id, len(claimed)))
+
+
+def _mock_smtp_client():
+    from unittest.mock import MagicMock
+
+    client = MagicMock()
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+    return client
+
+
 class OutboxLifecycleTests(unittest.TestCase):
     def test_new_event_is_enqueued_and_claimed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -135,7 +153,7 @@ class OutboxLifecycleTests(unittest.TestCase):
             path = Path(tmp) / "notify.json"
             path.write_text('{"sentKeys": {"k0": "2026-07-01', encoding="utf-8")  # truncated mid-value
             state = notify.load_notify_state(path)
-            self.assertEqual(state, {"sentKeys": {}, "outbox": [], "eolState": {}})
+            self.assertEqual(state, {"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": None})
             archived = list(Path(tmp).glob("notify.json.corrupt-*"))
             self.assertEqual(len(archived), 1)
 
@@ -160,7 +178,7 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
             path = Path(tmp) / "notify.json"
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [{"dedupKey": "k1"}], "eolState": {}}), encoding="utf-8")
             state = notify.load_notify_state(path)
-            self.assertEqual(state, {"sentKeys": {}, "outbox": [], "eolState": {}})
+            self.assertEqual(state, {"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": None})
             archived = list(Path(tmp).glob("notify.json.corrupt-*"))
             self.assertEqual(len(archived), 1)
 
@@ -221,6 +239,129 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
             state = notify.load_notify_state(path)
             self.assertEqual(len(state["outbox"]), 1)
 
+    def _base_entry(self, **overrides):
+        entry = {
+            "category": "DAILY", "dedupKey": "k1", "summary": "x",
+            "queuedAt": "2026-07-17T07:00:00Z", "claimedBy": None, "claimedAt": None,
+        }
+        entry.update(overrides)
+        return entry
+
+    def test_claimed_by_set_with_claimed_at_null_is_rejected(self):
+        """The literal bug report: a reservation with no timestamp can never be recognized as
+        stale by enqueue_and_claim(), so it stays reserved forever with no path to retry."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(claimedBy="dead-run", claimedAt=None)
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_claimed_at_set_with_claimed_by_null_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(claimedBy=None, claimedAt="2026-07-17T07:00:00Z")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_invalid_claimed_at_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(claimedBy="run-1", claimedAt="not-a-date")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_naive_claimed_at_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(claimedBy="run-1", claimedAt="2026-07-17T07:00:00")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_invalid_queued_at_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(queuedAt="not-a-date")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_naive_queued_at_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(queuedAt="2026-07-17T07:00:00")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_unknown_category_is_rejected(self):
+        """The literal bug report: an unrecognized category would silently vanish from
+        compose_email()'s critical/daily/operations grouping -- neither shown to anyone nor ever
+        cleaned up (it would just sit there getting reclaimed and "sent" every run)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(category="TYPO")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_empty_category_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(category="")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_whitespace_only_dedup_key_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(dedupKey="   ")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_whitespace_only_summary_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(summary="   ")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+
+    def test_a_valid_unclaimed_entry_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry()  # claimedBy/claimedAt both null -- a fresh, unclaimed entry
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(len(notify.load_notify_state(path)["outbox"]), 1)
+
+    def test_a_valid_claimed_entry_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            entry = self._base_entry(claimedBy="run-1", claimedAt="2026-07-17T07:00:00Z")
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            self.assertEqual(len(notify.load_notify_state(path)["outbox"]), 1)
+
+    def test_main_recovers_automatically_from_an_unexpirable_reservation(self):
+        """End-to-end: a notify-history file whose only outbox entry is claimed forever (no
+        claimedAt to ever expire it) must self-heal to an empty outbox rather than leaving the
+        notification pipeline permanently stuck."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "state.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            history_path = Path(tmp) / "notify-history.json"
+            entry = self._base_entry(claimedBy="dead-run", claimedAt=None)
+            history_path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+
+            env = {
+                "FORTIOS_EMAIL_ENABLED": "true", "FORTIOS_SMTP_HOST": "smtp.example.com",
+                "FORTIOS_SMTP_FROM": "fortios@example.com", "FORTIOS_SMTP_TO": "alice@example.com",
+            }
+            with patch.dict(os.environ, env, clear=False), patch("smtplib.SMTP", side_effect=ConnectionRefusedError("refused")):
+                exit_code = fw.main([
+                    "--skip-network",
+                    "--base", str(base_path), "--output", str(base_path),
+                    "--report", str(Path(tmp) / "report.md"), "--health-output", str(Path(tmp) / "health.json"),
+                    "--notify-history-output", str(history_path),
+                ])
+            self.assertEqual(exit_code, 0)
+            state = notify.load_notify_state(history_path)
+            self.assertEqual(state["outbox"], [], "the unexpirable reservation must be dropped, not left stuck forever")
+
     def test_eol_state_non_boolean_value_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
@@ -245,7 +386,7 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             path.write_text(json.dumps({"sentKeys": ["k1", "k2"], "outbox": [], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path), {"sentKeys": {}, "outbox": [], "eolState": {}})
+            self.assertEqual(notify.load_notify_state(path), {"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": None})
 
     def test_main_completes_despite_a_malformed_outbox_entry(self):
         """End-to-end: a notify-history file with a partial outbox entry must never crash main()
@@ -416,6 +557,244 @@ class EolTransitionAtomicityTests(unittest.TestCase):
             final_state = notify.load_notify_state(path)
             self.assertEqual(final_state["eolState"], {"7.6": True})
             self.assertEqual(len(final_state["outbox"]), 1)
+
+
+class CommitEventsWithCheckpointTests(unittest.TestCase):
+    """Unit-level coverage of commit_events_with_checkpoint() itself: the checkpoint and its
+    events must land in one atomic write, dedup/claim rules must be identical to
+    enqueue_and_claim(), and a corrupt/absent checkpoint must never crash anything.
+    """
+
+    def test_checkpoint_and_event_land_together(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            checkpoint = {"versionsByProduct": {"fortigate-fortios": ["7.6.8"]}, "cvesById": {}, "health": {}}
+            event = notify.NotificationEvent(category="DAILY", dedup_key="new-version|fortios|fortios|7.6.9", summary="x")
+            notify.commit_events_with_checkpoint(path, checkpoint, [event], claimant="run-1")
+
+            state = notify.load_notify_state(path)
+            self.assertEqual(state["checkpoint"], checkpoint)
+            self.assertEqual(len(state["outbox"]), 1)
+            self.assertEqual(state["outbox"][0]["claimedBy"], "run-1")
+
+    def test_event_already_in_outbox_is_not_duplicated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            checkpoint_1 = {"versionsByProduct": {}, "cvesById": {}, "health": {}}
+            event = notify.NotificationEvent(category="DAILY", dedup_key="k1", summary="x")
+            notify.commit_events_with_checkpoint(path, checkpoint_1, [event], claimant="run-1")
+            notify.release_claim(path, "run-1")
+
+            checkpoint_2 = {"versionsByProduct": {"x": ["1.0"]}, "cvesById": {}, "health": {}}
+            notify.commit_events_with_checkpoint(path, checkpoint_2, [event], claimant="run-2")
+
+            state = notify.load_notify_state(path)
+            self.assertEqual(len(state["outbox"]), 1, "the same dedup_key must never be queued twice")
+            self.assertEqual(state["checkpoint"], checkpoint_2, "the checkpoint must still advance even with no new events")
+
+    def test_already_sent_event_is_not_requeued(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            checkpoint = {"versionsByProduct": {}, "cvesById": {}, "health": {}}
+            event = notify.NotificationEvent(category="DAILY", dedup_key="k1", summary="x")
+            claimed = notify.commit_events_with_checkpoint(path, checkpoint, [event], claimant="run-1")
+            notify.finalize_sent_events(path, claimed)
+
+            notify.commit_events_with_checkpoint(path, checkpoint, [event], claimant="run-2")
+            state = notify.load_notify_state(path)
+            self.assertEqual(state["outbox"], [], "an already-sent event must never be requeued")
+
+    def test_two_concurrent_collections_do_not_both_claim_the_same_checkpointed_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            barrier = multiprocessing.Barrier(2)
+            result_queue = multiprocessing.Queue()
+            p1 = multiprocessing.Process(target=_checkpoint_claim_worker, args=(path, "dup-key", "proc-A", barrier, result_queue))
+            p2 = multiprocessing.Process(target=_checkpoint_claim_worker, args=(path, "dup-key", "proc-B", barrier, result_queue))
+            p1.start()
+            p2.start()
+            p1.join(timeout=10)
+            p2.join(timeout=10)
+
+            results = [result_queue.get(timeout=2), result_queue.get(timeout=2)]
+            claimed_counts = sorted(count for _, count in results)
+            self.assertEqual(claimed_counts, [0, 1], "exactly one process must claim the event, the other must get nothing")
+
+    def test_corrupt_checkpoint_is_treated_as_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            path.write_text(
+                json.dumps({"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": {"versionsByProduct": "not-a-dict"}}),
+                encoding="utf-8",
+            )
+            state = notify.load_notify_state(path)
+            self.assertIsNone(state["checkpoint"])
+            archived = list(Path(tmp).glob("notify.json.corrupt-*"))
+            self.assertEqual(len(archived), 1)
+
+    def test_missing_checkpoint_key_defaults_to_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            path.write_text(json.dumps({"sentKeys": {}, "outbox": [], "eolState": {}}), encoding="utf-8")
+            state = notify.load_notify_state(path)
+            self.assertIsNone(state["checkpoint"])
+
+
+class NotifyCheckpointMainIntegrationTests(unittest.TestCase):
+    """End-to-end through fortios_watch.py's real main() wiring: the literal bug report is that
+    final_state gets committed to the catalog BEFORE the events derived from it reach the
+    outbox -- a crash in between used to permanently lose the notification, since the next run's
+    own before/after diff would no longer see anything new. commit_events_with_checkpoint()
+    fixes this by diffing against a persisted checkpoint instead of this run's own snapshot (see
+    the big comment in fortios_watch.py main()'s notification block).
+    """
+
+    ENV = {
+        "FORTIOS_EMAIL_ENABLED": "true", "FORTIOS_SMTP_HOST": "smtp.example.com",
+        "FORTIOS_SMTP_FROM": "fortios@example.com", "FORTIOS_SMTP_TO": "alice@example.com",
+    }
+
+    def _run_main(self, tmp, base_path, health_path, history_path):
+        return fw.main([
+            "--cve-catalog",
+            "--base", str(base_path), "--output", str(base_path),
+            "--report", str(tmp / "report.md"), "--health-output", str(health_path),
+            "--notify-history-output", str(history_path),
+            "--official-paths-csv", str(tmp / "no-official-paths.csv"),
+            "--advisories-csv", str(tmp / "no-advisories.csv"),
+            "--upgrade-exports", str(tmp / "no-upgrade-exports"),
+        ])
+
+    def test_crash_between_catalog_write_and_outbox_write_does_not_lose_the_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+
+            fake_cve = {
+                "id": "CVE-2026-00200", "advisoryId": "FG-IR-26-200", "title": "t",
+                "severity": "critical", "affected": [], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
+            }
+            original_collect = fw.collect_cve_catalog
+            original_psirt_versions = fw.fetch_psirt_versions
+            fw.fetch_psirt_versions = lambda *a, **k: set()  # never hit the real PSIRT RSS feed
+            fw.collect_cve_catalog = lambda *a, **k: ({"FG-IR-26-200": [fake_cve]}, [])
+            try:
+                # Run 1: the catalog write (final_state) succeeds normally, but the process
+                # "crashes" exactly where the checkpoint+outbox would be committed together.
+                with patch.dict(os.environ, self.ENV, clear=False), \
+                     patch.object(notify, "commit_events_with_checkpoint", side_effect=RuntimeError("simulated crash")):
+                    exit_code_1 = self._run_main(tmp, base_path, health_path, history_path)
+                self.assertEqual(exit_code_1, 0, "a notification-pipeline crash must never fail the run")
+
+                catalog_after_run_1 = fw.read_json(base_path, None)
+                self.assertTrue(
+                    any(cve["id"] == "CVE-2026-00200" for cve in catalog_after_run_1["cves"]),
+                    "the catalog write itself must have gone through normally",
+                )
+                # The checkpoint was bootstrapped to the PRE-collection state before run 1's own
+                # collection even started (see ensure_checkpoint()) -- it must still reflect that
+                # empty, pre-CVE baseline, not the crashed commit's would-be result.
+                state_after_crash = notify.load_notify_state(history_path)
+                self.assertIsNotNone(state_after_crash["checkpoint"])
+                self.assertNotIn("CVE-2026-00200", state_after_crash["checkpoint"]["cvesById"])
+                self.assertEqual(state_after_crash["outbox"], [])
+
+                # Run 2: no NEW catalog changes at all (the CVE is already there from run 1), but
+                # SMTP now works -- the checkpoint (still at its pre-run-1 value) must still make
+                # this CVE look "new" relative to it.
+                client = _mock_smtp_client()
+                with patch.dict(os.environ, self.ENV, clear=False), patch("smtplib.SMTP", return_value=client):
+                    exit_code_2 = self._run_main(tmp, base_path, health_path, history_path)
+            finally:
+                fw.collect_cve_catalog = original_collect
+                fw.fetch_psirt_versions = original_psirt_versions
+
+            self.assertEqual(exit_code_2, 0)
+            self.assertTrue(client.send_message.called, "the notification must still be found and sent, not lost")
+            sent_body = client.send_message.call_args[0][0].get_content()
+            self.assertIn("CVE-2026-00200", sent_body)
+
+            final_notify_state = notify.load_notify_state(history_path)
+            self.assertIn("new-cve|psirt|CVE-2026-00200|critical", final_notify_state["sentKeys"])
+            self.assertEqual(final_notify_state["outbox"], [])
+
+    def test_repeated_interruptions_still_eventually_deliver_the_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+
+            fake_cve = {
+                "id": "CVE-2026-00201", "advisoryId": "FG-IR-26-201", "title": "t",
+                "severity": "critical", "affected": [], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
+            }
+            original_collect = fw.collect_cve_catalog
+            original_psirt_versions = fw.fetch_psirt_versions
+            fw.fetch_psirt_versions = lambda *a, **k: set()  # never hit the real PSIRT RSS feed
+            fw.collect_cve_catalog = lambda *a, **k: ({"FG-IR-26-201": [fake_cve]}, [])
+            try:
+                for attempt in range(3):
+                    with patch.dict(os.environ, self.ENV, clear=False), \
+                         patch.object(notify, "commit_events_with_checkpoint", side_effect=RuntimeError(f"crash #{attempt}")):
+                        exit_code = self._run_main(tmp, base_path, health_path, history_path)
+                    self.assertEqual(exit_code, 0)
+
+                state_after_crashes = notify.load_notify_state(history_path)
+                self.assertNotIn(
+                    "CVE-2026-00201", state_after_crashes["checkpoint"]["cvesById"],
+                    "three straight crashes must still never advance the checkpoint past its pre-collection bootstrap",
+                )
+
+                client = _mock_smtp_client()
+                with patch.dict(os.environ, self.ENV, clear=False), patch("smtplib.SMTP", return_value=client):
+                    exit_code_final = self._run_main(tmp, base_path, health_path, history_path)
+            finally:
+                fw.collect_cve_catalog = original_collect
+                fw.fetch_psirt_versions = original_psirt_versions
+
+            self.assertEqual(exit_code_final, 0)
+            self.assertTrue(client.send_message.called)
+            final_notify_state = notify.load_notify_state(history_path)
+            self.assertIn("new-cve|psirt|CVE-2026-00201|critical", final_notify_state["sentKeys"])
+
+    def test_first_activation_does_not_spam_pre_existing_catalog_history(self):
+        """No checkpoint yet (notifications just turned on for the first time) -- a catalog
+        already containing years of pre-existing versions/CVEs must not all be reported as
+        "new" in one email; only genuinely new changes THIS run should ever notify."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+
+            pre_existing_cve = {
+                "id": "CVE-2020-00001", "advisoryId": "FG-IR-20-001", "title": "old",
+                "severity": "critical", "affected": [], "publishedAt": "2020-01-01", "updatedAt": "2020-01-01",
+            }
+            existing_catalog = fw.normalize_state({"cves": [pre_existing_cve]})
+            fw.write_json(base_path, existing_catalog)
+            self.assertFalse(history_path.exists(), "no checkpoint file yet -- this is a genuine first activation")
+
+            # This run makes no further changes at all (collect_cve_catalog returns nothing new).
+            original_collect = fw.collect_cve_catalog
+            original_psirt_versions = fw.fetch_psirt_versions
+            fw.fetch_psirt_versions = lambda *a, **k: set()  # never hit the real PSIRT RSS feed
+            fw.collect_cve_catalog = lambda *a, **k: ({}, [])
+            try:
+                client = _mock_smtp_client()
+                with patch.dict(os.environ, self.ENV, clear=False), patch("smtplib.SMTP", return_value=client):
+                    exit_code = self._run_main(tmp, base_path, health_path, history_path)
+            finally:
+                fw.collect_cve_catalog = original_collect
+                fw.fetch_psirt_versions = original_psirt_versions
+
+            self.assertEqual(exit_code, 0)
+            self.assertFalse(client.send_message.called, "pre-existing history must never be reported as new on first activation")
 
 
 if __name__ == "__main__":

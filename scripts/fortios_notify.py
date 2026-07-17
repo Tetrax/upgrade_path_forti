@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fortios_watch import (  # noqa: E402
     DEFAULT_NOTIFY_HISTORY_PATH,
     cross_process_lock,
+    parse_health_timestamp,
     read_json_tolerant,
     sanitize_health_error,
     utc_now,
@@ -144,6 +145,22 @@ def load_email_config(env: dict[str, str] | None = None) -> EmailConfig:
 _REQUIRED_OUTBOX_STRING_FIELDS = ("category", "dedupKey", "summary", "queuedAt")
 _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS = ("claimedBy", "claimedAt")
 _REQUIRED_OUTBOX_KEYS = _REQUIRED_OUTBOX_STRING_FIELDS + _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS
+_VALID_EVENT_CATEGORIES = frozenset({CATEGORY_CRITICAL, CATEGORY_DAILY, CATEGORY_OPERATIONS})
+
+
+def _is_valid_notify_timestamp(value: Any) -> bool:
+    """Same rule as the health file's timestamps (see fortios_watch.parse_health_timestamp()):
+    must be a real, timezone-aware ISO 8601 string, not just any non-empty string. A naive or
+    garbled queuedAt/claimedAt must never reach the claim-staleness arithmetic in
+    enqueue_and_claim() (a naive-vs-aware subtraction raises TypeError there just like it did in
+    the health file)."""
+    if not isinstance(value, str):
+        return False
+    try:
+        parse_health_timestamp(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _is_valid_outbox_entry(entry: Any) -> bool:
@@ -153,17 +170,81 @@ def _is_valid_outbox_entry(entry: Any) -> bool:
     pass validation (only "dedupKey" was checked) and then raise KeyError the moment any of those
     functions touched it, permanently stuck since the notify pipeline never got a chance to
     self-heal past that entry.
+
+    Beyond presence/type, this also rejects semantically inconsistent entries that the earlier,
+    shallower validator let through:
+    - `category` outside the three real values -- an unrecognized one would silently vanish from
+      compose_email()'s critical/daily/operations grouping (neither shown nor ever cleaned up).
+    - `queuedAt`/`claimedAt` that don't actually parse as timezone-aware timestamps.
+    - `claimedBy` set while `claimedAt` is null (or vice versa) -- a claim with no timestamp can
+      never be recognized as stale by enqueue_and_claim(), so it would stay reserved forever with
+      no path to ever being retried.
+    - empty or whitespace-only strings anywhere a real value is required.
     """
     if not isinstance(entry, dict):
         return False
     if not all(key in entry for key in _REQUIRED_OUTBOX_KEYS):
         return False
+
     for key in _REQUIRED_OUTBOX_STRING_FIELDS:
-        if not isinstance(entry[key], str) or not entry[key]:
+        value = entry[key]
+        if not isinstance(value, str) or not value.strip():
             return False
-    for key in _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS:
-        if entry[key] is not None and not isinstance(entry[key], str):
+
+    if entry["category"] not in _VALID_EVENT_CATEGORIES:
+        return False
+    if not _is_valid_notify_timestamp(entry["queuedAt"]):
+        return False
+
+    claimed_by = entry["claimedBy"]
+    claimed_at = entry["claimedAt"]
+    for value in (claimed_by, claimed_at):
+        if value is not None and not isinstance(value, str):
             return False
+    if claimed_by is not None and not claimed_by.strip():
+        return False
+    if claimed_at is not None and (not claimed_at.strip() or not _is_valid_notify_timestamp(claimed_at)):
+        return False
+    if (claimed_by is None) != (claimed_at is None):
+        return False  # must be both-null (unclaimed) or both-set (claimed) -- never just one
+
+    return True
+
+
+def _is_valid_checkpoint(value: Any) -> bool:
+    """None (absent) is fine -- first activation, or notifications never enabled yet, both fall
+    back to the current run's own before/after snapshot (see main()'s wiring). Otherwise must be
+    the exact shape commit_events_with_checkpoint() writes: versionsByProduct (product -> list of
+    version strings), cvesById (cve id -> full CVE dict, needed to detect modifications, not just
+    presence), health (source id -> health record dict, needed for derive_source_health_events()'s
+    consecutiveFailures/lastSuccessAt comparison).
+    """
+    if value is None:
+        return True
+    if not isinstance(value, dict):
+        return False
+
+    versions_by_product = value.get("versionsByProduct", {})
+    if not isinstance(versions_by_product, dict):
+        return False
+    for product, versions in versions_by_product.items():
+        if not isinstance(product, str) or not isinstance(versions, list):
+            return False
+        if not all(isinstance(version, str) for version in versions):
+            return False
+
+    cves_by_id = value.get("cvesById", {})
+    if not isinstance(cves_by_id, dict):
+        return False
+    if not all(isinstance(cve_id, str) and isinstance(cve, dict) for cve_id, cve in cves_by_id.items()):
+        return False
+
+    health = value.get("health", {})
+    if not isinstance(health, dict):
+        return False
+    if not all(isinstance(source_id, str) and isinstance(record, dict) for source_id, record in health.items()):
+        return False
+
     return True
 
 
@@ -187,19 +268,24 @@ def _is_valid_notify_state(payload: Any) -> bool:
     if not all(isinstance(key, str) and isinstance(value, bool) for key, value in eol_state.items()):
         return False
 
+    if not _is_valid_checkpoint(payload.get("checkpoint")):
+        return False
+
     return True
 
 
 def _empty_notify_state() -> dict[str, Any]:
-    return {"sentKeys": {}, "outbox": [], "eolState": {}}
+    return {"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": None}
 
 
 def load_notify_state(path: Path) -> dict[str, Any]:
-    """Tolerant read: corrupt JSON, wrong top-level type, or a malformed outbox/sentKeys/eolState
-    shape is treated as a fresh empty state rather than raised (see
+    """Tolerant read: corrupt JSON, wrong top-level type, or a malformed outbox/sentKeys/
+    eolState/checkpoint shape is treated as a fresh empty state rather than raised (see
     fortios_watch.read_json_tolerant()) -- notifications are entirely best-effort and must never
     break the daily collection they're reporting on. The bad file is archived aside for
-    diagnosis, same as the health-tracking file.
+    diagnosis, same as the health-tracking file. A corrupt or absent checkpoint specifically just
+    means the next diff falls back to this run's own before/after snapshot, same as a genuine
+    first activation -- never a crash, and never a spam-the-whole-history event either.
     """
     state = read_json_tolerant(path, None, validate=_is_valid_notify_state, archive_suffix="corrupt")
     if state is None:
@@ -208,6 +294,7 @@ def load_notify_state(path: Path) -> dict[str, Any]:
         "sentKeys": dict(state.get("sentKeys", {})),
         "outbox": [dict(entry) for entry in state.get("outbox", [])],
         "eolState": dict(state.get("eolState", {})),
+        "checkpoint": state.get("checkpoint"),
     }
 
 
@@ -270,6 +357,29 @@ def _enqueue_new_events(
         queued_keys.add(event.dedup_key)
 
 
+def _claim_outstanding(
+    outbox: list[dict[str, Any]], *, claimant: str, now: str, now_dt: dt.datetime
+) -> list[NotificationEvent]:
+    """Claims every outbox entry not currently held by another still-live attempt, mutating
+    `outbox` in place. A claim is "live" for CLAIM_STALE_SECONDS: long enough to cover any real
+    SMTP timeout many times over, so only a genuinely crashed run's claim is ever stolen. Shared
+    by enqueue_and_claim() and commit_events_with_checkpoint() so both agree on exactly the same
+    claim rule.
+    """
+    claimed: list[NotificationEvent] = []
+    for entry in outbox:
+        claimed_at = _parse_iso(entry.get("claimedAt"))
+        is_stale = claimed_at is not None and (now_dt - claimed_at).total_seconds() > CLAIM_STALE_SECONDS
+        if entry.get("claimedBy") and not is_stale:
+            continue  # actively held by another still-live attempt
+        entry["claimedBy"] = claimant
+        entry["claimedAt"] = now
+        claimed.append(NotificationEvent(
+            category=entry["category"], dedup_key=entry["dedupKey"], summary=entry["summary"],
+        ))
+    return claimed
+
+
 def enqueue_and_claim(
     path: Path, new_events: list[NotificationEvent], *, claimant: str, now: str | None = None
 ) -> list[NotificationEvent]:
@@ -278,35 +388,80 @@ def enqueue_and_claim(
     this can never lose them -- then (b) claim every outbox entry not currently held by another
     still-live attempt for `claimant`, persisting the claim before returning.
 
-    A claim is "live" for CLAIM_STALE_SECONDS: long enough to cover any real SMTP timeout many
-    times over, so only a genuinely crashed run's claim is ever stolen. Two collections running
-    at the same time can't both send the same batch -- the second one's claim step runs under
-    the same cross_process_lock() and sees the first one's fresh claim already in place, so it
-    claims nothing for those entries.
+    Two collections running at the same time can't both send the same batch -- the second one's
+    claim step runs under the same cross_process_lock() and sees the first one's fresh claim
+    already in place, so it claims nothing for those entries.
 
     Returns every event this caller just claimed (previously-queued retries AND brand-new events
     together) -- the caller should attempt to send all of them as one email, then call
     finalize_sent_events() on success or release_claim() on failure.
+
+    Does NOT touch the notify checkpoint -- see commit_events_with_checkpoint() for the version
+    that also advances it atomically alongside the events it produced (used by main()'s
+    catalog-derived notifications specifically).
     """
     now = now or utc_now()
     now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
     with cross_process_lock(path):
         state = load_notify_state(path)
-        outbox = state["outbox"]
-        _enqueue_new_events(outbox, state["sentKeys"], new_events, now)
+        _enqueue_new_events(state["outbox"], state["sentKeys"], new_events, now)
+        claimed = _claim_outstanding(state["outbox"], claimant=claimant, now=now, now_dt=now_dt)
+        write_json(path, state)
+    return claimed
 
-        claimed: list[NotificationEvent] = []
-        for entry in outbox:
-            claimed_at = _parse_iso(entry.get("claimedAt"))
-            is_stale = claimed_at is not None and (now_dt - claimed_at).total_seconds() > CLAIM_STALE_SECONDS
-            if entry.get("claimedBy") and not is_stale:
-                continue  # actively held by another still-live attempt
-            entry["claimedBy"] = claimant
-            entry["claimedAt"] = now
-            claimed.append(NotificationEvent(
-                category=entry["category"], dedup_key=entry["dedupKey"], summary=entry["summary"],
-            ))
 
+def ensure_checkpoint(path: Path, bootstrap: dict[str, Any]) -> dict[str, Any]:
+    """Returns the currently persisted notify checkpoint, bootstrapping it to `bootstrap` first
+    if none exists yet (compare-and-set under the same lock, so two concurrent first-ever runs
+    still agree on a single winner). Must be called BEFORE this run's own catalog collection
+    starts (see main()'s wiring in fortios_watch.py) -- not merely when checkpoint happens to be
+    missing at commit time.
+
+    Why this can't just be "fall back to this run's own before/after when checkpoint is None":
+    picture the very first run ever with email enabled, which ALSO happens to be the run that
+    discovers a new CVE, and then crashes before commit_events_with_checkpoint() ever runs. If
+    the checkpoint were only established at that (now-skipped) commit point, the NEXT run would
+    still see checkpoint=None and would fall back to reading `before` fresh off disk -- but that
+    `before` already reflects the first run's own (successful) catalog write, i.e. it already
+    contains the CVE. The diff would then find nothing new, and the notification would be lost
+    exactly like before this fix existed. Bootstrapping the checkpoint immediately, before
+    collection can change anything, closes that one remaining crack: even if everything after it
+    fails, the pre-collection baseline this run started from is already safely anchored.
+    """
+    with cross_process_lock(path):
+        state = load_notify_state(path)
+        if state["checkpoint"] is not None:
+            return state["checkpoint"]
+        state["checkpoint"] = bootstrap
+        write_json(path, state)
+        return bootstrap
+
+
+def commit_events_with_checkpoint(
+    path: Path,
+    checkpoint: dict[str, Any],
+    new_events: list[NotificationEvent],
+    *,
+    claimant: str,
+    now: str | None = None,
+) -> list[NotificationEvent]:
+    """Atomically (a) advance the persisted notify checkpoint to `checkpoint`, (b) enqueue
+    `new_events` into the outbox, and (c) claim every outstanding entry for `claimant` -- all
+    under a single cross_process_lock()/write_json(), for exactly the same reason
+    commit_eol_transition() bundles its own state update with its events: the checkpoint is what
+    the NEXT run diffs the catalog against to decide what's genuinely new (see main()'s wiring in
+    fortios_watch.py), so advancing it in a write separate from queuing the events it was derived
+    from would let a crash in between silently and permanently lose the notification -- the
+    checkpoint would already reflect the new catalog state, so a later run's diff would find
+    nothing new left to report.
+    """
+    now = now or utc_now()
+    now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+    with cross_process_lock(path):
+        state = load_notify_state(path)
+        state["checkpoint"] = checkpoint
+        _enqueue_new_events(state["outbox"], state["sentKeys"], new_events, now)
+        claimed = _claim_outstanding(state["outbox"], claimant=claimant, now=now, now_dt=now_dt)
         write_json(path, state)
     return claimed
 

@@ -430,6 +430,7 @@ class MainIntegrationTests(unittest.TestCase):
             fw.write_json(base_path, fw.normalize_state({}))
 
             original_collect = fw.collect_cve_catalog
+            original_psirt_versions = fw.fetch_psirt_versions
             fw.collect_cve_catalog = lambda *a, **k: (
                 {"FG-IR-26-001": [{
                     "id": "CVE-2026-00001", "advisoryId": "FG-IR-26-001", "title": "t",
@@ -437,6 +438,7 @@ class MainIntegrationTests(unittest.TestCase):
                 }]},
                 [],
             )
+            fw.fetch_psirt_versions = lambda *a, **k: set()  # never hit the real PSIRT RSS feed
             client = _mock_smtp_client()
             try:
                 with patch.dict(os.environ, self.ENV, clear=False), patch("smtplib.SMTP", return_value=client):
@@ -445,9 +447,13 @@ class MainIntegrationTests(unittest.TestCase):
                         "--base", str(base_path), "--output", str(base_path),
                         "--report", str(tmp / "report.md"), "--health-output", str(tmp / "health.json"),
                         "--notify-history-output", str(tmp / "notify-history.json"),
+                        "--official-paths-csv", str(tmp / "no-official-paths.csv"),
+                        "--advisories-csv", str(tmp / "no-advisories.csv"),
+                        "--upgrade-exports", str(tmp / "no-upgrade-exports"),
                     ])
             finally:
                 fw.collect_cve_catalog = original_collect
+                fw.fetch_psirt_versions = original_psirt_versions
 
             self.assertEqual(exit_code, 0)
             self.assertFalse(client.send_message.called, "a --cve-backfill run must never send an email")
@@ -496,7 +502,9 @@ class MainIntegrationTests(unittest.TestCase):
                 "severity": "critical", "affected": [], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
             }
             original_collect = fw.collect_cve_catalog
+            original_psirt_versions = fw.fetch_psirt_versions
             fw.collect_cve_catalog = lambda *a, **k: ({"FG-IR-26-099": [fake_cve]}, [])
+            fw.fetch_psirt_versions = lambda *a, **k: set()  # never hit the real PSIRT RSS feed
             try:
                 # Run 1: SMTP is down.
                 with patch.dict(os.environ, self.ENV, clear=False), patch("smtplib.SMTP", side_effect=ConnectionRefusedError("refused")):
@@ -536,6 +544,7 @@ class MainIntegrationTests(unittest.TestCase):
                     ])
             finally:
                 fw.collect_cve_catalog = original_collect
+                fw.fetch_psirt_versions = original_psirt_versions
 
             self.assertEqual(exit_code_2, 0)
             self.assertTrue(client.send_message.called, "the retried event must actually be sent this time")
