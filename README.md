@@ -359,7 +359,7 @@ Chaque test lance sa propre instance isolée de `scripts/fortios_server.py` (por
 
 ## Planification
 
-Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h15, en deux étapes :
+Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h00 heure de Paris (CET/CEST, résolu par systemd — le VPS lui-même tourne en UTC), en deux étapes :
 
 ```bash
 python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog --cve-catalog

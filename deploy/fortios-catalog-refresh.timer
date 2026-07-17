@@ -2,7 +2,9 @@
 Description=Daily refresh of the FortiOS Upgrade Intelligence catalog
 
 [Timer]
-OnCalendar=*-*-* 07:15:00
+# Europe/Paris, not the VPS's own UTC system clock -- systemd resolves CET/CEST automatically
+# across the DST transitions, so this stays "7h heure de Paris" year-round without drifting.
+OnCalendar=*-*-* 07:00:00 Europe/Paris
 Persistent=true
 
 [Install]
