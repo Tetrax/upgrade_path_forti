@@ -141,18 +141,52 @@ def load_email_config(env: dict[str, str] | None = None) -> EmailConfig:
 # See the "Notifications email" section of README.md for the full outbox lifecycle and the
 # recovery procedure for a corrupted state file.
 
+_REQUIRED_OUTBOX_STRING_FIELDS = ("category", "dedupKey", "summary", "queuedAt")
+_REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS = ("claimedBy", "claimedAt")
+_REQUIRED_OUTBOX_KEYS = _REQUIRED_OUTBOX_STRING_FIELDS + _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS
+
+
+def _is_valid_outbox_entry(entry: Any) -> bool:
+    """Every field below is read unconditionally elsewhere (enqueue_and_claim() builds a
+    NotificationEvent straight from entry["category"]/entry["dedupKey"]/entry["summary"],
+    finalize_sent_events() matches on entry["dedupKey"]) -- an entry missing one of them used to
+    pass validation (only "dedupKey" was checked) and then raise KeyError the moment any of those
+    functions touched it, permanently stuck since the notify pipeline never got a chance to
+    self-heal past that entry.
+    """
+    if not isinstance(entry, dict):
+        return False
+    if not all(key in entry for key in _REQUIRED_OUTBOX_KEYS):
+        return False
+    for key in _REQUIRED_OUTBOX_STRING_FIELDS:
+        if not isinstance(entry[key], str) or not entry[key]:
+            return False
+    for key in _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS:
+        if entry[key] is not None and not isinstance(entry[key], str):
+            return False
+    return True
+
+
 def _is_valid_notify_state(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
+
     sent_keys = payload.get("sentKeys", {})
-    outbox = payload.get("outbox", [])
-    eol_state = payload.get("eolState", {})
     if not isinstance(sent_keys, dict):
         return False
-    if not isinstance(outbox, list) or not all(isinstance(item, dict) and "dedupKey" in item for item in outbox):
+    if not all(isinstance(key, str) and isinstance(value, str) for key, value in sent_keys.items()):
         return False
+
+    outbox = payload.get("outbox", [])
+    if not isinstance(outbox, list) or not all(_is_valid_outbox_entry(entry) for entry in outbox):
+        return False
+
+    eol_state = payload.get("eolState", {})
     if not isinstance(eol_state, dict):
         return False
+    if not all(isinstance(key, str) and isinstance(value, bool) for key, value in eol_state.items()):
+        return False
+
     return True
 
 
@@ -213,6 +247,29 @@ def _parse_iso(value: str | None) -> "dt.datetime | None":
         return None
 
 
+def _enqueue_new_events(
+    outbox: list[dict[str, Any]], sent_keys: dict[str, str], new_events: list[NotificationEvent], now: str
+) -> None:
+    """Mutates `outbox` in place, appending any of `new_events` not already sent or already
+    queued. Shared by enqueue_and_claim() and commit_eol_transition() so both agree on exactly
+    the same dedup rule, and so an EOL event can be queued under the very same lock/write that
+    records the state transition that produced it (see commit_eol_transition()).
+    """
+    queued_keys = {entry["dedupKey"] for entry in outbox}
+    for event in filter_new_events(new_events, sent_keys):
+        if event.dedup_key in queued_keys:
+            continue
+        outbox.append({
+            "category": event.category,
+            "dedupKey": event.dedup_key,
+            "summary": event.summary,
+            "queuedAt": now,
+            "claimedBy": None,
+            "claimedAt": None,
+        })
+        queued_keys.add(event.dedup_key)
+
+
 def enqueue_and_claim(
     path: Path, new_events: list[NotificationEvent], *, claimant: str, now: str | None = None
 ) -> list[NotificationEvent]:
@@ -235,22 +292,8 @@ def enqueue_and_claim(
     now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
     with cross_process_lock(path):
         state = load_notify_state(path)
-        sent_keys = state["sentKeys"]
         outbox = state["outbox"]
-        queued_keys = {entry["dedupKey"] for entry in outbox}
-
-        for event in filter_new_events(new_events, sent_keys):
-            if event.dedup_key in queued_keys:
-                continue
-            outbox.append({
-                "category": event.category,
-                "dedupKey": event.dedup_key,
-                "summary": event.summary,
-                "queuedAt": now,
-                "claimedBy": None,
-                "claimedAt": None,
-            })
-            queued_keys.add(event.dedup_key)
+        _enqueue_new_events(outbox, state["sentKeys"], new_events, now)
 
         claimed: list[NotificationEvent] = []
         for entry in outbox:
@@ -309,10 +352,27 @@ def release_claim(path: Path, claimant: str) -> None:
             write_json(path, state)
 
 
-def save_eol_state(path: Path, eol_state: dict[str, bool]) -> None:
+def commit_eol_transition(
+    path: Path, eol_state: dict[str, bool], events: list[NotificationEvent], *, now: str | None = None
+) -> None:
+    """Persist an EOL state transition and the notification event(s) it produced in ONE atomic
+    read-modify-write, under a single cross_process_lock() acquisition.
+
+    Regression this fixes: eolState used to be saved by a separate save_eol_state() call BEFORE
+    the resulting event was queued via enqueue_and_claim(). A crash (or the process simply being
+    killed) between those two writes would leave eolState already marking the branch as handled
+    while the event was never queued anywhere -- and since derive_eol_events() only ever fires on
+    the False -> True transition of that exact persisted state, a future run would see `was_eol`
+    already True and never regenerate the event. The notification would be permanently lost with
+    no way to detect or recover it after the fact. Doing both under one lock/write removes the
+    window entirely: either both land, or (if this call itself never completes) neither does, and
+    the next run's derive_eol_events() will still see the pre-transition state and fire normally.
+    """
+    now = now or utc_now()
     with cross_process_lock(path):
         state = load_notify_state(path)
         state["eolState"] = eol_state
+        _enqueue_new_events(state["outbox"], state["sentKeys"], events, now)
         write_json(path, state)
 
 

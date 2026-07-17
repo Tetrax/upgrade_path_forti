@@ -285,6 +285,121 @@ class TolerantHealthReadTests(unittest.TestCase):
             path.write_text('{"sources": {"daily-run": "oops, a string not a record"}}', encoding="utf-8")
             self.assertEqual(fw.read_health_state(path), {"sources": {}})
 
+    def test_invalid_timestamp_field_is_treated_as_empty(self):
+        """Regression: parse_health_timestamp("not-a-date") raises ValueError, and used to
+        propagate straight out of classify_source_severity()/_merge_health_source() the moment a
+        record with a garbled lastAttemptAt was read -- validation must catch it up front."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text(
+                '{"sources": {"daily-run": {"status": "ok", "lastAttemptAt": "not-a-date"}}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_invalid_last_success_at_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text(
+                '{"sources": {"daily-run": {"status": "ok", "lastSuccessAt": 12345}}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_unknown_status_value_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text(
+                '{"sources": {"daily-run": {"status": "totally-bogus"}}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_consecutive_failures_wrong_type_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text(
+                '{"sources": {"daily-run": {"status": "ok", "consecutiveFailures": "two"}}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_consecutive_failures_boolean_is_treated_as_empty(self):
+        """bool is a subclass of int in Python -- a stray `true` here must not silently pass a
+        naive isinstance(x, int) check."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text(
+                '{"sources": {"daily-run": {"status": "ok", "consecutiveFailures": true}}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_items_collected_wrong_type_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text(
+                '{"sources": {"daily-run": {"status": "ok", "itemsCollected": "lots"}}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_duration_seconds_wrong_type_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text(
+                '{"sources": {"daily-run": {"status": "ok", "durationSeconds": "fast"}}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_last_error_wrong_type_is_treated_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text(
+                '{"sources": {"daily-run": {"status": "error", "lastError": {"nested": "object"}}}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(fw.read_health_state(path), {"sources": {}})
+
+    def test_a_fully_valid_record_still_passes(self):
+        """Sanity check for the stricter validator: a normal, well-formed record must not be
+        rejected."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "health.json"
+            path.write_text(
+                '{"sources": {"daily-run": {'
+                '"status": "ok", "lastAttemptAt": "2026-07-17T07:23:35.123456Z", '
+                '"lastSuccessAt": "2026-07-17T07:23:35.123456Z", "consecutiveFailures": 0, '
+                '"itemsCollected": 14584, "durationSeconds": 508.979, "lastError": null'
+                '}}}',
+                encoding="utf-8",
+            )
+            state = fw.read_health_state(path)
+            self.assertEqual(state["sources"]["daily-run"]["itemsCollected"], 14584)
+
+    def test_main_completes_despite_an_invalid_timestamp_in_the_health_file(self):
+        """The literal bug report: a health file with a garbled lastAttemptAt used to raise
+        ValueError inside main() (via read_health_state() -> classify checks downstream) and
+        take the whole collection down with it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "state.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            health_path = Path(tmp) / "health.json"
+            health_path.write_text(
+                '{"sources": {"daily-run": {"status": "ok", "lastAttemptAt": "not-a-date"}}}',
+                encoding="utf-8",
+            )
+
+            exit_code = fw.main([
+                "--skip-network",
+                "--base", str(base_path), "--output", str(base_path),
+                "--report", str(Path(tmp) / "report.md"), "--health-output", str(health_path),
+            ])
+            self.assertEqual(exit_code, 0)
+            health_state = fw.read_json(health_path, None)
+            self.assertIsNotNone(health_state, "health tracking must self-heal with a fresh, valid file")
+
     def test_health_mark_running_recovers_from_a_corrupt_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "health.json"

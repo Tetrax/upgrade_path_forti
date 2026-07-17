@@ -257,13 +257,74 @@ DEFAULT_HEALTH_PATH = Path("data/fortios-health.json")
 DEFAULT_NOTIFY_HISTORY_PATH = Path("data/fortios-notify-history.json")
 
 
+_VALID_HEALTH_STATUSES = frozenset({
+    HEALTH_STATUS_OK, HEALTH_STATUS_WARNING, HEALTH_STATUS_ERROR, HEALTH_STATUS_RUNNING, HEALTH_STATUS_SKIPPED,
+})
+
+
+def _is_valid_health_timestamp(value: Any) -> bool:
+    """None/absent is fine (e.g. a source that's never succeeded has no lastSuccessAt yet) -- but
+    anything present must be a string that actually parses, since every reader of this field
+    (classify_source_severity(), _merge_health_source()'s clobber-guard) calls
+    parse_health_timestamp() on it unconditionally and that raises ValueError on garbage like
+    "not-a-date", which used to propagate straight out of main().
+    """
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    try:
+        parse_health_timestamp(value)
+    except (ValueError, AttributeError):
+        return False
+    return True
+
+
+def _is_strict_int(value: Any) -> bool:
+    # bool is a subclass of int in Python (isinstance(True, int) is True) -- a stray boolean
+    # here would silently pass a plain isinstance(value, int) check, so it's excluded explicitly.
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_valid_health_source_record(record: Any) -> bool:
+    if not isinstance(record, dict):
+        return False
+
+    status = record.get("status")
+    if status is not None and status not in _VALID_HEALTH_STATUSES:
+        return False
+
+    for timestamp_field in ("lastAttemptAt", "lastSuccessAt", "lastErrorAt"):
+        if not _is_valid_health_timestamp(record.get(timestamp_field)):
+            return False
+
+    consecutive_failures = record.get("consecutiveFailures")
+    if consecutive_failures is not None and not _is_strict_int(consecutive_failures):
+        return False
+
+    items_collected = record.get("itemsCollected")
+    if items_collected is not None and not _is_strict_int(items_collected):
+        return False
+
+    duration_seconds = record.get("durationSeconds")
+    if duration_seconds is not None:
+        if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, (int, float)):
+            return False
+
+    last_error = record.get("lastError")
+    if last_error is not None and not isinstance(last_error, str):
+        return False
+
+    return True
+
+
 def _is_valid_health_state(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
     sources = payload.get("sources", {})
     if not isinstance(sources, dict):
         return False
-    return all(isinstance(record, dict) for record in sources.values())
+    return all(_is_valid_health_source_record(record) for record in sources.values())
 
 
 def read_health_state(path: Path) -> dict[str, Any]:
@@ -2283,8 +2344,12 @@ def main(argv: list[str]) -> int:
                     final_state.get("fortiosLifecycle", {}), notify_state.get("eolState", {}),
                     now=final_state["generatedAt"],
                 )
-                events += eol_events
-                fortios_notify.save_eol_state(args.notify_history_output, eol_state_after)
+                # Committed immediately (state + outbox entries in one write), not folded into
+                # the `events` list below -- see commit_eol_transition()'s docstring for why the
+                # two must never be persisted as separate writes.
+                fortios_notify.commit_eol_transition(
+                    args.notify_history_output, eol_state_after, eol_events, now=final_state["generatedAt"],
+                )
             events += fortios_notify.derive_source_health_events(health_before, health_after, HEALTH_SOURCE_LABELS)
 
             claimant = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"

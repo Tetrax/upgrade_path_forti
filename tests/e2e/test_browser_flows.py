@@ -83,7 +83,7 @@ def test_create_advisory(page, fortios_server):
     page.goto(f"{fortios_server.base_url}/app/alerte/")
     page.fill("#titleInput", "E2E test advisory")
     page.fill("#descriptionInput", "Created by the E2E suite.")
-    page.get_by_label("6.2.4").check()
+    page.locator("#versionList").get_by_label("6.2.4").check()
     page.click("#submitButton")
 
     expect(page.locator("#advisoryList")).to_contain_text("E2E test advisory")
@@ -96,7 +96,7 @@ def test_edit_advisory(page, fortios_server):
     page.goto(f"{fortios_server.base_url}/app/alerte/")
     page.fill("#titleInput", "Advisory to edit")
     page.fill("#descriptionInput", "Original description.")
-    page.get_by_label("6.2.4").check()
+    page.locator("#versionList").get_by_label("6.2.4").check()
     page.click("#submitButton")
     expect(page.locator("#advisoryList")).to_contain_text("Advisory to edit")
 
@@ -115,7 +115,7 @@ def test_delete_advisory(page, fortios_server):
     page.goto(f"{fortios_server.base_url}/app/alerte/")
     page.fill("#titleInput", "Advisory to delete")
     page.fill("#descriptionInput", "Will be removed.")
-    page.get_by_label("6.2.4").check()
+    page.locator("#versionList").get_by_label("6.2.4").check()
     page.click("#submitButton")
     expect(page.locator("#advisoryList")).to_contain_text("Advisory to delete")
 
@@ -140,7 +140,7 @@ def test_upload_and_cleanup_unused_image(page, fortios_server, tmp_path):
     page.goto(f"{fortios_server.base_url}/app/alerte/")
     page.fill("#titleInput", "Advisory with an image")
     page.fill("#descriptionInput", "Screenshot below.")
-    page.get_by_label("6.2.4").check()
+    page.locator("#versionList").get_by_label("6.2.4").check()
     page.set_input_files("#imageFileInput", str(image_path))
     expect(page.locator("#formMessage")).to_contain_text("Image ajoutée", timeout=10000)
 
@@ -153,6 +153,10 @@ def test_upload_and_cleanup_unused_image(page, fortios_server, tmp_path):
     page.locator("article", has_text="Advisory with an image").get_by_role("button", name="Modifier").click()
     page.fill("#descriptionInput", "Screenshot removed.")
     page.click("#submitButton")
+    # Wait for the update request to actually complete before checking disk -- the backend does
+    # delete the now-unreferenced image correctly, but checking immediately after the click races
+    # the in-flight PUT /api/advisories/<id> request.
+    expect(page.locator("#formMessage")).to_have_text("Alerte mise à jour.")
 
     assert fortios_server.image_files() == [], "an image no longer referenced must be deleted"
 

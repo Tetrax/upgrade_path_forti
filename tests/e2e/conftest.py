@@ -125,5 +125,9 @@ def app_page(page, fortios_server):
     """A page already navigated to the isolated app, with the catalog loaded."""
     page.on("dialog", lambda dialog: dialog.accept())  # window.confirm() on delete flows
     page.goto(f"{fortios_server.base_url}/app/")
-    page.wait_for_selector("#productSelect option")
+    # state="attached" (not the default "visible"): an <option> element is never considered
+    # "visible" by modern Playwright (it only renders inside its closed <select> popup), so the
+    # default wait_for_selector() state would time out here even once the catalog has genuinely
+    # loaded and populated the dropdown -- attachment to the DOM is all this needs to confirm.
+    page.wait_for_selector("#productSelect option", state="attached")
     return page
