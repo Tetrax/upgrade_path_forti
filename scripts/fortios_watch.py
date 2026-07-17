@@ -263,10 +263,12 @@ def _merge_health_source(existing: dict[str, Any], result: HealthSourceResult) -
         record["lastError"] = None
     elif result.status == HEALTH_STATUS_WARNING:
         # Succeeded technically, but the result looked abnormal (e.g. an empty result where one
-        # wasn't expected) -- explicitly NOT treated as a full success ("ne pas considérer
-        # automatiquement une source vide comme réussie si cela paraît anormal"), so
-        # lastSuccessAt is left as it was and consecutiveFailures isn't touched either way; only
-        # the visible warning message is recorded.
+        # wasn't expected, or a handful of items skipped out of a much larger batch) -- still
+        # counts as a success for lastSuccessAt/consecutiveFailures purposes (the run did
+        # complete and produce data), but the anomaly stays visible via status/lastError so the
+        # UI still renders it orange rather than green.
+        record["lastSuccessAt"] = result.started_at
+        record["consecutiveFailures"] = 0
         record["lastErrorAt"] = result.started_at
         record["lastError"] = sanitize_health_error(result.error)
     elif result.status == HEALTH_STATUS_ERROR:

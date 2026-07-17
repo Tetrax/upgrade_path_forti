@@ -411,12 +411,15 @@
 
       const sources = healthState.sources;
       const dailyRun = sources["daily-run"];
-      const overallSeverity = classifySourceSeverity(dailyRun, now);
       const erroredSources = HEALTH_SOURCE_ORDER.filter(
         id => id !== "daily-run" && sources[id] && classifySourceSeverity(sources[id], now) === "error"
       );
 
-      els.healthSummaryDot.className = `health-dot ${overallSeverity}`;
+      // The top-line dot is a simple pass/fail signal (vert = la dernière collecte a abouti,
+      // rouge = non) -- "warning" (succeeded but flagged as suspicious) still counts as a pass
+      // here; the detailed table below keeps the 3-way ok/warning/error breakdown per source.
+      const overallSucceeded = classifySourceSeverity(dailyRun, now) !== "error";
+      els.healthSummaryDot.className = `health-dot ${overallSucceeded ? "ok" : "error"}`;
       const ageText = dailyRun && dailyRun.lastSuccessAt
         ? `dernière collecte globale réussie le ${formatDateTime(dailyRun.lastSuccessAt)}`
         : "aucune collecte globale réussie connue";

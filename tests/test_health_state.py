@@ -108,13 +108,15 @@ class HealthResultMergeTests(unittest.TestCase):
         self.assertNotIn("hunter2", record["lastError"])
         self.assertIn("[masqué]", record["lastError"])
 
-    def test_warning_does_not_count_as_a_clean_success(self):
+    def test_warning_still_counts_as_a_success_but_stays_visibly_flagged(self):
         record = fw._merge_health_source({}, fw.HealthSourceResult(
             status=fw.HEALTH_STATUS_WARNING, started_at="2026-07-16T07:15:00Z",
             duration_seconds=1.0, items_collected=0, error="0 items collected, expected some",
         ))
         self.assertEqual(record["status"], fw.HEALTH_STATUS_WARNING)
-        self.assertIsNone(record.get("lastSuccessAt"), "a suspicious empty result must not count as success")
+        self.assertEqual(record["lastSuccessAt"], "2026-07-16T07:15:00Z", "the run did complete and produce data")
+        self.assertEqual(record["consecutiveFailures"], 0)
+        self.assertEqual(record["lastError"], "0 items collected, expected some")
 
 
 class RecordHealthResultsIntegrationTests(unittest.TestCase):
@@ -234,13 +236,11 @@ class SourceSeverityClassificationTests(unittest.TestCase):
         self.assertEqual(fw.classify_source_severity(record, now=self.NOW), "error")
 
     def test_warning_status_with_no_prior_success_is_orange_not_red(self):
-        """Regression: _merge_health_source() deliberately never sets lastSuccessAt for a
-        "warning" outcome (succeeded, but flagged as suspicious -- e.g. cve-psirt skipping one
-        advisory it couldn't parse). On a source's very first-ever run this produced
-        "no lastSuccessAt" + status="warning", which the previous fix still mapped to "error"
-        because its exemption list only covered running/skipped, not warning -- a real
-        production false alarm ("1 source(s) en erreur") for what was actually a minor warning,
-        not a failure."""
+        """Regression: a "warning" record with no lastSuccessAt (e.g. hand-built state, or data
+        written before _merge_health_source() started stamping lastSuccessAt on warnings) was
+        being mapped to "error" because the exemption list only covered running/skipped, not
+        warning -- a real production false alarm ("1 source(s) en erreur") for what was actually
+        a minor warning, not a failure."""
         record = {"status": fw.HEALTH_STATUS_WARNING, "consecutiveFailures": 0}
         self.assertEqual(fw.classify_source_severity(record, now=self.NOW), "warning")
 
