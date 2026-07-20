@@ -1969,6 +1969,10 @@ def all_versions(state: dict[str, Any]) -> set[str]:
     return versions
 
 
+def parse_retry_delays(raw: str) -> list[int]:
+    return [int(chunk) for chunk in raw.split(",") if chunk.strip()]
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate FortiOS upgrade UI data.")
     parser.add_argument("--base", type=Path, default=Path("data/fortios-data.sample.json"))
@@ -2025,10 +2029,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--cve-backfill-max-pages", type=int, default=30, help="Pages max à parcourir par produit lors du --cve-backfill.")
     parser.add_argument(
-        "--cve-retry-delay-seconds",
-        type=int,
-        default=300,
-        help="Délai avant de retenter les advisories PSIRT en échec réseau (une seule relance, 0 pour désactiver).",
+        "--cve-retry-delays-seconds",
+        type=parse_retry_delays,
+        default="300,900",
+        help=(
+            "Délais successifs (secondes, séparés par des virgules) avant de retenter les "
+            "advisories PSIRT en échec réseau -- une relance par délai, dans l'ordre, tant qu'il "
+            "en reste en échec. Défaut : deux relances (5 min puis 15 min). Vide (\"\") pour désactiver."
+        ),
     )
     parser.add_argument(
         "--health-output",
@@ -2275,14 +2283,20 @@ def main(argv: list[str]) -> int:
                 backfill=args.cve_backfill,
                 backfill_max_pages=args.cve_backfill_max_pages,
             )
-            if skipped_cves and args.cve_retry_delay_seconds > 0:
-                # A handful of advisories failing out of the ~50 fetched daily is almost always a
-                # transient PSIRT hiccup (rate limiting, brief outage) that clears up within
-                # minutes on its own -- retrying seconds later (the per-request backoff in
-                # urlopen_with_retry) mostly doesn't help with that, so wait for real before
-                # giving the still-failing ones one more shot ahead of settling on the skipped
-                # list the health status/report below are built from.
-                time.sleep(args.cve_retry_delay_seconds)
+            # A handful of advisories failing out of the ~50 fetched daily is almost always a
+            # transient PSIRT hiccup (rate limiting, brief outage) that clears up within minutes
+            # on its own -- retrying seconds later (the per-request backoff in urlopen_with_retry)
+            # mostly doesn't help with that, so wait for real before giving the still-failing ones
+            # another shot. Bounded and spaced out (not "retry forever until green"): an advisory
+            # can be legitimately CSAF-less (see collect_cve_entries_for_advisory's docstring),
+            # indistinguishable here from a real failure, so an unbounded loop would spin on it
+            # forever every single day; and hammering PSIRT harder/faster when it's already
+            # struggling only makes the rate limiting worse, not better (observed directly: 1
+            # skip left completely alone, vs 3 after two manual back-to-back re-runs).
+            for delay in args.cve_retry_delays_seconds:
+                if not skipped_cves:
+                    break
+                time.sleep(delay)
                 retried_results, skipped_cves = fetch_cve_entries_for_advisories(skipped_cves, args.timeout)
                 cve_results_by_advisory.update(retried_results)
             # Each advisory here got a definitive CSAF result this run: replace (not just upsert)
