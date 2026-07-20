@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-17T08:14:11Z",
+  "generatedAt": "2026-07-20T07:38:45Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -1892,10 +1892,19 @@
               "version": "7.4.12",
               "build": "2902",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ],
               "links": {
-                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes"
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/832438/upgrade-information",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/289806/resolved-issues",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/236526/known-issues",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/230510/changes-in-default-behavior"
               },
               "maturity": "Mature"
             },
@@ -23975,10 +23984,19 @@
               "build": "1706",
               "current": true,
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ],
               "links": {
-                "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes"
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes",
+                "known": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/236526/known-issues",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/832438/upgrade-information",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/230510/changes-in-default-behavior"
               },
               "maturity": "Mature"
             },
@@ -24052,10 +24070,19 @@
               "version": "7.4.8",
               "build": "2795",
               "notes": [
-                "release-notes"
+                "behavior",
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ],
               "links": {
-                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes"
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes/236526/known-issues",
+                "behavior": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes/230510/changes-in-default-behavior",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes/289806/resolved-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.8/fortios-release-notes/832438/upgrade-information"
               },
               "maturity": "Mature"
             },
@@ -24086,10 +24113,17 @@
               "build": "2878",
               "target": true,
               "notes": [
-                "release-notes"
+                "known",
+                "release-notes",
+                "resolved",
+                "special",
+                "upgrade"
               ],
               "links": {
-                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes"
+                "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes",
+                "known": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/236526/known-issues",
+                "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/832438/upgrade-information",
+                "resolved": "https://docs.fortinet.com/document/fortigate/7.4.11/fortios-release-notes/289806/resolved-issues"
               },
               "maturity": "Mature"
             },
@@ -151878,7 +151912,7 @@
         "7.4.11"
       ],
       "source": "Fortinet Upgrade Path Tool public service",
-      "fetchedAt": "2026-07-10T14:55:35Z"
+      "fetchedAt": "2026-07-20T07:38:45Z"
     },
     {
       "id": "path-FGT40F-7.0.15-7.4.11",
@@ -151893,7 +151927,7 @@
         "7.4.11"
       ],
       "source": "Fortinet Upgrade Path Tool public service",
-      "fetchedAt": "2026-07-17T07:23:35Z"
+      "fetchedAt": "2026-07-20T05:10:28Z"
     },
     {
       "id": "path-FGT60F-6.2.4-7.4.11",
@@ -152801,6 +152835,32 @@
       ],
       "source": "Fortinet Upgrade Path Tool public service",
       "fetchedAt": "2026-07-16T15:00:19Z"
+    },
+    {
+      "id": "path-FGT40F-7.4.11-7.4.12",
+      "product": "fortigate-fortios",
+      "model": "FGT40F",
+      "from": "7.4.11",
+      "to": "7.4.12",
+      "hops": [
+        "7.4.11",
+        "7.4.12"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-17T14:48:05Z"
+    },
+    {
+      "id": "path-FGT40F-7.4.11-7.6.7",
+      "product": "fortigate-fortios",
+      "model": "FGT40F",
+      "from": "7.4.11",
+      "to": "7.6.7",
+      "hops": [
+        "7.4.11",
+        "7.6.7"
+      ],
+      "source": "Fortinet Upgrade Path Tool public service",
+      "fetchedAt": "2026-07-17T14:47:37Z"
     }
   ],
   "advisories": [
@@ -154488,6 +154548,40 @@
     }
   },
   "searchHistory": [
+    {
+      "product": "fortigate-fortios",
+      "model": "FGT90G",
+      "from": "7.2.10",
+      "to": "7.4.11",
+      "hops": [
+        "7.2.10",
+        "7.4.8",
+        "7.4.11"
+      ],
+      "requestedAt": "2026-07-20T07:38:45Z"
+    },
+    {
+      "product": "fortigate-fortios",
+      "model": "FGT40F",
+      "from": "7.4.11",
+      "to": "7.4.12",
+      "hops": [
+        "7.4.11",
+        "7.4.12"
+      ],
+      "requestedAt": "2026-07-17T14:48:05Z"
+    },
+    {
+      "product": "fortigate-fortios",
+      "model": "FGT40F",
+      "from": "7.4.11",
+      "to": "7.6.7",
+      "hops": [
+        "7.4.11",
+        "7.6.7"
+      ],
+      "requestedAt": "2026-07-17T14:47:37Z"
+    },
     {
       "product": "fortigate-fortios",
       "model": "FGT60F",

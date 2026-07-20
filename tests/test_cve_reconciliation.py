@@ -8,7 +8,9 @@ longer present) from an unresolved one — no CSAF url found, or a network/parse
 must leave existing data completely untouched.
 """
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -238,6 +240,123 @@ class MainCommitSequenceCveReconciliationTests(unittest.TestCase):
             result = fw.normalize_state(fw.read_json(output_path, {}))
             ids = sorted(item["id"] for item in result["cves"])
             self.assertEqual(ids, ["CVE-KEEP"], "CVE-STALE must not resurrect during the final merge")
+
+
+class CveRetryAfterDelayIntegrationTests(unittest.TestCase):
+    """Covers the retry-after-a-real-delay added on top of collect_cve_catalog(): a single
+    advisory failing out of ~50 fetched daily is almost always a transient PSIRT hiccup (rate
+    limiting, brief outage) that clears up within minutes, not a real reason to flag the whole
+    day's run as a warning. main() now gives the still-skipped ids one more shot, after
+    --cve-retry-delay-seconds (default 300s), before settling on the health status/report."""
+
+    def setUp(self):
+        self._orig_rss = fw.discover_advisory_ids_from_rss
+        self._orig_fetch_csaf_url = fw.fetch_csaf_url
+        self._orig_fetch_text = fw.fetch_text
+        self._orig_psirt_versions = fw.fetch_psirt_versions
+        self._orig_sleep = fw.time.sleep
+        fw.fetch_psirt_versions = lambda *a, **k: set()
+        self.sleep_calls: list[float] = []
+        fw.time.sleep = lambda seconds: self.sleep_calls.append(seconds)
+
+    def tearDown(self):
+        fw.discover_advisory_ids_from_rss = self._orig_rss
+        fw.fetch_csaf_url = self._orig_fetch_csaf_url
+        fw.fetch_text = self._orig_fetch_text
+        fw.fetch_psirt_versions = self._orig_psirt_versions
+        fw.time.sleep = self._orig_sleep
+
+    def _run_main(self, tmp: Path, base_path: Path, health_path: Path, extra_args: list[str]) -> int:
+        return fw.main([
+            "--cve-catalog", *extra_args,
+            "--base", str(base_path), "--output", str(base_path),
+            "--report", str(tmp / "report.md"), "--health-output", str(health_path),
+            "--official-paths-csv", str(tmp / "no-official-paths.csv"),
+            "--advisories-csv", str(tmp / "no-advisories.csv"),
+            "--upgrade-exports", str(tmp / "no-upgrade-exports"),
+        ])
+
+    def _install_fakes(self, flaky_advisory_id: str, always_fails: bool = False):
+        """FG-IR-26-002 always succeeds; `flaky_advisory_id` fails its first fetch_csaf_url call
+        (simulated network error) then succeeds on every subsequent one, unless `always_fails`."""
+        call_counts: dict[str, int] = {}
+
+        def fetch_csaf_url(advisory_id, timeout):
+            call_counts[advisory_id] = call_counts.get(advisory_id, 0) + 1
+            if advisory_id == flaky_advisory_id and (always_fails or call_counts[advisory_id] == 1):
+                raise TimeoutError("PSIRT unreachable")
+            return f"https://example/{advisory_id}.json"
+
+        def fetch_text(url, timeout):
+            advisory_id = url.rsplit("/", 1)[1].removesuffix(".json")
+            return json.dumps(make_csaf_doc([f"CVE-{advisory_id}"]))
+
+        fw.fetch_csaf_url = fetch_csaf_url
+        fw.fetch_text = fetch_text
+        return call_counts
+
+    def test_advisory_that_fails_once_then_succeeds_on_retry_ends_up_green(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            fw.discover_advisory_ids_from_rss = lambda timeout: ["FG-IR-26-001", "FG-IR-26-002"]
+            call_counts = self._install_fakes("FG-IR-26-001")
+
+            exit_code = self._run_main(tmp, base_path, health_path, [])
+            self.assertEqual(exit_code, 0)
+
+            self.assertEqual(call_counts["FG-IR-26-001"], 2, "must be retried exactly once after the delay")
+            self.assertIn(300, self.sleep_calls, "must wait the configured delay before retrying")
+
+            health = fw.read_json(health_path, {})
+            source = health["sources"][fw.SOURCE_CVE_PSIRT]
+            self.assertEqual(source["status"], fw.HEALTH_STATUS_OK)
+            self.assertIsNone(source.get("lastError"))
+
+            state = fw.read_json(base_path, {})
+            ids = sorted(item["id"] for item in state["cves"])
+            self.assertEqual(ids, ["CVE-FG-IR-26-001", "CVE-FG-IR-26-002"], "the recovered advisory's CVE must land")
+
+    def test_advisory_still_failing_after_retry_stays_a_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            fw.discover_advisory_ids_from_rss = lambda timeout: ["FG-IR-26-001", "FG-IR-26-002"]
+            call_counts = self._install_fakes("FG-IR-26-001", always_fails=True)
+
+            exit_code = self._run_main(tmp, base_path, health_path, [])
+            self.assertEqual(exit_code, 0)
+
+            self.assertEqual(call_counts["FG-IR-26-001"], 2, "one initial attempt plus one retry, not a loop")
+            self.assertIn(300, self.sleep_calls)
+
+            health = fw.read_json(health_path, {})
+            source = health["sources"][fw.SOURCE_CVE_PSIRT]
+            self.assertEqual(source["status"], fw.HEALTH_STATUS_WARNING)
+            self.assertIn("1 advisorie", source["lastError"])
+
+    def test_zero_delay_disables_the_retry_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            fw.discover_advisory_ids_from_rss = lambda timeout: ["FG-IR-26-001", "FG-IR-26-002"]
+            call_counts = self._install_fakes("FG-IR-26-001")
+
+            exit_code = self._run_main(tmp, base_path, health_path, ["--cve-retry-delay-seconds", "0"])
+            self.assertEqual(exit_code, 0)
+
+            self.assertEqual(call_counts["FG-IR-26-001"], 1, "no retry attempt should happen")
+            self.assertNotIn(300, self.sleep_calls)
+
+            health = fw.read_json(health_path, {})
+            source = health["sources"][fw.SOURCE_CVE_PSIRT]
+            self.assertEqual(source["status"], fw.HEALTH_STATUS_WARNING)
 
 
 if __name__ == "__main__":

@@ -1677,6 +1677,17 @@ def collect_cve_catalog(
     else:
         advisory_ids = discover_advisory_ids_from_rss(timeout)
 
+    return fetch_cve_entries_for_advisories(advisory_ids, timeout)
+
+
+def fetch_cve_entries_for_advisories(
+    advisory_ids: list[str], timeout: int
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    """Fetch the definitive CSAF result for each id in `advisory_ids`, split into resolved
+    results and a skipped list (see collect_cve_catalog's docstring for what each side means to
+    callers). Factored out of collect_cve_catalog() so main() can call it a second time with just
+    the skipped ids after a delay, without re-running RSS/listing discovery.
+    """
     results: dict[str, list[dict[str, Any]]] = {}
     skipped: list[str] = []
     for advisory_id in advisory_ids:
@@ -2014,6 +2025,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--cve-backfill-max-pages", type=int, default=30, help="Pages max à parcourir par produit lors du --cve-backfill.")
     parser.add_argument(
+        "--cve-retry-delay-seconds",
+        type=int,
+        default=300,
+        help="Délai avant de retenter les advisories PSIRT en échec réseau (une seule relance, 0 pour désactiver).",
+    )
+    parser.add_argument(
         "--health-output",
         type=Path,
         default=DEFAULT_HEALTH_PATH,
@@ -2258,6 +2275,16 @@ def main(argv: list[str]) -> int:
                 backfill=args.cve_backfill,
                 backfill_max_pages=args.cve_backfill_max_pages,
             )
+            if skipped_cves and args.cve_retry_delay_seconds > 0:
+                # A handful of advisories failing out of the ~50 fetched daily is almost always a
+                # transient PSIRT hiccup (rate limiting, brief outage) that clears up within
+                # minutes on its own -- retrying seconds later (the per-request backoff in
+                # urlopen_with_retry) mostly doesn't help with that, so wait for real before
+                # giving the still-failing ones one more shot ahead of settling on the skipped
+                # list the health status/report below are built from.
+                time.sleep(args.cve_retry_delay_seconds)
+                retried_results, skipped_cves = fetch_cve_entries_for_advisories(skipped_cves, args.timeout)
+                cve_results_by_advisory.update(retried_results)
             # Each advisory here got a definitive CSAF result this run: replace (not just upsert)
             # whatever we had for it, so a CVE Fortinet has since removed/reattributed away from
             # our tracked products actually disappears instead of lingering forever. Advisories
