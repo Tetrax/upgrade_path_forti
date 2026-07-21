@@ -728,6 +728,63 @@ class MainHealthWiringIntegrationTests(unittest.TestCase):
             self.assertEqual(health["sources"][fw.SOURCE_DAILY_RUN]["status"], fw.HEALTH_STATUS_ERROR)
             self.assertIn(fw.SOURCE_FORTIOS_DOCS, health["sources"][fw.SOURCE_DAILY_RUN]["lastError"])
 
+    def test_scoped_cve_only_run_does_not_clobber_other_sources_health(self):
+        """The afternoon retry pass (fortios-cve-afternoon-refresh.timer) only ever passes
+        --cve-catalog, never --docs-catalog/--tool-products/--forticlient-catalog, and is NOT a
+        --skip-network run. Before this fix, every source the morning's fuller run had already
+        recorded as a real, recent success got clobbered to "skipped" (orange) by this narrower
+        invocation simply because its flag was absent this time -- see the else-branches for each
+        source in main(). A source not requested this run must be left exactly as an earlier run
+        left it, distinct from a genuine --skip-network dry run (still marks everything skipped,
+        see test_skip_network_run_marks_every_source_skipped_and_daily_run_ok above)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "state.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            health_path = Path(tmp) / "health.json"
+
+            other_sources = (
+                fw.SOURCE_FORTIOS_DOCS, fw.SOURCE_FORTIOS_LIFECYCLE, fw.SOURCE_FORTIANALYZER,
+                fw.SOURCE_FORTIMANAGER, fw.SOURCE_FORTICLIENT, fw.SOURCE_FORTICLIENT_EMS,
+            )
+            morning_success = {
+                "status": fw.HEALTH_STATUS_OK,
+                "lastAttemptAt": "2026-07-21T07:00:00.000000Z",
+                "lastSuccessAt": "2026-07-21T07:00:00.000000Z",
+                "durationSeconds": 1.0,
+                "itemsCollected": 233,
+                "consecutiveFailures": 0,
+                "lastError": None,
+            }
+            fw.write_json(health_path, {
+                "sources": {source_id: dict(morning_success) for source_id in other_sources},
+                "updatedAt": "2026-07-21T07:00:00.000000Z",
+            })
+
+            original_collect = fw.collect_cve_catalog
+            original_psirt_versions = fw.fetch_psirt_versions
+            fw.collect_cve_catalog = lambda *a, **k: ({}, [])
+            fw.fetch_psirt_versions = lambda *a, **k: set()
+            try:
+                exit_code = fw.main([
+                    "--cve-catalog",
+                    "--base", str(base_path), "--output", str(base_path),
+                    "--report", str(Path(tmp) / "report.md"), "--health-output", str(health_path),
+                ])
+            finally:
+                fw.collect_cve_catalog = original_collect
+                fw.fetch_psirt_versions = original_psirt_versions
+            self.assertEqual(exit_code, 0)
+
+            health = fw.read_json(health_path, {})
+            sources = health["sources"]
+            for source_id in other_sources:
+                self.assertEqual(
+                    sources[source_id]["status"], fw.HEALTH_STATUS_OK,
+                    f"{source_id} must not be clobbered by a scoped CVE-only run",
+                )
+                self.assertEqual(sources[source_id]["lastSuccessAt"], "2026-07-21T07:00:00.000000Z")
+            self.assertEqual(sources[fw.SOURCE_CVE_PSIRT]["status"], fw.HEALTH_STATUS_OK)
+
 
 if __name__ == "__main__":
     unittest.main()

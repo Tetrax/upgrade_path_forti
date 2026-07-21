@@ -2160,8 +2160,13 @@ def main(argv: list[str]) -> int:
         skip_reason = "collecte ignorée avec --skip-network" if args.docs_catalog else None
         if skip_reason:
             skipped_docs_versions = [skip_reason]
-        for source_id in (SOURCE_FORTIOS_DOCS, SOURCE_FORTIOS_LIFECYCLE):
-            record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+        if args.skip_network:
+            for source_id in (SOURCE_FORTIOS_DOCS, SOURCE_FORTIOS_LIFECYCLE):
+                record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+        # else: --docs-catalog simply wasn't requested this run at all (a narrower invocation,
+        # e.g. the afternoon CVE-only retry pass) -- leave these sources' health record exactly
+        # as an earlier, more complete run left it, rather than clobbering a still-fresh real
+        # success with a misleading "ignorée" every single afternoon.
 
     tool_products = [item.strip() for item in args.tool_products.split(",") if item.strip()]
     tool_product_health_sources = {"fortianalyzer": SOURCE_FORTIANALYZER, "fortimanager": SOURCE_FORTIMANAGER}
@@ -2189,9 +2194,11 @@ def main(argv: list[str]) -> int:
         for product_id, source_id in tool_product_health_sources.items():
             if product_id not in tool_products:
                 record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
-    else:
+    elif args.skip_network:
         for source_id in tool_product_health_sources.values():
             record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+    # else (no --tool-products, not --skip-network): not requested this run at all -- leave
+    # these sources' health record untouched, same reasoning as the docs-catalog branch above.
 
     skipped_forticlient: list[str] = []
     if args.forticlient_catalog and not args.skip_network:
@@ -2222,8 +2229,10 @@ def main(argv: list[str]) -> int:
     else:
         if args.forticlient_catalog:
             skipped_forticlient = ["collecte ignorée avec --skip-network"]
-        for source_id in (SOURCE_FORTICLIENT, SOURCE_FORTICLIENT_EMS):
-            record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+        if args.skip_network:
+            for source_id in (SOURCE_FORTICLIENT, SOURCE_FORTICLIENT_EMS):
+                record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+        # else: --forticlient-catalog simply wasn't requested this run -- leave untouched.
 
     # Advisories and paths are the two fields a live user can create/edit/delete through
     # fortios_server.py at any moment, including during this run's multi-minute network
@@ -2324,8 +2333,10 @@ def main(argv: list[str]) -> int:
             )
         except Exception as error:  # noqa: BLE001 - recorded, not re-raised.
             record_source(SOURCE_CVE_PSIRT, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
-    else:
+    elif args.skip_network:
         record_source(SOURCE_CVE_PSIRT, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+    # else (no --cve-catalog/--cve-backfill, not --skip-network): not requested this run -- leave
+    # untouched (see the docs-catalog branch above for why).
 
     # This run started from a read of args.output taken potentially minutes ago (network
     # scraping in between) — fortios_server.py or import_forticlient_compat.py may have written
