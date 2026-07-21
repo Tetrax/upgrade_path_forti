@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-21T14:09:47Z",
+  "generatedAt": "2026-07-21T14:52:16Z",
   "products": [
     {
       "id": "fortigate-fortios",
@@ -3965,6 +3965,18 @@
               "discoveredAt": "2026-07-21",
               "links": {
                 "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.2/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
               },
               "maturity": "None"
             },
@@ -14117,6 +14129,18 @@
               "discoveredAt": "2026-07-21",
               "links": {
                 "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.2/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
               },
               "maturity": "None"
             },
@@ -39567,6 +39591,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -42329,6 +42365,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -42866,6 +42914,18 @@
               "discoveredAt": "2026-07-21",
               "links": {
                 "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.2/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
               },
               "maturity": "None"
             },
@@ -45439,6 +45499,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -46948,6 +47020,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -47354,6 +47438,18 @@
               "discoveredAt": "2026-07-21",
               "links": {
                 "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.2/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
               },
               "maturity": "None"
             },
@@ -54689,6 +54785,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -59972,6 +60080,18 @@
               "discoveredAt": "2026-07-21",
               "links": {
                 "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.2/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
               },
               "maturity": "None"
             },
@@ -72413,6 +72533,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -83933,6 +84065,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -85923,6 +86067,18 @@
               "discoveredAt": "2026-07-21",
               "links": {
                 "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.2/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
               },
               "maturity": "None"
             },
@@ -91903,6 +92059,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -97797,6 +97965,18 @@
               "discoveredAt": "2026-07-21",
               "links": {
                 "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.2/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
               },
               "maturity": "None"
             },
@@ -125586,6 +125766,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -126645,6 +126837,18 @@
               "discoveredAt": "2026-07-21",
               "links": {
                 "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.2/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
               },
               "maturity": "None"
             },
@@ -129022,6 +129226,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -130198,6 +130414,18 @@
               "maturity": "None"
             },
             {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
               "version": "6.2.4",
               "build": "1112",
               "notes": [
@@ -131235,6 +131463,18 @@
               "discoveredAt": "2026-07-21",
               "links": {
                 "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.2/fortios-release-notes"
+              },
+              "maturity": "None"
+            },
+            {
+              "version": "6.2.3",
+              "build": "1066",
+              "notes": [
+                "release-notes"
+              ],
+              "discoveredAt": "2026-07-21",
+              "links": {
+                "release-notes": "https://docs.fortinet.com/document/fortigate/6.2.3/fortios-release-notes"
               },
               "maturity": "None"
             },
@@ -164086,7 +164326,7 @@
         "7.4.11"
       ],
       "source": "Fortinet Upgrade Path Tool public service",
-      "fetchedAt": "2026-07-21T13:50:30Z"
+      "fetchedAt": "2026-07-21T14:52:16Z"
     },
     {
       "id": "path-FGT60F-6.2.4-7.4.11",
