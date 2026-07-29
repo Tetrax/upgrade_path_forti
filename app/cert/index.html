@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gestion des certificats · FortiOS Upgrade Intelligence</title>
+  <link rel="stylesheet" href="/app/shared.css">
+  <link rel="stylesheet" href="cert.css">
+  <script src="cert.js" defer></script>
+</head>
+<body>
+  <main class="shell cert-shell">
+    <header class="topbar">
+      <a class="brand-block brand-link" href="/app/" aria-label="Retour à l'application">
+        <span class="mark">F</span>
+        <span>
+          <h1>Gestion des certificats</h1>
+          <span class="subtitle">Validation et activation TLS sécurisées</span>
+        </span>
+      </a>
+      <div class="toolbar">
+        <a class="btn" href="/app/">Retour à l’application</a>
+        <button class="btn danger" id="logout-button" type="button" hidden>Se déconnecter</button>
+      </div>
+    </header>
+
+    <section class="security-notice" aria-label="Information de sécurité">
+      <span class="security-icon" aria-hidden="true">◆</span>
+      <div>
+        <strong>Zone d’administration privée</strong>
+        <p>Les clés sont traitées uniquement pour validation et activation. Elles ne sont jamais affichées ni conservées dans le navigateur après rechargement.</p>
+      </div>
+    </section>
+
+    <section class="auth-layout" id="login-view">
+      <div class="panel login-panel">
+        <div class="panel-header">
+          <p class="eyebrow">Accès restreint</p>
+          <h2 class="panel-title">Connexion administrateur</h2>
+        </div>
+        <div class="panel-body">
+          <form id="login-form">
+            <div class="field">
+              <label for="username">Identifiant</label>
+              <input id="username" name="username" autocomplete="username" required maxlength="64">
+            </div>
+            <div class="field">
+              <label for="password">Mot de passe</label>
+              <input id="password" name="password" type="password" autocomplete="current-password" required>
+            </div>
+            <button class="btn primary full-width" id="login-button" type="submit">Se connecter</button>
+            <p class="form-message" id="login-message" role="alert"></p>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <section id="admin-view" hidden>
+      <div class="context-grid">
+        <article class="context-card">
+          <span class="context-label">Nom TLS attendu</span>
+          <strong id="target-hostname">Non configuré</strong>
+        </article>
+        <article class="context-card">
+          <span class="context-label">Session</span>
+          <strong id="session-username">—</strong>
+        </article>
+        <article class="context-card">
+          <span class="context-label">Mode d’activation</span>
+          <strong id="activation-mode">Validation uniquement</strong>
+        </article>
+      </div>
+
+      <div class="cert-grid">
+        <section class="panel upload-panel">
+          <div class="panel-header">
+            <p class="eyebrow">Étape 1</p>
+            <h2 class="panel-title">Importer les fichiers</h2>
+            <p class="panel-copy">Bundle PFX/P12, ou certificat avec clé privée séparée. La chaîne intermédiaire est facultative.</p>
+          </div>
+          <div class="panel-body">
+            <form id="certificate-form">
+              <div class="upload-field required-upload">
+                <label for="certificate-file">Certificat ou bundle</label>
+                <input id="certificate-file" type="file" required accept=".pem,.crt,.cer,.cert,.der,.p7b,.p7c,.p12,.pfx,application/x-pkcs12,application/pkix-cert">
+                <span>PEM, CRT, CER, DER, PKCS#7, P12 ou PFX</span>
+              </div>
+              <div class="upload-field">
+                <label for="private-key-file">Clé privée séparée</label>
+                <input id="private-key-file" type="file" accept=".pem,.key,.pk8">
+                <span>Laisser vide pour un bundle PFX/P12</span>
+              </div>
+              <div class="upload-field">
+                <label for="chain-file">Chaîne séparée</label>
+                <input id="chain-file" type="file" accept=".pem,.crt,.cer,.p7b,.p7c">
+                <span>Intermédiaires puis autorité racine</span>
+              </div>
+              <div class="field">
+                <label for="certificate-password">Mot de passe du PFX ou de la clé</label>
+                <input id="certificate-password" type="password" autocomplete="off" placeholder="Laisser vide si aucun">
+              </div>
+              <button class="btn primary full-width" id="validate-button" type="submit">Valider le certificat</button>
+              <p class="form-message" id="upload-message" role="alert"></p>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel result-panel">
+          <div class="panel-header result-heading">
+            <div>
+              <p class="eyebrow">Étape 2</p>
+              <h2 class="panel-title">Contrôles cryptographiques</h2>
+            </div>
+            <span class="status-badge neutral" id="validation-badge">En attente</span>
+          </div>
+          <div class="panel-body">
+            <div class="empty-state" id="empty-result">
+              <span class="empty-icon" aria-hidden="true">◇</span>
+              <p>Importe un certificat puis lance la validation. Aucune activation n’a lieu à cette étape.</p>
+            </div>
+            <dl class="summary-grid" id="certificate-summary" hidden>
+              <div><dt>Sujet</dt><dd id="summary-subject">—</dd></div>
+              <div><dt>Émetteur</dt><dd id="summary-issuer">—</dd></div>
+              <div><dt>Noms DNS (SAN)</dt><dd id="summary-dns">—</dd></div>
+              <div><dt>Valide à partir du</dt><dd id="summary-start">—</dd></div>
+              <div><dt>Valide jusqu’au</dt><dd id="summary-end">—</dd></div>
+              <div><dt>Chaîne</dt><dd id="summary-chain">—</dd></div>
+              <div class="wide"><dt>Empreinte SHA-256</dt><dd class="mono" id="summary-fingerprint">—</dd></div>
+            </dl>
+            <div class="activation-box" id="activation-box" hidden>
+              <div>
+                <strong>Validation réussie</strong>
+                <p>L’activation réexécute tous les contrôles avant de remplacer atomiquement la paire active.</p>
+              </div>
+              <button class="btn primary" id="install-button" type="button">Activer ce certificat</button>
+            </div>
+            <p class="form-message" id="install-message" role="alert"></p>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

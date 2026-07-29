@@ -38,6 +38,10 @@ class StaticFileTraversalTests(unittest.TestCase):
         self.assertTrue(is_served("/app/alerte/"))
         self.assertTrue(is_served("/app/alerte/app.js"))
 
+    def test_allowed_certificate_ui_files(self):
+        self.assertTrue(is_served("/cert/"))
+        self.assertEqual(translate("/cert/cert.js"), str(fs.ROOT / "app" / "cert" / "cert.js"))
+
     def test_denies_direct_script_access(self):
         self.assertFalse(is_served("/scripts/fortios_server.py"))
 
@@ -49,6 +53,10 @@ class StaticFileTraversalTests(unittest.TestCase):
 
     def test_denies_encoded_traversal_with_encoded_slash(self):
         self.assertFalse(is_served("/data/%2e%2e%2fscripts/fortios_server.py"))
+
+    def test_denies_certificate_ui_traversal(self):
+        self.assertFalse(is_served("/cert/../scripts/fortios_server.py"))
+        self.assertFalse(is_served("/cert/%2e%2e%2fscripts/fortios_server.py"))
 
     def test_denies_traversal_into_git(self):
         self.assertFalse(is_served("/app/../.git/config"))
@@ -87,6 +95,31 @@ class OriginCheckTests(unittest.TestCase):
     def test_no_origin_or_referer_is_treated_as_same_origin_navigation(self):
         handler = self.make_handler(host="valdev.me")
         self.assertTrue(handler.is_safe_origin())
+
+    def test_certificate_origin_requires_exact_scheme_host_and_port(self):
+        handler = self.make_handler(
+            host="upgrade-path.sns-security.lan:8443",
+            origin="https://upgrade-path.sns-security.lan:8443",
+        )
+        handler.tls_active = True
+        self.assertTrue(handler.is_safe_cert_origin())
+
+        handler.headers["Origin"] = "https://upgrade-path.sns-security.lan"
+        self.assertFalse(handler.is_safe_cert_origin())
+        handler.headers["Origin"] = "http://upgrade-path.sns-security.lan:8443"
+        self.assertFalse(handler.is_safe_cert_origin())
+
+
+class CertificateAccessTests(unittest.TestCase):
+    def test_insecure_development_mode_is_restricted_to_loopback_clients(self):
+        handler = fs.FortiosHandler.__new__(fs.FortiosHandler)
+        handler.tls_active = False
+        handler.allow_insecure_localhost = True
+        handler.client_address = ("192.0.2.10", 12345)
+        self.assertFalse(handler.certificate_ui_available())
+
+        handler.client_address = ("127.0.0.1", 12345)
+        self.assertTrue(handler.certificate_ui_available())
 
 
 class TestDataDirOverrideTests(unittest.TestCase):

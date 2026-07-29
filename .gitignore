@@ -9,8 +9,21 @@ data/*.lock
 .venv-test/
 test-results/
 playwright-report/
+# TLS material must stay in the dedicated runtime volume, never in Git.
+certificates/
+*.key
+*.pem
+*.crt
+*.cert
+*.cer
+*.der
+*.p12
+*.pfx
+*.p7b
+*.p7c
 
 # Real SMTP credentials belong in /etc/fortios-upgrade-intelligence.env (outside the repo),
 # never here — this only guards against someone accidentally dropping a real .env file in-tree.
 *.env
+.env*
 !*.env.example

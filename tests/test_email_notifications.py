@@ -40,6 +40,16 @@ class ConfigLoadingTests(unittest.TestCase):
         config = notify.load_email_config({})
         self.assertTrue(config.smtp_starttls)
 
+    def test_password_file_takes_precedence_over_environment_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            secret = Path(tmp) / "smtp-password"
+            secret.write_text("from-file\n")
+            config = notify.load_email_config({
+                "FORTIOS_SMTP_PASSWORD": "visible-environment-value",
+                "FORTIOS_SMTP_PASSWORD_FILE": str(secret),
+            })
+        self.assertEqual(config.smtp_password, "from-file")
+
     def test_is_complete_requires_host_from_to(self):
         self.assertFalse(notify.EmailConfig(
             enabled=True, smtp_host="", smtp_port=587, smtp_username="", smtp_password="",

@@ -6,10 +6,14 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+from http.cookies import SimpleCookie
+import hmac
+import ipaddress
 import json
 import os
 import re
 import secrets
+import ssl
 import sys
 import traceback
 import urllib.error
@@ -18,6 +22,25 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+from cert_admin import (
+    CredentialError,
+    DEFAULT_CREDENTIALS,
+    MAX_PASSWORD_LENGTH,
+    authenticate_credentials,
+    credential_lock,
+    credentials_revision,
+)
+import certctl
+from cert_web import (
+    AdminSession,
+    LoginRateLimiter,
+    SessionStore,
+    ValidationTicketStore,
+    install_uploaded_certificate,
+    validate_uploaded_certificate,
+)
+from tls_lock import managed_pair_lock
 
 from fortios_watch import (
     DEFAULT_PRODUCT_ID,
@@ -81,6 +104,8 @@ IMAGE_REF_RE = re.compile(r"!\[[^\]]*\]\(/data/advisory-images/([^)\s]+)\)")
 # base64, so 8 MB of image data becomes ~11 MB on the wire — bump the ceiling for that one route).
 MAX_JSON_BODY_BYTES = 1 * 1024 * 1024
 MAX_IMAGE_UPLOAD_BODY_BYTES = 12 * 1024 * 1024
+MAX_CERT_UPLOAD_BODY_BYTES = 56 * 1024 * 1024
+REQUEST_SOCKET_TIMEOUT_SECONDS = 15
 # Only these two directories are anything the UI actually needs served over HTTP — ROOT is the
 # whole repo checkout, which also holds scripts/, deploy/, docs/ and .git/. Defined next to ROOT
 # below at import time (module globals resolve at call time regardless of source order).
@@ -161,6 +186,7 @@ def parse_compatibility_fields(payload: dict[str, Any]) -> dict[str, Any]:
 
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_STATIC_DIR_APP = (ROOT / "app").resolve()
+ALLOWED_STATIC_DIR_CERT = (ROOT / "app" / "cert").resolve()
 
 # DATA_DIR is overridable via FORTIOS_TEST_DATA_DIR — unset in production (default: ROOT/data,
 # identical to before this existed), set only by the isolated E2E test fixture so tests never
@@ -196,9 +222,142 @@ def prune_unreferenced_images(candidates: set[str], state: dict[str, Any]) -> No
 
 
 class FortiosHandler(SimpleHTTPRequestHandler):
-    def __init__(self, *args: Any, timeout: int = 20, **kwargs: Any) -> None:
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(REQUEST_SOCKET_TIMEOUT_SECONDS)
+
+    def __init__(
+        self,
+        *args: Any,
+        timeout: int = 20,
+        tls_active: bool = False,
+        allow_insecure_localhost: bool = False,
+        cert_admin_file: Path = DEFAULT_CREDENTIALS,
+        cert_sessions: SessionStore | None = None,
+        cert_hostname: str = "",
+        cert_output_dir: Path = Path("certificates/active"),
+        cert_direct_install: bool = False,
+        cert_login_limiter: LoginRateLimiter | None = None,
+        cert_validation_tickets: ValidationTicketStore | None = None,
+        **kwargs: Any,
+    ) -> None:
         self.timeout = timeout
+        self.tls_active = tls_active
+        self.allow_insecure_localhost = allow_insecure_localhost
+        self.cert_admin_file = cert_admin_file
+        self.cert_sessions = cert_sessions or SessionStore()
+        self.cert_hostname = cert_hostname
+        self.cert_output_dir = cert_output_dir
+        self.cert_direct_install = cert_direct_install
+        self.cert_login_limiter = cert_login_limiter or LoginRateLimiter()
+        self.cert_validation_tickets = cert_validation_tickets or ValidationTicketStore()
         super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def certificate_ui_available(self) -> bool:
+        if self.tls_active:
+            return True
+        if not self.allow_insecure_localhost:
+            return False
+        try:
+            return ipaddress.ip_address(self.client_address[0]).is_loopback
+        except ValueError:
+            return False
+
+    def end_headers(self) -> None:
+        url_path = urllib.parse.urlsplit(self.path).path
+        if self.tls_active:
+            self.send_header("Strict-Transport-Security", "max-age=31536000")
+        if url_path == "/cert" or url_path.startswith(("/cert/", "/api/cert/")):
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "img-src 'self'; connect-src 'self'; base-uri 'none'; "
+                "frame-ancestors 'none'; form-action 'self'",
+            )
+        super().end_headers()
+
+    def is_safe_cert_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host")
+        if not origin or not host:
+            return False
+        parsed = urllib.parse.urlsplit(origin)
+        expected_scheme = "https" if self.tls_active else "http"
+        return (
+            parsed.scheme == expected_scheme
+            and parsed.netloc == host
+            and parsed.path in ("", "/")
+            and not parsed.query
+            and not parsed.fragment
+        )
+
+    def do_GET(self) -> None:
+        url_path = urllib.parse.urlsplit(self.path).path
+        if url_path.startswith("/api/cert/"):
+            if not self.certificate_ui_available():
+                self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
+                return
+            if url_path == "/api/cert/status":
+                self.handle_cert_status()
+            else:
+                self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
+            return
+        if url_path == "/cert" or url_path.startswith("/cert/"):
+            if not self.certificate_ui_available():
+                self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
+                return
+        super().do_GET()
+
+    def authenticated_cert_session(self) -> AdminSession | None:
+        session_id = self.cert_session_id()
+        session = self.cert_sessions.get(session_id) if session_id else None
+        if session_id is None or session is None:
+            return None
+        try:
+            current_revision = credentials_revision(self.cert_admin_file)
+        except CredentialError:
+            self.cert_sessions.revoke(session_id)
+            return None
+        if not hmac.compare_digest(session.credentials_revision, current_revision):
+            self.cert_sessions.revoke(session_id)
+            return None
+        return session
+
+    def cert_session_id(self) -> str | None:
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except Exception:
+            return None
+        morsel = cookie.get("fortios_cert_session")
+        if morsel is None:
+            return None
+        return morsel.value
+
+    def handle_cert_status(self) -> None:
+        session = self.authenticated_cert_session()
+        if session is None:
+            self.write_json_response(
+                {"authenticated": False},
+                HTTPStatus.UNAUTHORIZED,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            {
+                "authenticated": True,
+                "username": session.username,
+                "csrfToken": session.csrf_token,
+                "hostname": self.cert_hostname,
+                "canInstall": self.cert_direct_install,
+                "tlsActive": self.tls_active,
+            },
+            extra_headers={"Cache-Control": "no-store"},
+        )
 
     def translate_path(self, path: str) -> str:
         # Checking the raw request string against an allowed prefix before decoding/normalizing
@@ -208,6 +367,20 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         # branches below resolve first, then check where the request actually landed on disk —
         # the only check that can't be fooled by encoding — before ever serving it.
         url_path = urllib.parse.urlsplit(path).path
+        if url_path == "/cert" or url_path.startswith("/cert/"):
+            relative = urllib.parse.unquote(
+                url_path[len("/cert/"):] if url_path != "/cert" else "",
+            )
+            candidate = (
+                (ALLOWED_STATIC_DIR_CERT / relative).resolve()
+                if relative
+                else ALLOWED_STATIC_DIR_CERT
+            )
+            if candidate == ALLOWED_STATIC_DIR_CERT or candidate.is_relative_to(
+                ALLOWED_STATIC_DIR_CERT,
+            ):
+                return str(candidate)
+            return str(ROOT / "__not_served__")
         if url_path == "/data" or url_path.startswith("/data/"):
             # Resolved against DATA_DIR (overridable for isolated E2E tests), not against
             # self.directory/ROOT like the parent class would — otherwise FORTIOS_TEST_DATA_DIR
@@ -244,6 +417,22 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         return True  # neither header present — a same-origin browser navigation, not fetch()
 
     def do_POST(self) -> None:
+        if self.path.startswith("/api/cert/"):
+            if not self.certificate_ui_available():
+                self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
+                return
+            if not self.is_safe_cert_origin():
+                self.send_error(HTTPStatus.FORBIDDEN, "Origin invalide")
+                return
+            if self.path == "/api/cert/login":
+                self.handle_cert_login()
+            elif self.path == "/api/cert/logout":
+                self.handle_cert_logout()
+            elif self.path in ("/api/cert/validate", "/api/cert/install"):
+                self.handle_cert_upload(install=self.path.endswith("/install"))
+            else:
+                self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
+            return
         if not self.is_safe_origin():
             self.send_error(HTTPStatus.FORBIDDEN, "Origin invalide")
             return
@@ -257,6 +446,184 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.handle_create_compatibility()
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
+
+    def handle_cert_login(self) -> None:
+        client = self.client_address[0]
+        authenticated = False
+        reserved = False
+        try:
+            payload = self.read_json_body(max_bytes=16 * 1024)
+            username_value = payload.get("username")
+            password_value = payload.get("password")
+            if not isinstance(username_value, str) or not isinstance(password_value, str):
+                raise ValueError("Identifiants invalides.")
+            username = username_value
+            password = password_value
+            if len(username) > 64 or len(password.encode("utf-8")) > MAX_PASSWORD_LENGTH:
+                raise ValueError("Identifiants invalides.")
+            if not self.cert_login_limiter.try_begin(client):
+                self.write_json_response(
+                    {"error": "Trop de tentatives. Réessaie dans quelques minutes."},
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    extra_headers={"Cache-Control": "no-store", "Retry-After": "10"},
+                )
+                return
+            reserved = True
+            with credential_lock(self.cert_admin_file, exclusive=False):
+                revision = authenticate_credentials(self.cert_admin_file, username, password)
+                if revision is None:
+                    self.write_json_response(
+                        {"error": "Identifiant ou mot de passe invalide."},
+                        HTTPStatus.UNAUTHORIZED,
+                        extra_headers={"Cache-Control": "no-store"},
+                    )
+                    return
+                authenticated = True
+                session_id, session = self.cert_sessions.create(username, revision)
+            attributes = [
+                f"fortios_cert_session={session_id}",
+                "Path=/api/cert",
+                "HttpOnly",
+                "SameSite=Strict",
+                f"Max-Age={self.cert_sessions.ttl_seconds}",
+            ]
+            if self.tls_active:
+                attributes.append("Secure")
+            self.write_json_response(
+                {"authenticated": True, "csrfToken": session.csrf_token},
+                extra_headers={
+                    "Cache-Control": "no-store",
+                    "Set-Cookie": "; ".join(attributes),
+                },
+            )
+        except (CredentialError, ValueError, OSError) as error:
+            self.write_json_response(
+                {"error": str(error)},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+        finally:
+            if reserved:
+                self.cert_login_limiter.finish(client, success=authenticated)
+
+    def handle_cert_upload(self, *, install: bool) -> None:
+        session_id = self.cert_session_id()
+        session = self.authenticated_cert_session()
+        if session_id is None or session is None:
+            self.write_json_response(
+                {"error": "Session administrateur requise."},
+                HTTPStatus.UNAUTHORIZED,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        csrf_token = self.headers.get("X-CSRF-Token", "")
+        if not hmac.compare_digest(session.csrf_token, csrf_token):
+            self.write_json_response(
+                {"error": "Jeton CSRF invalide."},
+                HTTPStatus.FORBIDDEN,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        if not self.cert_hostname:
+            self.write_json_response(
+                {"error": "FORTIOS_TLS_HOSTNAME doit être configuré."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        if install and not self.cert_direct_install:
+            self.write_json_response(
+                {"error": "L'activation directe n'est pas autorisée dans ce mode."},
+                HTTPStatus.FORBIDDEN,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        try:
+            payload = self.read_json_body(max_bytes=MAX_CERT_UPLOAD_BODY_BYTES)
+            if install:
+                with credential_lock(self.cert_admin_file, exclusive=False):
+                    current_session = self.authenticated_cert_session()
+                    if current_session is None or not hmac.compare_digest(
+                        current_session.csrf_token,
+                        csrf_token,
+                    ):
+                        self.write_json_response(
+                            {"error": "Session administrateur expirée ou révoquée."},
+                            HTTPStatus.UNAUTHORIZED,
+                            extra_headers={"Cache-Control": "no-store"},
+                        )
+                        return
+                    validation_token = payload.get("validationToken")
+                    if not isinstance(validation_token, str) or not self.cert_validation_tickets.consume(
+                        validation_token,
+                        session_id,
+                        payload,
+                    ):
+                        self.write_json_response(
+                            {"error": "Prévalidation expirée ou non concordante. Valide à nouveau le certificat."},
+                            HTTPStatus.CONFLICT,
+                            extra_headers={"Cache-Control": "no-store"},
+                        )
+                        return
+                    summary = install_uploaded_certificate(
+                        payload,
+                        self.cert_hostname,
+                        self.cert_output_dir,
+                    )
+                response = {
+                    "installed": True,
+                    "restartRequired": self.tls_active,
+                    **summary,
+                }
+            else:
+                summary = validate_uploaded_certificate(payload, self.cert_hostname)
+                validation_token = self.cert_validation_tickets.issue(session_id, payload)
+                response = {"valid": True, "validationToken": validation_token, **summary}
+            self.write_json_response(
+                response,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+        except (CredentialError, certctl.CertificateError, ValueError, OSError) as error:
+            # This pattern redacts a temporary path from an error; it does not create or access one.
+            message = re.sub(r"/tmp/fortios-[^\s:]+", "<upload>", str(error))  # nosec B108
+            self.write_json_response(
+                {"error": message[:1000]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+
+    def handle_cert_logout(self) -> None:
+        session_id = self.cert_session_id()
+        session = self.cert_sessions.get(session_id) if session_id else None
+        csrf_token = self.headers.get("X-CSRF-Token", "")
+        if (
+            session_id is None
+            or session is None
+            or not hmac.compare_digest(session.csrf_token, csrf_token)
+        ):
+            self.write_json_response(
+                {"error": "Session ou jeton CSRF invalide."},
+                HTTPStatus.FORBIDDEN,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.cert_sessions.revoke(session_id)
+        attributes = [
+            "fortios_cert_session=",
+            "Path=/api/cert",
+            "HttpOnly",
+            "SameSite=Strict",
+            "Max-Age=0",
+        ]
+        if self.tls_active:
+            attributes.append("Secure")
+        self.write_json_response(
+            {"authenticated": False},
+            extra_headers={
+                "Cache-Control": "no-store",
+                "Set-Cookie": "; ".join(attributes),
+            },
+        )
 
     def do_PUT(self) -> None:
         if not self.is_safe_origin():
@@ -513,22 +880,43 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         # without a preflight — paired with is_safe_origin() above.
         content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if content_type != "application/json":
+            self.close_connection = True
             raise ValueError("Content-Type doit être application/json.")
-        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            self.close_connection = True
+            raise ValueError("Content-Length invalide.") from error
+        if length <= 0:
+            raise ValueError("Corps JSON manquant.")
         if length > max_bytes:
+            self.close_connection = True
             raise ValueError(f"Corps de requête trop volumineux ({length} octets, max {max_bytes}).")
         raw = self.rfile.read(length)
-        return json.loads(raw.decode("utf-8"))
+        if len(raw) != length:
+            self.close_connection = True
+            raise ValueError("Corps JSON incomplet.")
+        payload = json.loads(raw.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Le corps JSON doit être un objet.")
+        return payload
 
     def log_exception(self, context: str) -> None:
         sys.stderr.write(f"{self.log_date_time_string()} - unhandled error in {context}\n")
         traceback.print_exc(file=sys.stderr)
 
-    def write_json_response(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
+    def write_json_response(
+        self,
+        payload: dict[str, Any],
+        status: HTTPStatus = HTTPStatus.OK,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -541,17 +929,66 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--timeout", type=int, default=20)
-    return parser.parse_args(argv)
+    parser.add_argument("--tls-cert", default=os.environ.get("FORTIOS_TLS_CERT"))
+    parser.add_argument("--tls-key", default=os.environ.get("FORTIOS_TLS_KEY"))
+    args = parser.parse_args(argv)
+    if bool(args.tls_cert) != bool(args.tls_key):
+        parser.error("--tls-cert et --tls-key doivent être fournis ensemble")
+
+    return args
+
+
+def resolve_tls_pair(certificate: Path, private_key: Path) -> tuple[Path, Path]:
+    """Resolve a shared version symlink once so a renewal cannot mix generations."""
+    if certificate.parent == private_key.parent:
+        parent = certificate.parent.resolve(strict=True)
+        return parent / certificate.name, parent / private_key.name
+    return certificate, private_key
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    tls_active = bool(args.tls_cert)
+    allow_insecure_localhost = os.environ.get("FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST") == "1"
+    cert_admin_file = Path(os.environ.get("FORTIOS_CERT_ADMIN_FILE", str(DEFAULT_CREDENTIALS)))
+    cert_sessions = SessionStore()
+    cert_login_limiter = LoginRateLimiter()
+    cert_validation_tickets = ValidationTicketStore()
+    cert_hostname = os.environ.get("FORTIOS_TLS_HOSTNAME", "").strip()
+    cert_output_dir = Path(
+        os.environ.get("FORTIOS_CERT_OUTPUT_DIR", "/opt/fortios/certificates/active"),
+    )
+    cert_direct_install = os.environ.get("FORTIOS_CERT_DIRECT_INSTALL") == "1"
 
     def handler(*handler_args: Any, **handler_kwargs: Any) -> FortiosHandler:
-        return FortiosHandler(*handler_args, timeout=args.timeout, **handler_kwargs)
+        return FortiosHandler(
+            *handler_args,
+            timeout=args.timeout,
+            tls_active=tls_active,
+            allow_insecure_localhost=allow_insecure_localhost,
+            cert_admin_file=cert_admin_file,
+            cert_sessions=cert_sessions,
+            cert_hostname=cert_hostname,
+            cert_output_dir=cert_output_dir,
+            cert_direct_install=cert_direct_install,
+            cert_login_limiter=cert_login_limiter,
+            cert_validation_tickets=cert_validation_tickets,
+            **handler_kwargs,
+        )
 
     server = ThreadingHTTPServer((args.host, args.port), handler)
-    print(f"FortiOS Upgrade Intelligence: http://{args.host}:{args.port}/app/")
+    scheme = "http"
+    if args.tls_cert:
+        certificate_arg = Path(args.tls_cert)
+        key_arg = Path(args.tls_key)
+        with managed_pair_lock(certificate_arg, key_arg):
+            tls_certificate, tls_key = resolve_tls_pair(certificate_arg, key_arg)
+            tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+            tls_context.load_cert_chain(tls_certificate, tls_key)
+        server.socket = tls_context.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+    print(f"FortiOS Upgrade Intelligence: {scheme}://{args.host}:{args.port}/app/")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

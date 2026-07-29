@@ -9,6 +9,10 @@ Upgrade_path/
   app/
     index.html
     shared.css
+    cert/
+      index.html
+      cert.css
+      cert.js
     alerte/
       index.html
       app.js
@@ -18,6 +22,9 @@ Upgrade_path/
   data/
     fortios-data.sample.json
   scripts/
+    cert_admin.py
+    cert_web.py
+    certctl.py
     fortios_server.py
     fortios_watch.py
     import_forticlient_compat.py
@@ -37,6 +44,12 @@ Puis ouvrir :
 ```text
 http://localhost:8000/app/
 ```
+
+La page privée de gestion des certificats peut également être testée entièrement
+hors Docker sur `http://127.0.0.1:8000/cert/`. Elle utilise un compte
+administrateur dédié, une session `HttpOnly`, un jeton CSRF et le moteur de
+validation de `scripts/certctl.py`. Le démarrage local borné et la création du
+compte sont documentés dans [`docs/certificates.md`](docs/certificates.md).
 
 Ce serveur sert l'interface et ajoute l'endpoint local `POST /api/official-path`. **Chaque clic** sur **Afficher le chemin** envoie le modèle, la version actuelle et la version cible à cet endpoint, qui interroge en direct le service public Fortinet Upgrade Path Tool, met à jour `data/fortios-data.generated.json`, puis rafraîchit l'affichage — jamais de confiance aveugle dans un chemin déjà en cache. Le chemin en cache ne sert que de repli si Fortinet est injoignable au moment du clic ; dans ce cas, l'interface l'affiche quand même (pour ne pas laisser un écran vide) mais l'indique clairement via un bandeau d'avertissement ("chemin affiché depuis le cache local, à revérifier dès que le service est de nouveau accessible").
 
@@ -291,9 +304,9 @@ Affiché dans `/app/` sous le bandeau de briefing : section repliable « État d
 
 ## Notifications email
 
-Désactivées par défaut, activables par variables d'environnement uniquement (aucune dépendance ajoutée — `smtplib`/`email.message.EmailMessage` de la stdlib). Copier `deploy/fortios-upgrade-intelligence.env.example` vers `/etc/fortios-upgrade-intelligence.env` (hors du dépôt, jamais de vrai secret dans Git), le remplir, puis relancer `deploy/install.sh` — l'unité `fortios-catalog-refresh.service` charge ce fichier via `EnvironmentFile=-...` (le `-` le rend optionnel : absent = pas d'email, sans erreur).
+Désactivées par défaut, activables par variables d'environnement ou fichier secret (aucune dépendance ajoutée — `smtplib`/`email.message.EmailMessage` de la stdlib). Copier `deploy/fortios-upgrade-intelligence.env.example` vers `/etc/fortios-upgrade-intelligence.env` (hors du dépôt, jamais de vrai secret dans Git), le remplir, puis relancer `deploy/install.sh` — l'unité `fortios-catalog-refresh.service` charge ce fichier via `EnvironmentFile=-...` (le `-` le rend optionnel : absent = pas d'email, sans erreur).
 
-Variables : `FORTIOS_EMAIL_ENABLED` (`false` par défaut), `FORTIOS_SMTP_HOST/PORT/USERNAME/PASSWORD/FROM/TO` (plusieurs destinataires séparés par des virgules), `FORTIOS_SMTP_STARTTLS` (`true` par défaut), `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_APP_URL`.
+Variables : `FORTIOS_EMAIL_ENABLED` (`false` par défaut), `FORTIOS_SMTP_HOST/PORT/USERNAME/PASSWORD/FROM/TO` (plusieurs destinataires séparés par des virgules), `FORTIOS_SMTP_PASSWORD_FILE` (prioritaire sur `PASSWORD`), `FORTIOS_SMTP_STARTTLS` (`true` par défaut), `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_APP_URL`.
 
 Un seul email synthétique par collecte (jamais un email par événement), avec un objet reflétant la catégorie la plus grave présente :
 
@@ -403,3 +416,167 @@ Suivre l'exécution :
 systemctl list-timers fortios-catalog-refresh.timer
 journalctl -u fortios-catalog-refresh.service -n 50
 ```
+
+## Déploiement Docker / Portainer
+
+La stack Docker remplace le serveur systemd et ses deux timers par deux
+conteneurs :
+
+- `web` sert l'interface et l'API sur un listener unique, HTTP ou HTTPS ;
+- `scheduler` lance le rafraîchissement complet à 07:00 Europe/Paris et la
+  passe CVE à 15:30 Europe/Paris.
+
+Les répertoires `data/`, `docs/` et `certificates/` sont des montages persistants. Ils
+doivent être conservés ensemble lors d'une migration : ils contiennent le
+catalogue, l'état de santé, l'outbox SMTP, les images d'alertes et le dernier
+rapport. Les certificats et les secrets ne sont jamais inclus dans l'image.
+
+### Préparer et démarrer
+
+```bash
+install -m 600 .env.example .env
+# Adapter PUID/PGID et les variables SMTP dans .env si nécessaire.
+docker compose up --build -d
+docker compose ps
+docker compose logs -f web scheduler
+```
+
+Par défaut, le port applicatif est lié à l'interface loopback. Pour un test LAN
+temporaire, modifier
+`FORTIOS_HTTP_BIND_ADDRESS=0.0.0.0` dans `.env`; ne pas exposer ce port vers
+Internet. Le TLS direct est facultatif et ses certificats restent dans le
+montage persistant dédié, jamais dans l'image applicative.
+
+La première exécution du scheduler attend le prochain créneau. Pour demander
+explicitement une collecte complète unique après une migration, définir
+`FORTIOS_RUN_ON_START=1`, redémarrer `scheduler`, attendre la fin des logs puis
+le remettre à `0`.
+
+### Migration via l'interface web Portainer
+
+Cette procédure est adaptée à une VM interne avec Portainer Community Edition.
+Elle transporte une image complète et utilise des volumes nommés : aucune copie
+manuelle de `data/` ou de `docs/` n'est nécessaire sur la cible. Le catalogue,
+l'état de santé, l'outbox SMTP, les rapports et les images d'alertes sont copiés
+dans l'image au moment de sa construction, puis persistés dans les volumes à son
+premier démarrage.
+
+#### 1. Télécharger le fichier de Stack puis préparer l'image sur la machine source
+
+Télécharger d'abord `docker-compose.portainer-import.yml` depuis la conversation
+Hermes sur le poste qui ouvre Portainer. Ce fichier et l'image `.tar` devront
+être sélectionnés depuis ce même navigateur lors des étapes suivantes.
+
+Ne pas arrêter le VPS existant à ce stade.
+
+```bash
+cd ~/workspace/upgrade_path
+docker build -t fortios-upgrade-intelligence:local .
+docker save fortios-upgrade-intelligence:local \
+  -o ~/fortios-upgrade-intelligence.tar
+```
+
+Télécharger ou transférer ensuite `~/fortios-upgrade-intelligence.tar` sur le
+poste depuis lequel Portainer est ouvert. Ne pas le compresser en `.tar.gz` : le
+bouton d'import Portainer attend l'archive Docker `.tar` produite par
+`docker save`.
+
+#### 2. Importer l'image dans Portainer
+
+1. Ouvrir l'environnement Docker cible (par exemple `local`).
+2. Dans le menu latéral, ouvrir **Images** (et non **Registries**).
+3. Dans la barre d'actions au-dessus de la liste, cliquer **Import**, entre
+   **Remove** et **Export**.
+4. Sélectionner `fortios-upgrade-intelligence.tar` et confirmer l'import.
+5. Attendre la fin de l'opération, puis vérifier la présence de l'image
+   `fortios-upgrade-intelligence:local` dans la liste.
+
+#### 3. Déployer la Stack dans Portainer
+
+1. Dans le menu latéral, ouvrir **Stacks** puis cliquer **Add stack**.
+2. Donner le nom `upgrade-path`.
+3. Choisir **Upload** et sélectionner
+   `docker-compose.portainer-import.yml`.
+4. Dans la section des variables d'environnement, ajouter :
+
+   ```text
+   PUID=1000
+   PGID=1000
+   FORTIOS_HTTP_BIND_ADDRESS=0.0.0.0
+   FORTIOS_HTTP_PORT=8000
+   FORTIOS_RUN_ON_START=0
+   FORTIOS_EMAIL_ENABLED=false
+   ```
+
+   Ajouter les variables `FORTIOS_SMTP_*` uniquement si les notifications email
+   doivent être activées ; ne jamais les placer dans l'image ou dans Git. Les
+   Stacks fournies ne transmettent volontairement pas `FORTIOS_SMTP_PASSWORD` :
+   utiliser `FORTIOS_SMTP_PASSWORD_FILE` pointant vers un secret monté en lecture
+   seule, afin que le mot de passe ne soit pas visible dans l'inspection du
+   conteneur.
+
+   Exemple à ajouter au service `scheduler` pour un fichier hôte déjà créé en
+   mode `0600` :
+
+   ```yaml
+   volumes:
+     - /chemin/hors-depot/smtp-password:/run/secrets/fortios-smtp-password:ro
+   environment:
+     FORTIOS_SMTP_PASSWORD_FILE: /run/secrets/fortios-smtp-password
+   ```
+5. Cliquer **Deploy the stack**.
+
+La Stack crée deux conteneurs, `web` et `scheduler`, et trois volumes nommés
+préfixés par le nom de la Stack, généralement `upgrade-path_fortios-data` et
+`upgrade-path_fortios-docs`, plus `upgrade-path_fortios-certificates`.
+
+#### 4. Vérifier puis basculer
+
+1. Aller dans **Containers** et ouvrir les logs de `upgrade-path-web-1` : la
+   ligne `FortiOS Upgrade Intelligence: http://0.0.0.0:8000/app/` doit apparaître.
+2. Ouvrir les logs de `upgrade-path-scheduler-1` : il doit annoncer le prochain
+   créneau de collecte.
+3. Conserver `FORTIOS_RUN_ON_START=0` : les données migrées restent intactes et
+   le scheduler attend 07:00/15:30 Europe/Paris.
+4. Accéder depuis le LAN à `http://<IP_LOCALE_DE_LA_VM>:8000/app/`. Autoriser
+   TCP/8000 uniquement depuis les VLAN/sous-réseaux internes nécessaires au
+   firewall de la VM. Le TLS direct avec certificat de PKI interne peut ensuite
+   être activé sans ajouter de reverse proxy.
+
+Ne pas supprimer les trois volumes nommés lors d'une mise à jour ou d'une
+suppression/recréation de Stack : ils contiennent les données accumulées après
+la migration. Garder l'instance VPS actuelle en fonctionnement jusqu'à la
+validation complète de la nouvelle instance.
+
+#### Accès LAN sans reverse proxy
+
+Nginx n'est pas obligatoire. Pour publier temporairement ou durablement le port
+applicatif sur le réseau interne, modifier dans Portainer la variable de Stack :
+
+```text
+FORTIOS_HTTP_BIND_ADDRESS=0.0.0.0
+FORTIOS_HTTP_PORT=8000
+```
+
+Puis cliquer **Update the stack**. L'application sera accessible depuis le LAN
+sur `http://<IP_LOCALE_DE_LA_VM>:8000/app/` (l'IP de la VM, jamais celle du
+conteneur). Autoriser le port 8000 uniquement depuis les VLAN/sous-réseaux
+internes nécessaires au niveau du firewall de la VM. Ce mode est du HTTP sans
+TLS ni authentification supplémentaire : les échanges ne sont pas chiffrés et
+il ne doit pas être exposé sur Internet. Il n'y a pas d'alerte de certificat en
+HTTP ; pour HTTPS et un nom DNS fiable, activer le TLS direct décrit ci-dessous
+ou placer ultérieurement un reverse proxy devant l'application.
+
+### HTTPS direct sans Nginx
+
+Le serveur Python peut aussi terminer TLS directement, sans conteneur proxy.
+Dans ce mode, le listener interne 8000 passe entièrement en HTTPS et le port
+hôte devient 443. HTTP/8000 n'est plus servi en parallèle, afin d'éviter le
+contournement du chiffrement pour les API applicatives.
+Pour le domaine interne `sns-security.lan`, utiliser un certificat PKI contenant
+`upgrade-path.sns-security.lan` ou le wildcard `*.sns-security.lan`. Le CLI
+accepte PKCS#12/PFX/P12, PEM, DER, clés PKCS#8 et chaînes PEM/DER/PKCS#7, puis
+normalise le résultat dans le volume persistant de certificats.
+
+La procédure d'installation, d'activation et de renouvellement se trouve dans
+[`docs/certificates.md`](docs/certificates.md).

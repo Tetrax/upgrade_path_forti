@@ -1,0 +1,4 @@
+# Needed only by scripts/import_forticlient_compat.py for the official
+# FortiClient EMS compatibility PDF. The web server and catalog collector use
+# only the Python standard library.
+pdfplumber>=0.11,<0.12

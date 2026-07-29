@@ -114,20 +114,34 @@ def _env_int(env: dict[str, str], key: str, default: int) -> int:
         return default
 
 
+def _env_secret(env: dict[str, str], key: str) -> str:
+    secret_file = (env.get(f"{key}_FILE") or "").strip()
+    if not secret_file:
+        return env.get(key) or ""
+    try:
+        return Path(secret_file).read_text(encoding="utf-8").rstrip("\r\n")
+    except OSError:
+        return ""
+
+
 def load_email_config(env: dict[str, str] | None = None) -> EmailConfig:
-    env = os.environ if env is None else env
-    smtp_to = tuple(addr.strip() for addr in (env.get("FORTIOS_SMTP_TO") or "").split(",") if addr.strip())
+    environment = dict(os.environ) if env is None else env
+    smtp_to = tuple(
+        addr.strip()
+        for addr in (environment.get("FORTIOS_SMTP_TO") or "").split(",")
+        if addr.strip()
+    )
     return EmailConfig(
-        enabled=_env_bool(env, "FORTIOS_EMAIL_ENABLED", False),
-        smtp_host=(env.get("FORTIOS_SMTP_HOST") or "").strip(),
-        smtp_port=_env_int(env, "FORTIOS_SMTP_PORT", 587),
-        smtp_username=(env.get("FORTIOS_SMTP_USERNAME") or "").strip(),
-        smtp_password=env.get("FORTIOS_SMTP_PASSWORD") or "",
-        smtp_from=(env.get("FORTIOS_SMTP_FROM") or "").strip(),
+        enabled=_env_bool(environment, "FORTIOS_EMAIL_ENABLED", False),
+        smtp_host=(environment.get("FORTIOS_SMTP_HOST") or "").strip(),
+        smtp_port=_env_int(environment, "FORTIOS_SMTP_PORT", 587),
+        smtp_username=(environment.get("FORTIOS_SMTP_USERNAME") or "").strip(),
+        smtp_password=_env_secret(environment, "FORTIOS_SMTP_PASSWORD"),
+        smtp_from=(environment.get("FORTIOS_SMTP_FROM") or "").strip(),
         smtp_to=smtp_to,
-        smtp_starttls=_env_bool(env, "FORTIOS_SMTP_STARTTLS", True),
-        smtp_timeout=_env_int(env, "FORTIOS_SMTP_TIMEOUT", 10),
-        app_url=(env.get("FORTIOS_APP_URL") or "https://valdev.me:3001/app/").strip(),
+        smtp_starttls=_env_bool(environment, "FORTIOS_SMTP_STARTTLS", True),
+        smtp_timeout=_env_int(environment, "FORTIOS_SMTP_TIMEOUT", 10),
+        app_url=(environment.get("FORTIOS_APP_URL") or "https://valdev.me:3001/app/").strip(),
     )
 
 
