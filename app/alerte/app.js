@@ -20,6 +20,8 @@ let severityFilter = "all";
 let checkedVersions = new Set();
 let checkedMinVersions = new Set();
 let checkedModels = new Set();
+let hopFrom = "";
+let hopTo = "";
 
 const els = {
   productSelect: document.getElementById("productSelect"),
@@ -34,12 +36,16 @@ const els = {
   source: document.getElementById("sourceInput"),
   versionModeExactButton: document.getElementById("versionModeExactButton"),
   versionModeFromButton: document.getElementById("versionModeFromButton"),
+  versionModeHopButton: document.getElementById("versionModeHopButton"),
   versionExactField: document.getElementById("versionExactField"),
   versionFromField: document.getElementById("versionFromField"),
+  versionHopField: document.getElementById("versionHopField"),
   versionSearch: document.getElementById("versionSearch"),
   versionList: document.getElementById("versionList"),
   minVersionSearch: document.getElementById("minVersionSearch"),
   minVersionList: document.getElementById("minVersionList"),
+  hopFromSelect: document.getElementById("hopFromSelect"),
+  hopToSelect: document.getElementById("hopToSelect"),
   scopeAllButton: document.getElementById("scopeAllButton"),
   scopeSomeButton: document.getElementById("scopeSomeButton"),
   modelPickerField: document.getElementById("modelPickerField"),
@@ -72,8 +78,11 @@ els.scopeAllButton.addEventListener("click", () => setScope("all"));
 els.scopeSomeButton.addEventListener("click", () => setScope("some"));
 els.versionModeExactButton.addEventListener("click", () => setVersionMode("exact"));
 els.versionModeFromButton.addEventListener("click", () => setVersionMode("from"));
+els.versionModeHopButton.addEventListener("click", () => setVersionMode("hop"));
 els.versionSearch.addEventListener("input", () => renderVersionList());
 els.minVersionSearch.addEventListener("input", () => renderMinVersionList());
+els.hopFromSelect.addEventListener("change", () => { hopFrom = els.hopFromSelect.value; });
+els.hopToSelect.addEventListener("change", () => { hopTo = els.hopToSelect.value; });
 els.modelSearch.addEventListener("input", () => renderModelList());
 els.submitButton.addEventListener("click", submitAdvisory);
 els.cancelEditButton.addEventListener("click", cancelEdit);
@@ -198,6 +207,8 @@ function selectProduct(productId) {
   checkedVersions.clear();
   checkedMinVersions.clear();
   checkedModels.clear();
+  hopFrom = "";
+  hopTo = "";
 
   setScope("all");
   setVersionMode("exact");
@@ -207,6 +218,7 @@ function selectProduct(productId) {
   renderVersionList();
   renderMinVersionList();
   renderModelList();
+  renderHopSelects();
 }
 
 function setScope(scope) {
@@ -220,8 +232,28 @@ function setVersionMode(mode) {
   versionMode = mode;
   els.versionModeExactButton.classList.toggle("active", mode === "exact");
   els.versionModeFromButton.classList.toggle("active", mode === "from");
+  els.versionModeHopButton.classList.toggle("active", mode === "hop");
   els.versionExactField.classList.toggle("hidden", mode !== "exact");
   els.versionFromField.classList.toggle("hidden", mode !== "from");
+  els.versionHopField.classList.toggle("hidden", mode !== "hop");
+}
+
+function renderHopSelects() {
+  const options = allVersions.map(version => {
+    const option = document.createElement("option");
+    option.value = version;
+    option.textContent = version;
+    return option;
+  });
+  els.hopFromSelect.replaceChildren(...options.map(option => option.cloneNode(true)));
+  els.hopToSelect.replaceChildren(...options);
+
+  // allVersions is sorted newest-first: default to the most recent hop (the common case for a
+  // freshly reported upgrade bug) rather than the oldest possible pair.
+  hopTo = allVersions.includes(hopTo) ? hopTo : allVersions[0] || "";
+  hopFrom = allVersions.includes(hopFrom) ? hopFrom : allVersions[1] || allVersions[0] || "";
+  els.hopFromSelect.value = hopFrom;
+  els.hopToSelect.value = hopTo;
 }
 
 function setSeverityFilter(severity) {
@@ -301,6 +333,7 @@ async function submitAdvisory() {
   const description = els.description.value.trim();
   const versions = versionMode === "exact" ? Array.from(checkedVersions) : [];
   const minVersions = versionMode === "from" ? Array.from(checkedMinVersions) : [];
+  const hop = versionMode === "hop" ? { from: hopFrom, to: hopTo } : null;
   const models = modelScope === "some" ? Array.from(checkedModels) : [];
 
   if (!title || !description) {
@@ -313,6 +346,10 @@ async function submitAdvisory() {
   }
   if (versionMode === "from" && !minVersions.length) {
     els.formMessage.textContent = "Cocher au moins un point de départ.";
+    return;
+  }
+  if (versionMode === "hop" && (!hop.from || !hop.to || hop.from === hop.to)) {
+    els.formMessage.textContent = "Choisir une version de départ et une version cible différentes.";
     return;
   }
   if (modelScope === "some" && !models.length) {
@@ -335,6 +372,8 @@ async function submitAdvisory() {
         behaviorChange: els.behaviorChange.checked,
         versions,
         minVersions,
+        from: hop ? hop.from : "",
+        to: hop ? hop.to : "",
         models,
         command: els.command.value.trim(),
         bugId: els.bugId.value.trim(),
@@ -370,7 +409,13 @@ function startEdit(item) {
   els.source.value = item.source || "";
 
   const minVersions = advisoryMinVersions(item);
-  if (minVersions.length) {
+  const hop = advisoryHop(item);
+  if (hop) {
+    setVersionMode("hop");
+    hopFrom = hop.from;
+    hopTo = hop.to;
+    renderHopSelects();
+  } else if (minVersions.length) {
     setVersionMode("from");
     els.minVersionSearch.value = "";
     setCheckedValues(checkedMinVersions, minVersions);
@@ -436,11 +481,14 @@ function resetForm() {
   checkedVersions.clear();
   checkedMinVersions.clear();
   checkedModels.clear();
+  hopFrom = "";
+  hopTo = "";
   setScope("all");
   setVersionMode("exact");
   renderVersionList();
   renderMinVersionList();
   renderModelList();
+  renderHopSelects();
   els.submitButtonLabel.textContent = "Publier l'alerte";
   els.cancelEditButton.classList.add("hidden");
 }
@@ -452,6 +500,7 @@ function filteredAdvisories() {
     if (severityFilter !== "all" && item.severity !== severityFilter) return false;
     if (!query) return true;
 
+    const hop = advisoryHop(item);
     const haystack = normalizeSearch(
       [
         item.title,
@@ -460,6 +509,7 @@ function filteredAdvisories() {
         item.bugVersion,
         ...advisoryVersions(item),
         ...advisoryMinVersions(item),
+        ...(hop ? [hop.from, hop.to] : []),
         ...(Array.isArray(item.models) ? item.models : [])
       ]
         .filter(Boolean)
@@ -514,9 +564,12 @@ function advisoryCard(item) {
   renderRichText(description, item.description);
 
   const minVersions = advisoryMinVersions(item);
-  const versionsLabel = minVersions.length
-    ? minVersions.map(version => `${version}+`).join(", ")
-    : advisoryVersions(item).join(", ") || "-";
+  const hop = advisoryHop(item);
+  const versionsLabel = hop
+    ? `${hop.from} → ${hop.to}`
+    : minVersions.length
+      ? minVersions.map(version => `${version}+`).join(", ")
+      : advisoryVersions(item).join(", ") || "-";
   const modelsScope = Array.isArray(item.models) && item.models.length ? item.models.join(", ") : "Tous";
   const meta = el("p", { className: "hint" });
   meta.textContent = `${productLabel(item.product)} • Versions : ${versionsLabel} • Boîtiers : ${modelsScope} • Source : ${item.source || "-"}`;
@@ -560,6 +613,10 @@ function advisoryVersions(advisory) {
 function advisoryMinVersions(advisory) {
   if (Array.isArray(advisory.minVersions)) return advisory.minVersions;
   return advisory.minVersion ? [advisory.minVersion] : [];
+}
+
+function advisoryHop(advisory) {
+  return advisory.from && advisory.to ? { from: advisory.from, to: advisory.to } : null;
 }
 
 async function uploadImage(file) {

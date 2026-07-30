@@ -122,10 +122,25 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     description = str(payload.get("description", "")).strip()
     versions = [str(item).strip() for item in payload.get("versions") or [] if str(item).strip()]
     min_versions = [str(item).strip() for item in payload.get("minVersions") or [] if str(item).strip()]
+    from_version = str(payload.get("from") or "").strip()
+    to_version = str(payload.get("to") or "").strip()
     if not title or not description:
         raise ValueError("Titre et description sont obligatoires.")
-    if not versions and not min_versions:
-        raise ValueError("Indiquer au moins une version, ou au moins un point de départ.")
+    if bool(from_version) != bool(to_version):
+        raise ValueError("Une bascule précise nécessite une version de départ et une version cible.")
+    if from_version and to_version and from_version == to_version:
+        raise ValueError("La version de départ et la version cible doivent être différentes.")
+    targeting_modes = sum(
+        (
+            bool(versions),
+            bool(min_versions),
+            bool(from_version and to_version),
+        ),
+    )
+    if targeting_modes > 1:
+        raise ValueError("Choisir un seul mode de ciblage des versions.")
+    if not versions and not min_versions and not (from_version and to_version):
+        raise ValueError("Indiquer au moins une version, un point de départ, ou une bascule précise.")
 
     product = str(payload.get("product") or DEFAULT_PRODUCT_ID).strip()
     if product not in PRODUCT_LABELS:
@@ -148,7 +163,10 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
         "description": description,
         "source": source,
     }
-    if min_versions:
+    if from_version and to_version:
+        fields["from"] = from_version
+        fields["to"] = to_version
+    elif min_versions:
         fields["minVersions"] = min_versions
     else:
         fields["versions"] = versions

@@ -74,9 +74,10 @@
 
           <div class="field">
             <label>Versions FortiOS concernées</label>
-            <div class="toggle-group">
+            <div class="toggle-group" style="flex-wrap: wrap;">
               <button type="button" class="btn active" id="versionModeExactButton">Versions précises</button>
               <button type="button" class="btn" id="versionModeFromButton">À partir de versions</button>
+              <button type="button" class="btn" id="versionModeHopButton">Bascule précise</button>
             </div>
 
             <div id="versionExactField" style="margin-top: 10px;">
@@ -90,6 +91,21 @@
               <input type="text" id="minVersionSearch" placeholder="Filtrer, ex: 7.4" autocomplete="off" />
               <div class="check-list" id="minVersionList"></div>
               <p class="hint">Cocher un point de départ par branche concernée (ex: 7.2.11 et 7.4.5 et 7.6.1 pour un correctif backporté dans ces trois branches). L'alerte s'affiche pour cette version et les versions suivantes de la même branche (7.4.5 déclenche sur 7.4.5+, mais pas sur 7.2.x ni 7.6.x sauf si cochées aussi).</p>
+            </div>
+
+            <div class="field hidden" id="versionHopField" style="margin-top: 10px;">
+              <label>Bascule concernée</label>
+              <div class="version-row">
+                <div class="field">
+                  <label for="hopFromSelect">Version de départ</label>
+                  <select id="hopFromSelect"></select>
+                </div>
+                <div class="field">
+                  <label for="hopToSelect">Version cible</label>
+                  <select id="hopToSelect"></select>
+                </div>
+              </div>
+              <p class="hint">Pour un bug qui ne se déclenche que pour CETTE bascule précise (ex: perte de <code>config system global</code> en passant de 7.6.6 à 7.6.7), pas pour toute upgrade qui passe par la version cible. L'alerte ne s'affiche que si le chemin calculé contient exactement ce saut.</p>
             </div>
           </div>
 

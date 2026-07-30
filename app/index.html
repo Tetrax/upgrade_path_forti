@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FortiOS Upgrade Intelligence</title>
   <link rel="stylesheet" href="shared.css" />
+  <script src="advisory-matching.js"></script>
 </head>
 <body>
   <main class="shell">
@@ -114,6 +115,10 @@
   </main>
 
   <script>
+    const {
+      preciseHopMatches,
+      preciseHopMatchesVersion
+    } = globalThis.FortiosAdvisoryMatching;
     const STORAGE_KEY = "fortios-upgrade-intelligence-v1";
     const GENERATED_DATA_URL = "../data/fortios-data.generated.json";
     // How long a "New" badge stays on a freshly-seen FortiOS version or CVE in the
@@ -1197,7 +1202,7 @@
         if (Array.isArray(advisory.models) && !advisory.models.includes(path.model)) continue;
 
         const versionMatch = path.hops.some(version => advisoryMatchesVersion(advisory, version, path));
-        const hopMatch = advisory.from && advisory.to && hopPairs(path).some(pair => pair.from === advisory.from && pair.to === advisory.to);
+        const hopMatch = preciseHopMatches(advisory, path);
         if (versionMatch || hopMatch) items.push(advisory);
       }
       return items.sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
@@ -1212,6 +1217,13 @@
     // particular upgrade doesn't cause the transition — the alert would just be noise — so it's
     // only relevant when "from" hasn't crossed the threshold yet but this path reaches it.
     function advisoryMatchesVersion(advisory, version, path) {
+      // A precise-hop advisory (from/to) only concerns the specific transition, not "any path
+      // through this version" — attribute it to the row of the version it lands on (`to`), and
+      // only when the path actually contains that exact jump (matches the hopMatch check in
+      // advisoriesForPath()).
+      if (advisory.from && advisory.to) {
+        return preciseHopMatchesVersion(advisory, version, path);
+      }
       const thresholds = advisoryThresholds(advisory);
       if (thresholds.length) {
         if (path && hasChangeByVersion(path.from, thresholds)) return false;
@@ -1248,9 +1260,6 @@
       return advisory.version ? [advisory.version] : [];
     }
 
-    function hopPairs(path) {
-      return path.hops.slice(0, -1).map((from, index) => ({ from, to: path.hops[index + 1] }));
-    }
 
     // CVE ranges come from Fortinet's own CSAF advisories (see scripts/fortios_watch.py) as
     // per-branch bounds — a branch with no from/to means the whole train is affected (Fortinet
@@ -1452,7 +1461,11 @@
 
       const advisoryLines = advisories.length
         ? advisories.flatMap(item => {
-            const scope = item.version ? `version ${item.version}` : `${item.from} > ${item.to}`;
+            const scope = item.from && item.to
+              ? `${item.from} > ${item.to}`
+              : advisoryThresholds(item).length
+                ? advisoryThresholds(item).map(version => `${version}+`).join(", ")
+                : advisoryVersions(item).join(", ") || "toutes versions";
             const lines = [
               `### ${item.title}`,
               `- Portée : ${scope}`,
