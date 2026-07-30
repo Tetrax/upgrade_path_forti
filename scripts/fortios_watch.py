@@ -2199,9 +2199,6 @@ def main(argv: list[str]) -> int:
             except Exception as error:  # noqa: BLE001 - one product's failure shouldn't abort the others.
                 if source_id:
                     record_source(source_id, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
-        for product_id, source_id in tool_product_health_sources.items():
-            if product_id not in tool_products:
-                record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
     elif args.skip_network:
         for source_id in tool_product_health_sources.values():
             record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)

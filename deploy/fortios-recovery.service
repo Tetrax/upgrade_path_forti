@@ -1,5 +1,6 @@
 [Unit]
 Description=FortiOS Upgrade Intelligence — targeted recovery of failed morning sources
+After=fortios-catalog-refresh.service
 
 [Service]
 Type=oneshot

@@ -41,6 +41,7 @@ from fortios_watch import (  # noqa: E402
     SOURCE_COMPAT_MATRIX,
     HealthSourceResult,
     cross_process_lock,
+    health_mark_running,
     normalize_state,
     read_json,
     record_health_results,
@@ -116,7 +117,10 @@ def main(argv: list[str]) -> int:
     # never touches persisted data, so it shouldn't affect "when did we last actually refresh
     # this source" freshness tracking either.
     t0 = time.monotonic()
-    started_at = utc_now_precise()
+    started_at = (
+        health_mark_running(args.health_output, SOURCE_COMPAT_MATRIX)
+        if args.commit else utc_now_precise()
+    )
 
     def record_and_return(status: str, code: int, *, items: int | None = None, error: Any = None) -> int:
         if args.commit:
@@ -156,9 +160,12 @@ def main(argv: list[str]) -> int:
         print(f"Échec du téléchargement du PDF : {error}", file=sys.stderr)
         return record_and_return(HEALTH_STATUS_ERROR, 1, error=error)
     tmp_pdf = Path("/tmp") / "forticlient_ems_compat.pdf"
-    tmp_pdf.write_bytes(pdf_bytes)
-
-    entries = parse_matrix(tmp_pdf)
+    try:
+        tmp_pdf.write_bytes(pdf_bytes)
+        entries = parse_matrix(tmp_pdf)
+    except Exception as error:  # noqa: BLE001 - every importer crash must become retryable health.
+        print(f"Échec du traitement du PDF : {error}", file=sys.stderr)
+        return record_and_return(HEALTH_STATUS_ERROR, 1, error=error)
     if len(entries) < MIN_EXPECTED_ENTRIES:
         message = (
             f"Seulement {len(entries)} combinaison(s) extraite(s) (minimum attendu : {MIN_EXPECTED_ENTRIES}) "
@@ -178,27 +185,31 @@ def main(argv: list[str]) -> int:
     # Shared with fortios_server.py's live handlers and fortios_watch.py's daily batch run — all
     # three read-modify-write this same file from separate processes.
     added = 0
-    with cross_process_lock(DATA_PATH):
-        state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-        existing_by_id = {item.get("id"): item for item in state["compatibilities"]}
-        for entry in entries:
-            item_id = f"compat-official-{entry['emsVersion']}"
-            prior = existing_by_id.get(item_id)
-            # Preserve any human edits (note, source, createdAt) on re-import; only the version
-            # list is refreshed from the PDF, and updatedAt only moves if it actually changed.
-            item = dict(prior) if prior else {}
-            item["id"] = item_id
-            item["emsVersion"] = entry["emsVersion"]
-            item.setdefault("note", "")
-            item.setdefault("source", SOURCE_LABEL)
-            item.setdefault("createdAt", utc_now())
-            if prior and prior.get("clientVersions") != entry["clientVersions"]:
-                item["updatedAt"] = utc_now()
-            item["clientVersions"] = entry["clientVersions"]
-            if upsert_compatibility(state, item):
-                added += 1
-        state["generatedAt"] = utc_now()
-        write_json(DATA_PATH, state)
+    try:
+        with cross_process_lock(DATA_PATH):
+            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+            existing_by_id = {item.get("id"): item for item in state["compatibilities"]}
+            for entry in entries:
+                item_id = f"compat-official-{entry['emsVersion']}"
+                prior = existing_by_id.get(item_id)
+                # Preserve any human edits (note, source, createdAt) on re-import; only the version
+                # list is refreshed from the PDF, and updatedAt only moves if it actually changed.
+                item = dict(prior) if prior else {}
+                item["id"] = item_id
+                item["emsVersion"] = entry["emsVersion"]
+                item.setdefault("note", "")
+                item.setdefault("source", SOURCE_LABEL)
+                item.setdefault("createdAt", utc_now())
+                if prior and prior.get("clientVersions") != entry["clientVersions"]:
+                    item["updatedAt"] = utc_now()
+                item["clientVersions"] = entry["clientVersions"]
+                if upsert_compatibility(state, item):
+                    added += 1
+            state["generatedAt"] = utc_now()
+            write_json(DATA_PATH, state)
+    except Exception as error:  # noqa: BLE001 - persist write failures in health for 07:45 retry.
+        print(f"Échec de l'import de la matrice : {error}", file=sys.stderr)
+        return record_and_return(HEALTH_STATUS_ERROR, 1, error=error)
     print(f"\n{added} combinaison(s) officielle(s) ajoutée(s)/mise(s) à jour dans {DATA_PATH}.")
     return record_and_return(HEALTH_STATUS_OK, 0, items=len(entries))
 

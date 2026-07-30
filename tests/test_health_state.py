@@ -785,6 +785,42 @@ class MainHealthWiringIntegrationTests(unittest.TestCase):
                 self.assertEqual(sources[source_id]["lastSuccessAt"], "2026-07-21T07:00:00.000000Z")
             self.assertEqual(sources[fw.SOURCE_CVE_PSIRT]["status"], fw.HEALTH_STATUS_OK)
 
+    def test_scoped_tool_retry_does_not_mark_healthy_peer_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "state.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            health_path = Path(tmp) / "health.json"
+            manager_success = {
+                "status": fw.HEALTH_STATUS_OK,
+                "lastAttemptAt": "2026-07-21T07:00:00.000000Z",
+                "lastSuccessAt": "2026-07-21T07:00:00.000000Z",
+                "durationSeconds": 1.0,
+                "itemsCollected": 10,
+                "consecutiveFailures": 0,
+                "lastError": None,
+            }
+            fw.write_json(health_path, {
+                "sources": {fw.SOURCE_FORTIMANAGER: manager_success},
+                "updatedAt": "2026-07-21T07:00:00.000000Z",
+            })
+
+            collected = fw.normalize_state({
+                "firmwares": [{
+                    "product": "fortianalyzer", "model": "all", "version": "7.6.0",
+                    "releaseDate": "2026-07-01", "status": "available",
+                }],
+            })
+            with patch.object(fw, "collect_tool_catalog", return_value=collected):
+                exit_code = fw.main([
+                    "--tool-products", "fortianalyzer",
+                    "--base", str(base_path), "--output", str(base_path),
+                    "--report", str(Path(tmp) / "report.md"), "--health-output", str(health_path),
+                ])
+
+            self.assertEqual(exit_code, 0)
+            sources = fw.read_json(health_path, {})["sources"]
+            self.assertEqual(sources[fw.SOURCE_FORTIMANAGER], manager_success)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -126,6 +126,25 @@ class CompatibilityHealthTests(unittest.TestCase):
             fw.HEALTH_STATUS_ERROR,
         )
 
+    def test_pdf_parser_exception_is_recorded_as_a_source_failure(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            health_path = Path(tmp) / "health.json"
+            with (
+                patch.object(compat, "find_pdf_url", return_value="https://example.test/matrix.pdf"),
+                patch.object(compat, "fetch_url", return_value=b"not-a-pdf"),
+                patch.object(compat, "parse_matrix", side_effect=ValueError("malformed PDF")),
+            ):
+                result = compat.main(["--commit", "--health-output", str(health_path)])
+
+            health = fw.read_health_state(health_path)
+
+        self.assertEqual(result, 1)
+        record = health["sources"][fw.SOURCE_COMPAT_MATRIX]
+        self.assertEqual(record["status"], fw.HEALTH_STATUS_ERROR)
+        self.assertIn("malformed PDF", record["lastError"])
+
 
 if __name__ == "__main__":
     unittest.main()
