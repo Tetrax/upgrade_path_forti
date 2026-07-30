@@ -21,6 +21,7 @@ import csv
 import datetime as dt
 import fcntl
 import html
+import http.client
 import json
 import os
 import random
@@ -671,26 +672,38 @@ def normalize_doc_model(doc_model: str) -> str:
     return f"{prefix}{compact}"
 
 
-def urlopen_with_retry(request: urllib.request.Request, timeout: int, retries: int = 3):
-    """urlopen with exponential backoff for transient connection failures.
+def read_url_with_retry(request: urllib.request.Request, timeout: int, retries: int = 3) -> bytes:
+    """Open and fully read one HTTP response, retrying transient failures at either stage.
 
-    The daily cron run has repeatedly died partway through (ConnectionRefusedError, SSL
-    handshake timeout) after dozens of prior successful requests in the same run — that pattern
-    (fails after a long streak of successes, works again standalone seconds later) points at
-    transient connection drops rather than Fortinet actually being down, so it's worth a few
-    retries before giving up. A real HTTP error response (404, 500...) means the server did
-    answer, so that's not retried — another attempt would just get the same answer.
+    A server/proxy may close the response halfway through ``read()``
+    (``http.client.IncompleteRead``), which is exactly what happened to the daily FortiClient/EMS
+    scrape on 2026-07-30.  A partial response is never usable: close it and replay the complete
+    request with bounded exponential backoff.  Retry only HTTP statuses commonly used for
+    transient throttling or server/gateway failures; definitive responses such as 404 fail fast.
     """
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
-            return urllib.request.urlopen(request, timeout=timeout)
-        except urllib.error.HTTPError:
-            raise
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            if error.code not in {408, 429} and not 500 <= error.code < 600:
+                raise
             last_error = error
             if attempt < retries - 1:
                 time.sleep((2 ** attempt) + random.uniform(0, 1))
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+        ) as error:
+            last_error = error
+            if attempt < retries - 1:
+                time.sleep((2 ** attempt) + random.uniform(0, 1))
+    assert last_error is not None  # retries >= 1 and every successful attempt returns above
     raise last_error
 
 
@@ -699,8 +712,7 @@ def fetch_text(url: str, timeout: int) -> str:
         url,
         headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"},
     )
-    with urlopen_with_retry(request, timeout) as response:
-        return response.read().decode("utf-8", errors="ignore")
+    return read_url_with_retry(request, timeout).decode("utf-8", errors="ignore")
 
 
 def html_to_text(raw_html: str) -> str:
@@ -998,8 +1010,7 @@ def post_official_upgrade_tool(payload: dict[str, str], timeout: int) -> dict[st
             "Referer": f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/{product_slug}",
         },
     )
-    with urlopen_with_retry(request, timeout) as response:
-        return json.loads(response.read().decode("utf-8", errors="ignore"))
+    return json.loads(read_url_with_retry(request, timeout).decode("utf-8", errors="ignore"))
 
 
 _FORTINET_MODEL_ALIASES: dict[str, dict[str, str]] = {}
@@ -1101,8 +1112,7 @@ def fetch_product_models(product_slug: str, timeout: int) -> list[dict[str, str]
     """
     url = f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/products/{product_slug}.json"
     request = urllib.request.Request(url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
-    with urlopen_with_retry(request, timeout) as response:
-        data = json.loads(response.read().decode("utf-8", errors="ignore"))
+    data = json.loads(read_url_with_retry(request, timeout).decode("utf-8", errors="ignore"))
     return data.get("products", [])
 
 
@@ -1396,9 +1406,8 @@ def fetch_psirt_versions(timeout: int) -> set[str]:
         headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"},
     )
     try:
-        with urlopen_with_retry(request, timeout) as response:
-            xml_bytes = response.read()
-    except (urllib.error.URLError, TimeoutError, OSError):
+        xml_bytes = read_url_with_retry(request, timeout)
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException):
         return set()
 
     try:
@@ -1447,8 +1456,7 @@ CVE_LISTING_PRODUCT_FILTERS = tuple(CVE_PRODUCT_MAP)
 
 def discover_advisory_ids_from_rss(timeout: int) -> list[str]:
     request = urllib.request.Request(PSIRT_RSS_URL, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
-    with urlopen_with_retry(request, timeout) as response:
-        root = ET.fromstring(response.read())
+    root = ET.fromstring(read_url_with_retry(request, timeout))
 
     ids: list[str] = []
     for item in root.iter("item"):
@@ -2294,7 +2302,7 @@ def main(argv: list[str]) -> int:
             )
             # A handful of advisories failing out of the ~50 fetched daily is almost always a
             # transient PSIRT hiccup (rate limiting, brief outage) that clears up within minutes
-            # on its own -- retrying seconds later (the per-request backoff in urlopen_with_retry)
+            # on its own -- retrying seconds later (the per-request backoff in read_url_with_retry)
             # mostly doesn't help with that, so wait for real before giving the still-failing ones
             # another shot. Bounded and spaced out (not "retry forever until green"): an advisory
             # can be legitimately CSAF-less (see collect_cve_entries_for_advisory's docstring),

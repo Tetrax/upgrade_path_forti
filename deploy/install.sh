@@ -39,6 +39,8 @@ fi
 install -m 644 "$REPO_ROOT/deploy/fortios-upgrade.service" /etc/systemd/system/fortios-upgrade.service
 install -m 644 "$REPO_ROOT/deploy/fortios-catalog-refresh.service" /etc/systemd/system/fortios-catalog-refresh.service
 install -m 644 "$REPO_ROOT/deploy/fortios-catalog-refresh.timer" /etc/systemd/system/fortios-catalog-refresh.timer
+install -m 644 "$REPO_ROOT/deploy/fortios-recovery.service" /etc/systemd/system/fortios-recovery.service
+install -m 644 "$REPO_ROOT/deploy/fortios-recovery.timer" /etc/systemd/system/fortios-recovery.timer
 install -m 644 "$REPO_ROOT/deploy/fortios-cve-afternoon-refresh.service" /etc/systemd/system/fortios-cve-afternoon-refresh.service
 install -m 644 "$REPO_ROOT/deploy/fortios-cve-afternoon-refresh.timer" /etc/systemd/system/fortios-cve-afternoon-refresh.timer
 systemctl daemon-reload
@@ -51,10 +53,12 @@ systemctl enable --now fortios-upgrade.service
 systemctl restart fortios-upgrade.service
 systemctl enable --now fortios-catalog-refresh.timer
 systemctl restart fortios-catalog-refresh.timer
+systemctl enable --now fortios-recovery.timer
+systemctl restart fortios-recovery.timer
 systemctl enable --now fortios-cve-afternoon-refresh.timer
 systemctl restart fortios-cve-afternoon-refresh.timer
 systemctl status --no-pager fortios-upgrade.service
-systemctl list-timers --no-pager fortios-catalog-refresh.timer fortios-cve-afternoon-refresh.timer
+systemctl list-timers --no-pager fortios-catalog-refresh.timer fortios-recovery.timer fortios-cve-afternoon-refresh.timer
 
 # Own dedicated file, always overwritten in place — this is what makes re-running this script
 # actually pick up a config change (client_max_body_size and similar), unlike the old approach

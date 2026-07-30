@@ -1,0 +1,11 @@
+[Unit]
+Description=07:45 targeted recovery for FortiOS Upgrade Intelligence
+
+[Timer]
+# The morning run records a first failure without alerting. This pass retries only failed
+# sources; a second failure reaches the existing notification threshold and sends the alert.
+OnCalendar=*-*-* 07:45:00 Europe/Paris
+Persistent=true
+
+[Install]
+WantedBy=timers.target

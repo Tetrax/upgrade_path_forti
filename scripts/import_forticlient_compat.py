@@ -22,6 +22,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import re
 import secrets
@@ -44,7 +45,7 @@ from fortios_watch import (  # noqa: E402
     read_json,
     record_health_results,
     upsert_compatibility,
-    urlopen_with_retry,
+    read_url_with_retry,
     utc_now,
     utc_now_precise,
     write_json,
@@ -62,8 +63,7 @@ SAMPLE_PATH = ROOT / "data" / "fortios-data.sample.json"
 
 def fetch_url(url: str, timeout: int) -> bytes:
     request = urllib.request.Request(url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
-    with urlopen_with_retry(request, timeout) as response:
-        return response.read()
+    return read_url_with_retry(request, timeout)
 
 
 def find_pdf_url(major: str, timeout: int) -> str | None:
@@ -137,7 +137,7 @@ def main(argv: list[str]) -> int:
     for major in majors:
         try:
             pdf_url = find_pdf_url(major, args.timeout)
-        except (urllib.error.URLError, OSError):
+        except (urllib.error.URLError, OSError, http.client.HTTPException):
             pdf_url = None
             continue
         if pdf_url:
@@ -152,7 +152,7 @@ def main(argv: list[str]) -> int:
 
     try:
         pdf_bytes = fetch_url(pdf_url, args.timeout)
-    except (urllib.error.URLError, OSError) as error:
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
         print(f"Échec du téléchargement du PDF : {error}", file=sys.stderr)
         return record_and_return(HEALTH_STATUS_ERROR, 1, error=error)
     tmp_pdf = Path("/tmp") / "forticlient_ems_compat.pdf"

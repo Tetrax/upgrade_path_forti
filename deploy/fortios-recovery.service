@@ -1,0 +1,12 @@
+[Unit]
+Description=FortiOS Upgrade Intelligence — targeted recovery of failed morning sources
+
+[Service]
+Type=oneshot
+User=tetrax
+Group=tetrax
+WorkingDirectory=/home/tetrax/workspace/upgrade_path
+EnvironmentFile=-/etc/fortios-upgrade-intelligence.env
+# The shared runner serializes against a still-running 07:00 job, reads fortios-health.json,
+# and invokes only the collector flags corresponding to sources that remain in error.
+ExecStart=/usr/bin/python3 scripts/scheduled_refresh.py recovery
