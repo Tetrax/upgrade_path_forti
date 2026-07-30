@@ -239,19 +239,27 @@ function setVersionMode(mode) {
 }
 
 function renderHopSelects() {
-  const options = allVersions.map(version => {
+  const selectableVersions = [...allVersions];
+  for (const historicalVersion of [hopFrom, hopTo]) {
+    if (historicalVersion && !selectableVersions.includes(historicalVersion)) {
+      selectableVersions.push(historicalVersion);
+    }
+  }
+
+  const options = selectableVersions.map(version => {
     const option = document.createElement("option");
     option.value = version;
-    option.textContent = version;
+    option.textContent = allVersions.includes(version) ? version : `${version} (historique)`;
     return option;
   });
   els.hopFromSelect.replaceChildren(...options.map(option => option.cloneNode(true)));
   els.hopToSelect.replaceChildren(...options);
 
   // allVersions is sorted newest-first: default to the most recent hop (the common case for a
-  // freshly reported upgrade bug) rather than the oldest possible pair.
-  hopTo = allVersions.includes(hopTo) ? hopTo : allVersions[0] || "";
-  hopFrom = allVersions.includes(hopFrom) ? hopFrom : allVersions[1] || allVersions[0] || "";
+  // freshly reported upgrade bug) rather than the oldest possible pair. Existing values are
+  // preserved even when a later catalog refresh no longer lists those historical releases.
+  hopTo = hopTo || allVersions[0] || "";
+  hopFrom = hopFrom || allVersions[1] || allVersions[0] || "";
   els.hopFromSelect.value = hopFrom;
   els.hopToSelect.value = hopTo;
 }

@@ -4,6 +4,7 @@ instance of scripts/fortios_server.py (see conftest.py) — no real data, no rea
 
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
@@ -106,6 +107,49 @@ def test_edit_advisory(page, fortios_server):
 
     expect(page.locator("#advisoryList")).to_contain_text("Advisory edited by E2E")
     expect(page.locator("#advisoryList")).not_to_contain_text("Advisory to edit")
+
+
+def test_edit_precise_hop_preserves_versions_missing_from_current_catalog(page, fortios_server):
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.goto(f"{fortios_server.base_url}/app/alerte/")
+    page.fill("#titleInput", "Historical precise hop")
+    page.fill("#descriptionInput", "The old transition must remain unchanged.")
+    page.click("#versionModeHopButton")
+    page.select_option("#hopFromSelect", "6.2.4")
+    page.select_option("#hopToSelect", "7.0.14")
+    page.click("#submitButton")
+    expect(page.locator("#advisoryList")).to_contain_text("6.2.4 → 7.0.14")
+
+    state = fortios_server.read_state()
+    product = next(item for item in state["products"] if item["id"] == "fortigate-fortios")
+    for model in product["models"]:
+        model["firmwares"] = [
+            firmware for firmware in model["firmwares"]
+            if firmware["version"] not in {"6.2.4", "7.0.14"}
+        ]
+    (fortios_server.data_dir / "fortios-data.generated.json").write_text(
+        json.dumps(state),
+        encoding="utf-8",
+    )
+
+    page.reload()
+    page.locator("article", has_text="Historical precise hop").get_by_role(
+        "button",
+        name="Modifier",
+    ).click()
+    expect(page.locator("#hopFromSelect")).to_have_value("6.2.4")
+    expect(page.locator("#hopToSelect")).to_have_value("7.0.14")
+
+    page.fill("#titleInput", "Historical precise hop edited")
+    page.click("#submitButton")
+    expect(page.locator("#formMessage")).to_have_text("Alerte mise à jour.")
+
+    saved = next(
+        item for item in fortios_server.read_state()["advisories"]
+        if item["title"] == "Historical precise hop edited"
+    )
+    assert saved["from"] == "6.2.4"
+    assert saved["to"] == "7.0.14"
 
 
 # 9. Delete an advisory ---------------------------------------------------------------------
