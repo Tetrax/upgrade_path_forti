@@ -101,6 +101,36 @@ class HttpReadRetryTests(unittest.TestCase):
         self.assertEqual(result, "recovered")
         self.assertEqual(urlopen.call_count, 2)
 
+    def test_empty_product_catalog_is_retried_before_accepting_models(self):
+        responses = [
+            b'{"products": []}',
+            b'{"products": []}',
+            b'{"products": [{"product_name": "FMG_1000F", "hardware_model_name": "FMG1KF"}]}',
+        ]
+
+        with (
+            patch.object(fw, "read_url_with_retry", side_effect=responses) as read_url,
+            patch.object(fw.time, "sleep") as sleep,
+            patch.object(fw.random, "uniform", return_value=0),
+        ):
+            products = fw.fetch_product_models("fortimanager", timeout=12)
+
+        self.assertEqual(products[0]["hardware_model_name"], "FMG1KF")
+        self.assertEqual(read_url.call_count, 3)
+        self.assertEqual([args[0] for args, _kwargs in sleep.call_args_list], [1, 2])
+
+    def test_empty_product_catalog_stops_after_three_total_attempts(self):
+        with (
+            patch.object(fw, "read_url_with_retry", return_value=b'{"products": []}') as read_url,
+            patch.object(fw.time, "sleep") as sleep,
+            patch.object(fw.random, "uniform", return_value=0),
+        ):
+            products = fw.fetch_product_models("fortimanager", timeout=12)
+
+        self.assertEqual(products, [])
+        self.assertEqual(read_url.call_count, 3)
+        self.assertEqual([args[0] for args, _kwargs in sleep.call_args_list], [1, 2])
+
 
 class CompatibilityHealthTests(unittest.TestCase):
     def test_exhausted_incomplete_read_is_recorded_as_a_source_failure(self):

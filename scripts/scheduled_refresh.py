@@ -2,9 +2,10 @@
 """Shared scheduled refresh runner for systemd and the Docker scheduler.
 
 The 07:00 full run records a first source failure without alerting (the notification threshold is
-already two consecutive failures).  At 07:45 ``recovery`` reads the health file and retries only
-sources that are still red.  A second failure then reaches the existing threshold and emits the
-operational alert; a successful retry silently clears the transient first failure.
+already two consecutive failures).  At 07:45 ``recovery`` reads the health file and retries sources
+that are still red, plus semantically empty catalog warnings.  A second failure then reaches the
+existing threshold and emits the operational alert; a successful retry silently clears the
+transient first failure or empty response.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from fortios_watch import (
     HEALTH_SOURCE_LABELS,
     HEALTH_STATUS_ERROR,
     HEALTH_STATUS_RUNNING,
+    HEALTH_STATUS_WARNING,
     HealthSourceResult,
     SOURCE_COMPAT_MATRIX,
     SOURCE_CVE_PSIRT,
@@ -78,7 +80,14 @@ class RetryPlan:
 def _needs_retry(record: dict[str, Any] | None) -> bool:
     # The process-wide lock is held before this state is inspected, so a "running" record cannot
     # belong to a still-active scheduled job. It was left behind by a killed/crashed collector.
-    return bool(record and record.get("status") in {HEALTH_STATUS_ERROR, HEALTH_STATUS_RUNNING})
+    if not record:
+        return False
+    if record.get("status") in {HEALTH_STATUS_ERROR, HEALTH_STATUS_RUNNING}:
+        return True
+    return (
+        record.get("status") == HEALTH_STATUS_WARNING
+        and str(record.get("lastError") or "").startswith("Aucune version")
+    )
 
 
 def build_retry_plan(health_state: dict[str, Any]) -> RetryPlan:

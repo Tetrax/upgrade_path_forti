@@ -79,6 +79,25 @@ class RetryPlanTests(unittest.TestCase):
         self.assertEqual(plan.catalog_args, ("--forticlient-catalog",))
         self.assertEqual(plan.source_ids, ("forticlient",))
 
+    def test_empty_catalog_warning_is_selected_for_targeted_recovery(self):
+        plan = refresh.build_retry_plan({
+            "sources": {
+                "fortimanager": {
+                    "status": "warning",
+                    "consecutiveFailures": 0,
+                    "lastError": "Aucune version collectée pour fortimanager",
+                },
+                "cve-psirt": {
+                    "status": "warning",
+                    "consecutiveFailures": 0,
+                    "lastError": "1 avis PSIRT ignoré après les tentatives",
+                },
+            }
+        })
+
+        self.assertEqual(plan.catalog_args, ("--tool-products", "fortimanager"))
+        self.assertEqual(plan.source_ids, ("fortimanager",))
+
 
 class RecoveryExecutionTests(unittest.TestCase):
     def test_recovery_runs_one_combined_scoped_catalog_command(self):

@@ -1112,8 +1112,16 @@ def fetch_product_models(product_slug: str, timeout: int) -> list[dict[str, str]
     """
     url = f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/products/{product_slug}.json"
     request = urllib.request.Request(url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
-    data = json.loads(read_url_with_retry(request, timeout).decode("utf-8", errors="ignore"))
-    return data.get("products", [])
+    # Use the same three-total-attempt budget as transport retries. A syntactically valid but empty
+    # payload is not usable catalog data, so give Fortinet's endpoint two bounded chances to recover.
+    for attempt in range(3):
+        data = json.loads(read_url_with_retry(request, timeout).decode("utf-8", errors="ignore"))
+        products = data.get("products")
+        if isinstance(products, list) and products:
+            return products
+        if attempt < 2:
+            time.sleep((2 ** attempt) + random.uniform(0, 1))
+    return []
 
 
 def fetch_model_firmwares(product_slug: str, hardware_model_name: str, timeout: int) -> list[dict[str, str]]:
