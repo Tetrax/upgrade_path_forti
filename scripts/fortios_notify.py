@@ -25,8 +25,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fortios_watch import (  # noqa: E402
-    DEFAULT_NOTIFY_HISTORY_PATH,
+from fortios_watch import (
     cross_process_lock,
     parse_health_timestamp,
     read_json_tolerant,
@@ -85,9 +84,7 @@ class EmailConfig:
             return False
         if not _EMAIL_ADDRESS_RE.match(self.smtp_from.strip()):
             return False
-        if not all(_EMAIL_ADDRESS_RE.match(addr.strip()) for addr in self.smtp_to):
-            return False
-        return True
+        return all(_EMAIL_ADDRESS_RE.match(addr.strip()) for addr in self.smtp_to)
 
 
 @dataclass
@@ -141,7 +138,9 @@ def load_email_config(env: dict[str, str] | None = None) -> EmailConfig:
         smtp_to=smtp_to,
         smtp_starttls=_env_bool(environment, "FORTIOS_SMTP_STARTTLS", True),
         smtp_timeout=_env_int(environment, "FORTIOS_SMTP_TIMEOUT", 10),
-        app_url=(environment.get("FORTIOS_APP_URL") or "https://valdev.me:3001/app/").strip(),
+        app_url=(
+            environment.get("FORTIOS_APP_URL") or "https://valdev.me:3001/app/"
+        ).strip(),
     )
 
 
@@ -158,8 +157,12 @@ def load_email_config(env: dict[str, str] | None = None) -> EmailConfig:
 
 _REQUIRED_OUTBOX_STRING_FIELDS = ("category", "dedupKey", "summary", "queuedAt")
 _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS = ("claimedBy", "claimedAt")
-_REQUIRED_OUTBOX_KEYS = _REQUIRED_OUTBOX_STRING_FIELDS + _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS
-_VALID_EVENT_CATEGORIES = frozenset({CATEGORY_CRITICAL, CATEGORY_DAILY, CATEGORY_OPERATIONS})
+_REQUIRED_OUTBOX_KEYS = (
+    _REQUIRED_OUTBOX_STRING_FIELDS + _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS
+)
+_VALID_EVENT_CATEGORIES = frozenset(
+    {CATEGORY_CRITICAL, CATEGORY_DAILY, CATEGORY_OPERATIONS}
+)
 
 
 def _is_valid_notify_timestamp(value: Any) -> bool:
@@ -217,12 +220,12 @@ def _is_valid_outbox_entry(entry: Any) -> bool:
             return False
     if claimed_by is not None and not claimed_by.strip():
         return False
-    if claimed_at is not None and (not claimed_at.strip() or not _is_valid_notify_timestamp(claimed_at)):
+    if claimed_at is not None and (
+        not claimed_at.strip() or not _is_valid_notify_timestamp(claimed_at)
+    ):
         return False
-    if (claimed_by is None) != (claimed_at is None):
-        return False  # must be both-null (unclaimed) or both-set (claimed) -- never just one
-
-    return True
+    # must be both-null (unclaimed) or both-set (claimed) -- never just one
+    return (claimed_by is None) == (claimed_at is None)
 
 
 def _is_valid_checkpoint(value: Any) -> bool:
@@ -250,16 +253,19 @@ def _is_valid_checkpoint(value: Any) -> bool:
     cves_by_id = value.get("cvesById", {})
     if not isinstance(cves_by_id, dict):
         return False
-    if not all(isinstance(cve_id, str) and isinstance(cve, dict) for cve_id, cve in cves_by_id.items()):
+    if not all(
+        isinstance(cve_id, str) and isinstance(cve, dict)
+        for cve_id, cve in cves_by_id.items()
+    ):
         return False
 
     health = value.get("health", {})
     if not isinstance(health, dict):
         return False
-    if not all(isinstance(source_id, str) and isinstance(record, dict) for source_id, record in health.items()):
-        return False
-
-    return True
+    return all(
+        isinstance(source_id, str) and isinstance(record, dict)
+        for source_id, record in health.items()
+    )
 
 
 def _is_valid_notify_state(payload: Any) -> bool:
@@ -269,23 +275,28 @@ def _is_valid_notify_state(payload: Any) -> bool:
     sent_keys = payload.get("sentKeys", {})
     if not isinstance(sent_keys, dict):
         return False
-    if not all(isinstance(key, str) and isinstance(value, str) for key, value in sent_keys.items()):
+    if not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in sent_keys.items()
+    ):
         return False
 
     outbox = payload.get("outbox", [])
-    if not isinstance(outbox, list) or not all(_is_valid_outbox_entry(entry) for entry in outbox):
+    if not isinstance(outbox, list) or not all(
+        _is_valid_outbox_entry(entry) for entry in outbox
+    ):
         return False
 
     eol_state = payload.get("eolState", {})
     if not isinstance(eol_state, dict):
         return False
-    if not all(isinstance(key, str) and isinstance(value, bool) for key, value in eol_state.items()):
+    if not all(
+        isinstance(key, str) and isinstance(value, bool)
+        for key, value in eol_state.items()
+    ):
         return False
 
-    if not _is_valid_checkpoint(payload.get("checkpoint")):
-        return False
-
-    return True
+    return _is_valid_checkpoint(payload.get("checkpoint"))
 
 
 def _empty_notify_state() -> dict[str, Any]:
@@ -301,7 +312,9 @@ def load_notify_state(path: Path) -> dict[str, Any]:
     means the next diff falls back to this run's own before/after snapshot, same as a genuine
     first activation -- never a crash, and never a spam-the-whole-history event either.
     """
-    state = read_json_tolerant(path, None, validate=_is_valid_notify_state, archive_suffix="corrupt")
+    state = read_json_tolerant(
+        path, None, validate=_is_valid_notify_state, archive_suffix="corrupt"
+    )
     if state is None:
         return _empty_notify_state()
     return {
@@ -316,7 +329,9 @@ def load_notify_history(path: Path) -> dict[str, str]:
     return load_notify_state(path)["sentKeys"]
 
 
-def prune_notify_history(history: dict[str, str], *, now: str | None = None) -> dict[str, str]:
+def prune_notify_history(
+    history: dict[str, str], *, now: str | None = None
+) -> dict[str, str]:
     now_dt = dt.datetime.fromisoformat((now or utc_now()).replace("Z", "+00:00"))
     cutoff = now_dt - dt.timedelta(days=NOTIFY_HISTORY_RETENTION_DAYS)
     pruned: dict[str, str] = {}
@@ -330,7 +345,9 @@ def prune_notify_history(history: dict[str, str], *, now: str | None = None) -> 
     return pruned
 
 
-def filter_new_events(events: list[NotificationEvent], history: dict[str, str]) -> list[NotificationEvent]:
+def filter_new_events(
+    events: list[NotificationEvent], history: dict[str, str]
+) -> list[NotificationEvent]:
     """Only events whose dedup_key hasn't already been sent -- this is also what makes a first
     activation or a --cve-backfill safe: those never produce events in the first place (see
     derive_*_events() below, which only ever diffs this run's before/after), but this is the
@@ -339,7 +356,7 @@ def filter_new_events(events: list[NotificationEvent], history: dict[str, str]) 
     return [event for event in events if event.dedup_key not in history]
 
 
-def _parse_iso(value: str | None) -> "dt.datetime | None":
+def _parse_iso(value: str | None) -> dt.datetime | None:
     if not value:
         return None
     try:
@@ -349,7 +366,10 @@ def _parse_iso(value: str | None) -> "dt.datetime | None":
 
 
 def _enqueue_new_events(
-    outbox: list[dict[str, Any]], sent_keys: dict[str, str], new_events: list[NotificationEvent], now: str
+    outbox: list[dict[str, Any]],
+    sent_keys: dict[str, str],
+    new_events: list[NotificationEvent],
+    now: str,
 ) -> None:
     """Mutates `outbox` in place, appending any of `new_events` not already sent or already
     queued. Shared by enqueue_and_claim() and commit_eol_transition() so both agree on exactly
@@ -360,14 +380,16 @@ def _enqueue_new_events(
     for event in filter_new_events(new_events, sent_keys):
         if event.dedup_key in queued_keys:
             continue
-        outbox.append({
-            "category": event.category,
-            "dedupKey": event.dedup_key,
-            "summary": event.summary,
-            "queuedAt": now,
-            "claimedBy": None,
-            "claimedAt": None,
-        })
+        outbox.append(
+            {
+                "category": event.category,
+                "dedupKey": event.dedup_key,
+                "summary": event.summary,
+                "queuedAt": now,
+                "claimedBy": None,
+                "claimedAt": None,
+            }
+        )
         queued_keys.add(event.dedup_key)
 
 
@@ -383,19 +405,30 @@ def _claim_outstanding(
     claimed: list[NotificationEvent] = []
     for entry in outbox:
         claimed_at = _parse_iso(entry.get("claimedAt"))
-        is_stale = claimed_at is not None and (now_dt - claimed_at).total_seconds() > CLAIM_STALE_SECONDS
+        is_stale = (
+            claimed_at is not None
+            and (now_dt - claimed_at).total_seconds() > CLAIM_STALE_SECONDS
+        )
         if entry.get("claimedBy") and not is_stale:
             continue  # actively held by another still-live attempt
         entry["claimedBy"] = claimant
         entry["claimedAt"] = now
-        claimed.append(NotificationEvent(
-            category=entry["category"], dedup_key=entry["dedupKey"], summary=entry["summary"],
-        ))
+        claimed.append(
+            NotificationEvent(
+                category=entry["category"],
+                dedup_key=entry["dedupKey"],
+                summary=entry["summary"],
+            )
+        )
     return claimed
 
 
 def enqueue_and_claim(
-    path: Path, new_events: list[NotificationEvent], *, claimant: str, now: str | None = None
+    path: Path,
+    new_events: list[NotificationEvent],
+    *,
+    claimant: str,
+    now: str | None = None,
 ) -> list[NotificationEvent]:
     """Atomically (a) add any of `new_events` not already sent or already queued to the
     persistent outbox -- BEFORE any attempt to send, so a crash or an SMTP failure right after
@@ -419,7 +452,9 @@ def enqueue_and_claim(
     with cross_process_lock(path):
         state = load_notify_state(path)
         _enqueue_new_events(state["outbox"], state["sentKeys"], new_events, now)
-        claimed = _claim_outstanding(state["outbox"], claimant=claimant, now=now, now_dt=now_dt)
+        claimed = _claim_outstanding(
+            state["outbox"], claimant=claimant, now=now, now_dt=now_dt
+        )
         write_json(path, state)
     return claimed
 
@@ -475,12 +510,16 @@ def commit_events_with_checkpoint(
         state = load_notify_state(path)
         state["checkpoint"] = checkpoint
         _enqueue_new_events(state["outbox"], state["sentKeys"], new_events, now)
-        claimed = _claim_outstanding(state["outbox"], claimant=claimant, now=now, now_dt=now_dt)
+        claimed = _claim_outstanding(
+            state["outbox"], claimant=claimant, now=now, now_dt=now_dt
+        )
         write_json(path, state)
     return claimed
 
 
-def finalize_sent_events(path: Path, sent_events: list[NotificationEvent], *, now: str | None = None) -> None:
+def finalize_sent_events(
+    path: Path, sent_events: list[NotificationEvent], *, now: str | None = None
+) -> None:
     """After a successful send: remove `sent_events` from the outbox and record their dedup keys
     in sentKeys (so a future run's diff-derived duplicate is filtered out before it's even
     queued), pruning old history.
@@ -491,7 +530,11 @@ def finalize_sent_events(path: Path, sent_events: list[NotificationEvent], *, no
     sent_dedup_keys = {event.dedup_key for event in sent_events}
     with cross_process_lock(path):
         state = load_notify_state(path)
-        state["outbox"] = [entry for entry in state["outbox"] if entry["dedupKey"] not in sent_dedup_keys]
+        state["outbox"] = [
+            entry
+            for entry in state["outbox"]
+            if entry["dedupKey"] not in sent_dedup_keys
+        ]
         for event in sent_events:
             state["sentKeys"][event.dedup_key] = now
         state["sentKeys"] = prune_notify_history(state["sentKeys"], now=now)
@@ -522,7 +565,11 @@ def release_claim(path: Path, claimant: str) -> None:
 
 
 def commit_eol_transition(
-    path: Path, eol_state: dict[str, bool], events: list[NotificationEvent], *, now: str | None = None
+    path: Path,
+    eol_state: dict[str, bool],
+    events: list[NotificationEvent],
+    *,
+    now: str | None = None,
 ) -> None:
     """Persist an EOL state transition and the notification event(s) it produced in ONE atomic
     read-modify-write, under a single cross_process_lock() acquisition.
@@ -547,6 +594,7 @@ def commit_eol_transition(
 
 # --- Event derivation ---------------------------------------------------------------------
 
+
 def derive_version_events(
     before_versions_by_product: dict[str, set[str]],
     after_versions_by_product: dict[str, set[str]],
@@ -556,15 +604,18 @@ def derive_version_events(
     for product_id in NOTIFIABLE_VERSION_PRODUCTS:
         short_name = PRODUCT_SHORT_NAMES[product_id]
         new_versions = sorted(
-            after_versions_by_product.get(product_id, set()) - before_versions_by_product.get(product_id, set())
+            after_versions_by_product.get(product_id, set())
+            - before_versions_by_product.get(product_id, set())
         )
         label = product_labels.get(product_id, product_id)
         for version in new_versions:
-            events.append(NotificationEvent(
-                category=CATEGORY_DAILY,
-                dedup_key=f"new-version|{short_name}|{short_name}|{version}",
-                summary=f"Nouvelle version {label} {version}",
-            ))
+            events.append(
+                NotificationEvent(
+                    category=CATEGORY_DAILY,
+                    dedup_key=f"new-version|{short_name}|{short_name}|{version}",
+                    summary=f"Nouvelle version {label} {version}",
+                )
+            )
     return events
 
 
@@ -583,20 +634,26 @@ def _cve_product_summary(cve: dict[str, Any]) -> str:
     return ", ".join(parts) or "produit non précisé"
 
 
-def derive_new_cve_events(newly_added_cves: list[dict[str, Any]]) -> list[NotificationEvent]:
+def derive_new_cve_events(
+    newly_added_cves: list[dict[str, Any]],
+) -> list[NotificationEvent]:
     events = []
     for cve in newly_added_cves:
         severity = (cve.get("severity") or "unknown").lower()
         category = CATEGORY_CRITICAL if severity == "critical" else CATEGORY_DAILY
-        events.append(NotificationEvent(
-            category=category,
-            dedup_key=f"new-cve|psirt|{cve['id']}|{severity}",
-            summary=f"{cve['id']} — {_cve_product_summary(cve)} ({severity})",
-        ))
+        events.append(
+            NotificationEvent(
+                category=category,
+                dedup_key=f"new-cve|psirt|{cve['id']}|{severity}",
+                summary=f"{cve['id']} — {_cve_product_summary(cve)} ({severity})",
+            )
+        )
     return events
 
 
-def _affected_signature(affected: list[dict[str, Any]] | None) -> "frozenset[tuple[str, str, tuple[str, ...], str, str]]":
+def _affected_signature(
+    affected: list[dict[str, Any]] | None,
+) -> frozenset[tuple[str, str, tuple[str, ...], str, str]]:
     """A hashable, fully-comparable snapshot of a CVE's affected scope -- None values normalized
     to "" so entries can be sorted/set-diffed without ever comparing None to str (which raises).
     """
@@ -612,9 +669,13 @@ def _affected_signature(affected: list[dict[str, Any]] | None) -> "frozenset[tup
     )
 
 
-def _cvss_changed_significantly(before_score: float | None, after_score: float | None) -> bool:
+def _cvss_changed_significantly(
+    before_score: float | None, after_score: float | None
+) -> bool:
     if before_score is None or after_score is None:
-        return before_score != after_score  # a score appearing/disappearing is itself significant
+        return (
+            before_score != after_score
+        )  # a score appearing/disappearing is itself significant
     return abs(after_score - before_score) >= CVSS_SIGNIFICANT_DELTA
 
 
@@ -643,7 +704,9 @@ def derive_cve_modification_events(
         after_affected = _affected_signature(after.get("affected"))
         scope_changed = before_affected != after_affected
 
-        cvss_changed = _cvss_changed_significantly(before.get("cvssScore"), after.get("cvssScore"))
+        cvss_changed = _cvss_changed_significantly(
+            before.get("cvssScore"), after.get("cvssScore")
+        )
 
         if not (severity_changed or scope_changed or cvss_changed):
             continue
@@ -654,7 +717,9 @@ def derive_cve_modification_events(
         if cvss_changed:
             before_cvss = before.get("cvssScore")
             after_cvss = after.get("cvssScore")
-            changes.append(f"CVSS {before_cvss if before_cvss is not None else '?'} → {after_cvss if after_cvss is not None else '?'}")
+            changes.append(
+                f"CVSS {before_cvss if before_cvss is not None else '?'} → {after_cvss if after_cvss is not None else '?'}"
+            )
         if scope_changed:
             added = after_affected - before_affected
             removed = before_affected - after_affected
@@ -669,22 +734,31 @@ def derive_cve_modification_events(
         # Keyed to the new state (not a description of the diff) so a DIFFERENT later change to
         # the same CVE still gets its own notification, while an identical already-notified
         # state never resends just because this run happened to re-derive it.
-        dedup_key = "|".join([
-            "cve-modified", "psirt", cve_id, after_severity,
-            str(after.get("cvssScore")), str(sorted(after_affected)),
-        ])
-        events.append(NotificationEvent(
-            category=category,
-            dedup_key=dedup_key,
-            summary=f"{cve_id} : {', '.join(changes)} ({_cve_product_summary(after)})",
-        ))
+        dedup_key = "|".join(
+            [
+                "cve-modified",
+                "psirt",
+                cve_id,
+                after_severity,
+                str(after.get("cvssScore")),
+                str(sorted(after_affected)),
+            ]
+        )
+        events.append(
+            NotificationEvent(
+                category=category,
+                dedup_key=dedup_key,
+                summary=f"{cve_id} : {', '.join(changes)} ({_cve_product_summary(after)})",
+            )
+        )
     return events
 
 
 def derive_eol_events(
     after_lifecycle: dict[str, dict[str, Any]],
     eol_state: dict[str, bool],
-    *, now: str | None = None,
+    *,
+    now: str | None = None,
 ) -> tuple[list[NotificationEvent], dict[str, bool]]:
     """Fires once when a FortiOS branch's support window naturally elapses.
 
@@ -705,7 +779,9 @@ def derive_eol_events(
     save_eol_state()) regardless of whether the email actually sends, since the crossing itself
     was correctly observed either way.
     """
-    now_date = dt.datetime.fromisoformat((now or utc_now()).replace("Z", "+00:00")).date()
+    now_date = dt.datetime.fromisoformat(
+        (now or utc_now()).replace("Z", "+00:00")
+    ).date()
     updated_state = dict(eol_state)
     events: list[NotificationEvent] = []
     for branch, info in after_lifecycle.items():
@@ -720,14 +796,18 @@ def derive_eol_events(
         is_eol_now = support_dt < now_date
         was_eol = eol_state.get(branch)
         if was_eol is None:
-            updated_state[branch] = is_eol_now  # first sighting: bootstrap silently, no event
+            updated_state[branch] = (
+                is_eol_now  # first sighting: bootstrap silently, no event
+            )
             continue
         if is_eol_now and not was_eol:
-            events.append(NotificationEvent(
-                category=CATEGORY_DAILY,
-                dedup_key=f"support-eol|fortios|{branch}|{support_date}",
-                summary=f"FortiOS {branch} est passé en fin de support (depuis le {support_date})",
-            ))
+            events.append(
+                NotificationEvent(
+                    category=CATEGORY_DAILY,
+                    dedup_key=f"support-eol|fortios|{branch}|{support_date}",
+                    summary=f"FortiOS {branch} est passé en fin de support (depuis le {support_date})",
+                )
+            )
         updated_state[branch] = is_eol_now
     return events, updated_state
 
@@ -746,23 +826,35 @@ def derive_source_health_events(
         after_failures = after.get("consecutiveFailures") or 0
         label = source_labels.get(source_id, source_id)
 
-        if after_failures >= CONSECUTIVE_FAILURE_NOTIFY_THRESHOLD and before_failures < CONSECUTIVE_FAILURE_NOTIFY_THRESHOLD:
-            events.append(NotificationEvent(
-                category=CATEGORY_OPERATIONS,
-                dedup_key=f"source-failure|{source_id}|consecutive|{after_failures}",
-                summary=f"Collecte {label} en échec depuis {after_failures} exécutions consécutives",
-            ))
-        elif before_failures >= CONSECUTIVE_FAILURE_NOTIFY_THRESHOLD and after_failures == 0 and after.get("lastSuccessAt"):
+        if (
+            after_failures >= CONSECUTIVE_FAILURE_NOTIFY_THRESHOLD
+            and before_failures < CONSECUTIVE_FAILURE_NOTIFY_THRESHOLD
+        ):
+            events.append(
+                NotificationEvent(
+                    category=CATEGORY_OPERATIONS,
+                    dedup_key=f"source-failure|{source_id}|consecutive|{after_failures}",
+                    summary=f"Collecte {label} en échec depuis {after_failures} exécutions consécutives",
+                )
+            )
+        elif (
+            before_failures >= CONSECUTIVE_FAILURE_NOTIFY_THRESHOLD
+            and after_failures == 0
+            and after.get("lastSuccessAt")
+        ):
             success_date = after["lastSuccessAt"][:10]
-            events.append(NotificationEvent(
-                category=CATEGORY_OPERATIONS,
-                dedup_key=f"source-recovered|{source_id}|lastSuccessAt|{success_date}",
-                summary=f"Collecte {label} de nouveau opérationnelle (après {before_failures} échecs)",
-            ))
+            events.append(
+                NotificationEvent(
+                    category=CATEGORY_OPERATIONS,
+                    dedup_key=f"source-recovered|{source_id}|lastSuccessAt|{success_date}",
+                    summary=f"Collecte {label} de nouveau opérationnelle (après {before_failures} échecs)",
+                )
+            )
     return events
 
 
 # --- Email composition and sending ---------------------------------------------------------
+
 
 def _format_event_lines(events: list[NotificationEvent]) -> list[str]:
     shown = events[:MAX_EVENTS_PER_SECTION]
@@ -797,7 +889,9 @@ def compose_email(
     if critical:
         plural = "s" if len(critical) > 1 else ""
         verb = "ont" if len(critical) > 1 else "a"
-        lines.append(f"{len(critical)} nouvelle{plural} CVE critique{plural} {verb} été détectée{plural}.")
+        lines.append(
+            f"{len(critical)} nouvelle{plural} CVE critique{plural} {verb} été détectée{plural}."
+        )
         lines.append("")
         lines.extend(_format_event_lines(critical))
         lines.append("")
@@ -826,7 +920,9 @@ def send_email(config: EmailConfig, subject: str, text_body: str) -> bool:
     if not config.enabled:
         return False
     if not config.is_complete():
-        sys.stderr.write("Notification email ignorée : configuration SMTP incomplète ou invalide (host/port/from/to).\n")
+        sys.stderr.write(
+            "Notification email ignorée : configuration SMTP incomplète ou invalide (host/port/from/to).\n"
+        )
         return False
 
     try:
@@ -836,7 +932,9 @@ def send_email(config: EmailConfig, subject: str, text_body: str) -> bool:
         message["To"] = ", ".join(config.smtp_to)
         message.set_content(text_body)
 
-        with smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=config.smtp_timeout) as client:
+        with smtplib.SMTP(
+            config.smtp_host, config.smtp_port, timeout=config.smtp_timeout
+        ) as client:
             if config.smtp_starttls:
                 client.starttls(context=ssl.create_default_context())
             if config.smtp_username:
@@ -844,23 +942,33 @@ def send_email(config: EmailConfig, subject: str, text_body: str) -> bool:
             client.send_message(message)
         return True
     except (smtplib.SMTPException, OSError, TimeoutError, ValueError) as error:
-        sys.stderr.write(f"Échec de l'envoi de l'email de notification : {sanitize_health_error(error)}\n")
+        sys.stderr.write(
+            f"Échec de l'envoi de l'email de notification : {sanitize_health_error(error)}\n"
+        )
         return False
 
 
 def send_test_email(config: EmailConfig) -> bool:
     if not config.enabled:
-        print("FORTIOS_EMAIL_ENABLED=false : activez-le dans /etc/fortios-upgrade-intelligence.env avant de tester.", file=sys.stderr)
+        print(
+            "FORTIOS_EMAIL_ENABLED=false : activez-le dans /etc/fortios-upgrade-intelligence.env avant de tester.",
+            file=sys.stderr,
+        )
         return False
     if not config.is_complete():
         missing = [
-            name for name, value in (
+            name
+            for name, value in (
                 ("FORTIOS_SMTP_HOST", config.smtp_host),
                 ("FORTIOS_SMTP_FROM", config.smtp_from),
                 ("FORTIOS_SMTP_TO", config.smtp_to),
-            ) if not value
+            )
+            if not value
         ]
-        print(f"Configuration SMTP incomplète, variable(s) manquante(s) : {', '.join(missing)}.", file=sys.stderr)
+        print(
+            f"Configuration SMTP incomplète, variable(s) manquante(s) : {', '.join(missing)}.",
+            file=sys.stderr,
+        )
         return False
 
     subject = "[FortiOS Upgrade Intelligence] Email de test"
@@ -873,5 +981,8 @@ def send_test_email(config: EmailConfig) -> bool:
     if sent:
         print(f"Email de test envoyé à {', '.join(config.smtp_to)}.")
     else:
-        print("Échec de l'envoi de l'email de test (voir le message d'erreur ci-dessus).", file=sys.stderr)
+        print(
+            "Échec de l'envoi de l'email de test (voir le message d'erreur ci-dessus).",
+            file=sys.stderr,
+        )
     return sent

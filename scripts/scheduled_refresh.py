@@ -18,10 +18,11 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -34,7 +35,6 @@ from fortios_watch import (
     HEALTH_STATUS_ERROR,
     HEALTH_STATUS_RUNNING,
     HEALTH_STATUS_WARNING,
-    HealthSourceResult,
     SOURCE_COMPAT_MATRIX,
     SOURCE_CVE_PSIRT,
     SOURCE_FORTIANALYZER,
@@ -43,9 +43,10 @@ from fortios_watch import (
     SOURCE_FORTIMANAGER,
     SOURCE_FORTIOS_DOCS,
     SOURCE_FORTIOS_LIFECYCLE,
+    HealthSourceResult,
     health_mark_running,
-    read_json,
     read_health_state,
+    read_json,
     record_health_results,
     utc_now,
     utc_now_precise,
@@ -84,15 +85,18 @@ def _needs_retry(record: dict[str, Any] | None) -> bool:
         return False
     if record.get("status") in {HEALTH_STATUS_ERROR, HEALTH_STATUS_RUNNING}:
         return True
-    return (
-        record.get("status") == HEALTH_STATUS_WARNING
-        and str(record.get("lastError") or "").startswith("Aucune version")
-    )
+    return record.get("status") == HEALTH_STATUS_WARNING and str(
+        record.get("lastError") or ""
+    ).startswith("Aucune version")
 
 
 def build_retry_plan(health_state: dict[str, Any]) -> RetryPlan:
     sources = health_state.get("sources") or {}
-    failed = tuple(source_id for source_id in RETRYABLE_SOURCE_IDS if _needs_retry(sources.get(source_id)))
+    failed = tuple(
+        source_id
+        for source_id in RETRYABLE_SOURCE_IDS
+        if _needs_retry(sources.get(source_id))
+    )
     failed_set = set(failed)
     checked = set(failed)
     args: list[str] = []
@@ -122,7 +126,9 @@ def build_retry_plan(health_state: dict[str, Any]) -> RetryPlan:
         catalog_args=tuple(args),
         compatibility=SOURCE_COMPAT_MATRIX in failed_set,
         source_ids=failed,
-        checked_source_ids=tuple(source_id for source_id in RETRYABLE_SOURCE_IDS if source_id in checked),
+        checked_source_ids=tuple(
+            source_id for source_id in RETRYABLE_SOURCE_IDS if source_id in checked
+        ),
     )
 
 
@@ -166,21 +172,27 @@ def _run_compatibility(*, root: Path, runner: Runner, python: str) -> int:
         status = 1
         process_error: Any = error
     else:
-        record = (read_health_state(health_path).get("sources") or {}).get(SOURCE_COMPAT_MATRIX) or {}
+        record = (read_health_state(health_path).get("sources") or {}).get(
+            SOURCE_COMPAT_MATRIX
+        ) or {}
         process_error = (
             f"Compatibility importer exited with status {status} without finalizing health"
-            if record.get("status") == HEALTH_STATUS_RUNNING else None
+            if record.get("status") == HEALTH_STATUS_RUNNING
+            else None
         )
 
     if process_error is not None:
-        record_health_results(health_path, {
-            SOURCE_COMPAT_MATRIX: HealthSourceResult(
-                status=HEALTH_STATUS_ERROR,
-                started_at=started_at or utc_now_precise(),
-                duration_seconds=round(time.monotonic() - started, 3),
-                error=process_error,
-            )
-        })
+        record_health_results(
+            health_path,
+            {
+                SOURCE_COMPAT_MATRIX: HealthSourceResult(
+                    status=HEALTH_STATUS_ERROR,
+                    started_at=started_at or utc_now_precise(),
+                    duration_seconds=round(time.monotonic() - started, 3),
+                    error=process_error,
+                )
+            },
+        )
         return status or 1
     return status
 
@@ -192,11 +204,14 @@ def _notify_compatibility_transition(*, root: Path) -> None:
         return
     health_after = read_health_state(root / DEFAULT_HEALTH_PATH).get("sources", {})
     history_path = root / DEFAULT_NOTIFY_HISTORY_PATH
-    checkpoint = fortios_notify.ensure_checkpoint(history_path, {
-        "versionsByProduct": {},
-        "cvesById": {},
-        "health": health_after,
-    })
+    checkpoint = fortios_notify.ensure_checkpoint(
+        history_path,
+        {
+            "versionsByProduct": {},
+            "cvesById": {},
+            "health": health_after,
+        },
+    )
     checkpoint_health = checkpoint.get("health") or {}
     compatibility_after = health_after.get(SOURCE_COMPAT_MATRIX)
     events = fortios_notify.derive_source_health_events(
@@ -216,7 +231,9 @@ def _notify_compatibility_transition(*, root: Path) -> None:
         events,
         claimant=claimant,
     )
-    composed = fortios_notify.compose_email(pending, app_url=config.app_url, run_timestamp=utc_now())
+    composed = fortios_notify.compose_email(
+        pending, app_url=config.app_url, run_timestamp=utc_now()
+    )
     if not composed:
         return
     subject, body = composed
@@ -244,9 +261,11 @@ def _run_full_unlocked(
         [
             python,
             "scripts/fortios_watch.py",
-            "--base", "data/fortios-data.generated.json",
+            "--base",
+            "data/fortios-data.generated.json",
             "--docs-catalog",
-            "--tool-products", "fortianalyzer,fortimanager",
+            "--tool-products",
+            "fortianalyzer,fortimanager",
             "--forticlient-catalog",
             "--cve-catalog",
         ],
@@ -299,11 +318,14 @@ def _run_full_and_mark_unlocked(
     ).astimezone(PARIS)
     # This is deliberately separate from daily-run: scoped CVE/recovery invocations update that
     # aggregate too. Only a returned full runner writes this durable attempt marker.
-    write_json(root / "data" / FULL_REFRESH_ATTEMPT_NAME, {
-        "parisDate": paris_now.date().isoformat(),
-        "completedAt": paris_now.isoformat(),
-        "status": status,
-    })
+    write_json(
+        root / "data" / FULL_REFRESH_ATTEMPT_NAME,
+        {
+            "parisDate": paris_now.date().isoformat(),
+            "completedAt": paris_now.isoformat(),
+            "status": status,
+        },
+    )
     return status
 
 
@@ -312,7 +334,13 @@ def run_cve_refresh(
 ) -> int:
     with refresh_lock(root):
         return _run(
-            [python, "scripts/fortios_watch.py", "--base", "data/fortios-data.generated.json", "--cve-catalog"],
+            [
+                python,
+                "scripts/fortios_watch.py",
+                "--base",
+                "data/fortios-data.generated.json",
+                "--cve-catalog",
+            ],
             root=root,
             runner=runner,
         )
@@ -337,21 +365,28 @@ def run_recovery(
             # Persistent systemd timers can race at boot. If recovery wins the lock, perform the
             # missing full pass here before consulting health instead of consuming prior-day data.
             # Docker restart catch-up uses the same runtime guarantee.
-            print("07:45 recovery: today's full refresh is missing; running it first.", flush=True)
+            print(
+                "07:45 recovery: today's full refresh is missing; running it first.",
+                flush=True,
+            )
             catch_up_status = _run_full_and_mark_unlocked(
                 root=root,
                 runner=runner,
                 python=python,
-                compatibility_python=compatibility_python or _compatibility_python(root),
+                compatibility_python=compatibility_python
+                or _compatibility_python(root),
                 completion_now_fn=completion_now_fn,
             )
             before_state = read_health_state(health_path)
         plan = build_retry_plan(before_state)
         if not plan.source_ids:
-            print("07:45 recovery: every source is healthy; nothing to retry.", flush=True)
+            print(
+                "07:45 recovery: every source is healthy; nothing to retry.", flush=True
+            )
             return catch_up_status
 
         print(f"07:45 recovery: retrying {', '.join(plan.source_ids)}.", flush=True)
+
         def execute(retry_plan: RetryPlan) -> int:
             status = 0
             if retry_plan.compatibility:
@@ -365,7 +400,8 @@ def run_recovery(
                     [
                         python,
                         "scripts/fortios_watch.py",
-                        "--base", "data/fortios-data.generated.json",
+                        "--base",
+                        "data/fortios-data.generated.json",
                         *retry_plan.catalog_args,
                     ],
                     root=root,
@@ -383,14 +419,20 @@ def run_recovery(
         newly_failed = [
             source_id
             for source_id in plan.checked_source_ids
-            if source_id not in plan.source_ids and _needs_retry(after_sources.get(source_id))
+            if source_id not in plan.source_ids
+            and _needs_retry(after_sources.get(source_id))
         ]
         if newly_failed:
             # A coupled collector can fail a peer that was healthy at 07:45. Give that new failure
             # exactly one bounded follow-up pass so it either recovers or reaches the alert threshold.
-            follow_up = build_retry_plan({
-                "sources": {source_id: after_sources[source_id] for source_id in newly_failed}
-            })
+            follow_up = build_retry_plan(
+                {
+                    "sources": {
+                        source_id: after_sources[source_id]
+                        for source_id in newly_failed
+                    }
+                }
+            )
             follow_up_status = execute(follow_up)
             command_status = command_status or follow_up_status
             touched_sources.update(follow_up.checked_source_ids)
@@ -403,7 +445,11 @@ def run_recovery(
             if _needs_retry((after_state.get("sources") or {}).get(source_id))
         ]
         if remaining:
-            print(f"07:45 recovery failed for: {', '.join(remaining)}.", file=sys.stderr, flush=True)
+            print(
+                f"07:45 recovery failed for: {', '.join(remaining)}.",
+                file=sys.stderr,
+                flush=True,
+            )
             return catch_up_status or command_status or 1
         print("07:45 recovery completed successfully.", flush=True)
         return catch_up_status or command_status

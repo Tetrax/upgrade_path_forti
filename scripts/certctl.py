@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import os
 import re
 import secrets
@@ -35,7 +36,9 @@ def _openssl_result(
 ) -> subprocess.CompletedProcess[bytes]:
     command = ["openssl", *args]
     if password is None:
-        return subprocess.run(command, input=input_data, capture_output=True, check=False)
+        return subprocess.run(
+            command, input=input_data, capture_output=True, check=False
+        )
 
     read_descriptor, write_descriptor = os.pipe()
     try:
@@ -100,7 +103,12 @@ def normalize_certificate_blocks(data: bytes) -> list[bytes]:
     for block in blocks:
         normalized.append(
             run_openssl(
-                "x509", "-inform", "PEM", "-outform", "PEM", input_data=block,
+                "x509",
+                "-inform",
+                "PEM",
+                "-outform",
+                "PEM",
+                input_data=block,
             ).stdout
         )
     return normalized
@@ -122,7 +130,9 @@ def normalized_chain(path: Path) -> list[bytes]:
     try:
         return [run_openssl("x509", "-in", str(path), "-outform", "PEM").stdout]
     except CertificateError as error:
-        raise CertificateError(f"Chaîne de certificats non reconnue : {path}") from error
+        raise CertificateError(
+            f"Chaîne de certificats non reconnue : {path}"
+        ) from error
 
 
 def validate_certificate_dates(certificate: bytes, label: str) -> None:
@@ -139,14 +149,21 @@ def validate_certificate_dates(certificate: bytes, label: str) -> None:
 
 def certificate_name(certificate: bytes, field: str) -> bytes:
     result = run_openssl(
-        "x509", "-noout", f"-{field}", "-nameopt", "RFC2253", input_data=certificate,
+        "x509",
+        "-noout",
+        f"-{field}",
+        "-nameopt",
+        "RFC2253",
+        input_data=certificate,
     ).stdout.strip()
     return result.split(b"=", 1)[1] if b"=" in result else result
 
 
 def order_chain(leaf: bytes, chain: list[bytes]) -> list[bytes]:
     if leaf in chain or len(set(chain)) != len(chain):
-        raise CertificateError("La chaîne contient le certificat feuille ou un doublon.")
+        raise CertificateError(
+            "La chaîne contient le certificat feuille ou un doublon."
+        )
     remaining = list(chain)
     ordered: list[bytes] = []
     current = leaf
@@ -158,7 +175,9 @@ def order_chain(leaf: bytes, chain: list[bytes]) -> list[bytes]:
             if certificate_name(certificate, "subject") == issuer
         ]
         if len(matches) != 1:
-            raise CertificateError("La chaîne est ambiguë ou ne correspond pas au certificat.")
+            raise CertificateError(
+                "La chaîne est ambiguë ou ne correspond pas au certificat."
+            )
         current = matches[0]
         remaining.remove(current)
         ordered.append(current)
@@ -169,10 +188,14 @@ def validate_chain(leaf: bytes, chain: list[bytes]) -> list[bytes]:
     chain = order_chain(leaf, chain) if chain else []
     certificates = [leaf, *chain]
     for index, certificate in enumerate(certificates):
-        validate_certificate_dates(certificate, "feuille" if index == 0 else f"de chaîne {index}")
-    for child, issuer in zip(certificates, certificates[1:]):
+        validate_certificate_dates(
+            certificate, "feuille" if index == 0 else f"de chaîne {index}"
+        )
+    for child, issuer in itertools.pairwise(certificates):
         if certificate_name(child, "issuer") != certificate_name(issuer, "subject"):
-            raise CertificateError("La chaîne n'est pas ordonnée ou ne correspond pas au certificat.")
+            raise CertificateError(
+                "La chaîne n'est pas ordonnée ou ne correspond pas au certificat."
+            )
 
     with tempfile.TemporaryDirectory(prefix="fortios-chain-") as temporary:
         directory = Path(temporary)
@@ -181,8 +204,12 @@ def validate_chain(leaf: bytes, chain: list[bytes]) -> list[bytes]:
         leaf_path.write_bytes(leaf)
         trusted_path.write_bytes(chain[-1] if chain else leaf)
         arguments = [
-            "verify", "-partial_chain", "-purpose", "sslserver",
-            "-trusted", str(trusted_path),
+            "verify",
+            "-partial_chain",
+            "-purpose",
+            "sslserver",
+            "-trusted",
+            str(trusted_path),
         ]
         if len(chain) > 1:
             intermediates = directory / "intermediates.pem"
@@ -221,7 +248,9 @@ def configured_runtime_owner() -> tuple[int, int] | None:
     except ValueError as error:
         raise CertificateError("PUID et PGID doivent être numériques.") from error
     if uid <= 0 or gid <= 0:
-        raise CertificateError("PUID et PGID doivent être strictement supérieurs à zéro.")
+        raise CertificateError(
+            "PUID et PGID doivent être strictement supérieurs à zéro."
+        )
     return uid, gid
 
 
@@ -236,14 +265,20 @@ def activate_version(
     previous_version: str | None = None
     if output_dir.is_symlink():
         current_target = os.readlink(output_dir)
-        if Path(current_target).is_absolute() or not active_pattern.fullmatch(current_target):
+        if Path(current_target).is_absolute() or not active_pattern.fullmatch(
+            current_target
+        ):
             raise CertificateError("Le lien actif existant n'est pas géré par certctl.")
         previous_path = output_dir.parent / current_target
         if previous_path.is_symlink() or not previous_path.is_dir():
-            raise CertificateError("La version TLS active n'est pas un répertoire géré valide.")
+            raise CertificateError(
+                "La version TLS active n'est pas un répertoire géré valide."
+            )
         previous_version = current_target
     elif output_dir.exists():
-        raise CertificateError(f"Le chemin de sortie existe et n'est pas un lien géré : {output_dir}")
+        raise CertificateError(
+            f"Le chemin de sortie existe et n'est pas un lien géré : {output_dir}"
+        )
 
     for candidate in output_dir.parent.iterdir():
         if (
@@ -258,7 +293,9 @@ def activate_version(
     fsync_directory(output_dir.parent)
 
     version_dir = output_dir.parent / f".{output_dir.name}-{secrets.token_hex(8)}"
-    temporary_link = output_dir.parent / f".{output_dir.name}-link-{secrets.token_hex(8)}"
+    temporary_link = (
+        output_dir.parent / f".{output_dir.name}-link-{secrets.token_hex(8)}"
+    )
     version_dir.mkdir(mode=0o700)
     activated = False
     try:
@@ -293,16 +330,16 @@ def activate_version(
     post_commit_warning = False
     try:
         fsync_directory(output_dir.parent)
-    except Exception:
+    except OSError:
         post_commit_warning = True
     if previous_version is not None:
         try:
             shutil.rmtree(output_dir.parent / previous_version)
-        except Exception:
+        except OSError:
             post_commit_warning = True
     try:
         fsync_directory(output_dir.parent)
-    except Exception:
+    except OSError:
         post_commit_warning = True
     if post_commit_warning:
         print(
@@ -323,7 +360,11 @@ def install_pem(
 ) -> None:
     run_openssl("x509", "-in", str(source), "-noout")
     normalized_certificate = run_openssl(
-        "x509", "-in", str(source), "-outform", "PEM",
+        "x509",
+        "-in",
+        str(source),
+        "-outform",
+        "PEM",
     ).stdout
     validate_certificate_dates(normalized_certificate, "feuille")
     san = subprocess.run(
@@ -355,7 +396,10 @@ def install_pem(
     owner = configured_runtime_owner()
     runtime_gid = owner[1] if owner is not None else None
     with certificate_directory_lock(
-        output_dir.parent, exclusive=True, create=True, runtime_gid=runtime_gid,
+        output_dir.parent,
+        exclusive=True,
+        create=True,
+        runtime_gid=runtime_gid,
     ):
         activate_version(
             output_dir,
@@ -375,13 +419,17 @@ def install_certificate(
     password: bytes | None = None,
 ) -> None:
     if password_file is not None and password is not None:
-        raise CertificateError("Le mot de passe doit être fourni par fichier ou en mémoire, pas les deux.")
+        raise CertificateError(
+            "Le mot de passe doit être fourni par fichier ou en mémoire, pas les deux."
+        )
     if key is not None:
         install_pem(source, key, hostname, output_dir, chain, password_file, password)
         return
 
     if chain is not None:
-        raise CertificateError("--chain ne peut pas être combiné avec un bundle PKCS#12.")
+        raise CertificateError(
+            "--chain ne peut pas être combiné avec un bundle PKCS#12."
+        )
 
     passin = f"file:{password_file}" if password_file else "pass:"
     temporary_dir = Path(tempfile.mkdtemp(prefix="fortios-certctl-"))
@@ -448,9 +496,13 @@ def install_certificate(
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Installer un certificat TLS pour Upgrade Path.")
+    parser = argparse.ArgumentParser(
+        description="Installer un certificat TLS pour Upgrade Path."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    install = subparsers.add_parser("install", help="Valider et installer un certificat.")
+    install = subparsers.add_parser(
+        "install", help="Valider et installer un certificat."
+    )
     install.add_argument("source", type=Path)
     install.add_argument("--key", type=Path)
     install.add_argument("--password-file", type=Path)
@@ -464,8 +516,12 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
         install_certificate(
-            args.source, args.key, args.hostname, args.output_dir,
-            args.password_file, args.chain,
+            args.source,
+            args.key,
+            args.hostname,
+            args.output_dir,
+            args.password_file,
+            args.chain,
         )
     except (CertificateError, OSError) as error:
         print(f"Erreur certificat : {error}", file=sys.stderr)

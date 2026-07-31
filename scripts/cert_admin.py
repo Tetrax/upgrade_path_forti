@@ -19,7 +19,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_CREDENTIALS = Path(
     os.environ.get(
         "FORTIOS_CERT_ADMIN_FILE",
@@ -121,7 +120,9 @@ def credential_lock(
         try:
             descriptor = os.open(lock_path, os.O_RDONLY)
         except OSError as error:
-            raise CredentialError("Verrou du compte administrateur indisponible.") from error
+            raise CredentialError(
+                "Verrou du compte administrateur indisponible."
+            ) from error
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
         yield
@@ -137,7 +138,9 @@ def write_credentials(path: Path, payload: dict[str, Any]) -> None:
         path.parent.chmod(0o750)
         os.chown(path.parent, 0, runtime_gid)
     with credential_lock(path, exclusive=True, runtime_gid=runtime_gid):
-        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=path.parent
+        )
         temporary = Path(temporary_name)
         try:
             os.fchmod(descriptor, 0o640 if runtime_gid is not None else 0o600)
@@ -243,7 +246,9 @@ def read_password(password_stdin: bool) -> tuple[str, str]:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Configurer le compte administrateur de /cert.")
+    parser = argparse.ArgumentParser(
+        description="Configurer le compte administrateur de /cert."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("setup", "reset"):
         subparser = subparsers.add_parser(command)

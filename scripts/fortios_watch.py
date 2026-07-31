@@ -32,11 +32,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
-
+from typing import Any
 
 VERSION_RE = re.compile(r"\b\d+\.\d+\.\d+(?:\.\d+)?\b")
 DOC_MODEL_RE = re.compile(r"\b(?:FG|FWF|FGR|FFW)-[A-Z0-9][A-Z0-9-]*\b")
@@ -46,7 +46,20 @@ PSIRT_RSS_URL = "https://www.fortiguard.com/rss/ir.xml"
 FORTINET_DOCS_BASE_URL = "https://docs.fortinet.com"
 FORTINET_UPGRADE_PATH_URL = f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/upgrade-path"
 DEFAULT_DOCS_MAJOR_VERSIONS = (
-    "8.4", "8.2", "8.0", "7.6", "7.4", "7.2", "7.0", "6.4", "6.2", "6.0", "5.6", "5.4", "5.2", "5.0",
+    "8.4",
+    "8.2",
+    "8.0",
+    "7.6",
+    "7.4",
+    "7.2",
+    "7.0",
+    "6.4",
+    "6.2",
+    "6.0",
+    "5.6",
+    "5.4",
+    "5.2",
+    "5.0",
 )
 
 FORTICLIENT_PRODUCT_ID = "forticlient"
@@ -114,7 +127,12 @@ class DocsRelease:
 
 
 def utc_now() -> str:
-    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        dt.datetime.now(dt.UTC)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def utc_now_precise() -> str:
@@ -152,7 +170,7 @@ def read_json_tolerant(
     path: Path,
     default: Any,
     *,
-    validate: "Callable[[Any], bool] | None" = None,
+    validate: Callable[[Any], bool] | None = None,
     archive_suffix: str = "corrupt",
 ) -> Any:
     """Best-effort JSON read for files that must never be allowed to break the process reading
@@ -179,7 +197,9 @@ def read_json_tolerant(
         # of a bug in our own writer -- it's an environment/permissions issue outside this
         # process's control. Best-effort: log a short warning (no traceback, no secrets) and
         # carry on exactly as if the file were simply absent.
-        sys.stderr.write(f"Avertissement : lecture de {path} impossible ({sanitize_health_error(error)}), traité comme absent.\n")
+        sys.stderr.write(
+            f"Avertissement : lecture de {path} impossible ({sanitize_health_error(error)}), traité comme absent.\n"
+        )
         return default
     if validate is not None and not validate(payload):
         _archive_corrupt_file(path, archive_suffix)
@@ -270,9 +290,15 @@ DEFAULT_HEALTH_PATH = Path("data/fortios-health.json")
 DEFAULT_NOTIFY_HISTORY_PATH = Path("data/fortios-notify-history.json")
 
 
-_VALID_HEALTH_STATUSES = frozenset({
-    HEALTH_STATUS_OK, HEALTH_STATUS_WARNING, HEALTH_STATUS_ERROR, HEALTH_STATUS_RUNNING, HEALTH_STATUS_SKIPPED,
-})
+_VALID_HEALTH_STATUSES = frozenset(
+    {
+        HEALTH_STATUS_OK,
+        HEALTH_STATUS_WARNING,
+        HEALTH_STATUS_ERROR,
+        HEALTH_STATUS_RUNNING,
+        HEALTH_STATUS_SKIPPED,
+    }
+)
 
 
 def _is_valid_health_timestamp(value: Any) -> bool:
@@ -320,15 +346,14 @@ def _is_valid_health_source_record(record: Any) -> bool:
         return False
 
     duration_seconds = record.get("durationSeconds")
-    if duration_seconds is not None:
-        if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, (int, float)):
-            return False
-
-    last_error = record.get("lastError")
-    if last_error is not None and not isinstance(last_error, str):
+    if duration_seconds is not None and (
+        isinstance(duration_seconds, bool)
+        or not isinstance(duration_seconds, (int, float))
+    ):
         return False
 
-    return True
+    last_error = record.get("lastError")
+    return not (last_error is not None and not isinstance(last_error, str))
 
 
 def _is_valid_health_state(payload: Any) -> bool:
@@ -347,7 +372,10 @@ def read_health_state(path: Path) -> dict[str, Any]:
     truncated or garbled fortios-health.json used to raise JSONDecodeError right here and take
     the whole run down with it.
     """
-    return read_json_tolerant(path, {"sources": {}}, validate=_is_valid_health_state, archive_suffix="corrupt")
+    return read_json_tolerant(
+        path, {"sources": {}}, validate=_is_valid_health_state, archive_suffix="corrupt"
+    )
+
 
 # A health entry is meant to be a short, human-readable summary shown directly in the UI, never
 # a debugging dump -- scrub anything that looks like a credential/token before it's ever
@@ -367,7 +395,11 @@ def sanitize_health_error(error: BaseException | str | None) -> str | None:
         return None
     message = str(error).strip()
     if not message:
-        message = type(error).__name__ if isinstance(error, BaseException) else "Erreur inconnue"
+        message = (
+            type(error).__name__
+            if isinstance(error, BaseException)
+            else "Erreur inconnue"
+        )
     for pattern in _HEALTH_SECRET_PATTERNS:
         message = pattern.sub("[masqué]", message)
     message = message.splitlines()[0]  # one line only, never a multi-line traceback
@@ -381,6 +413,7 @@ class HealthSourceResult:
     health_mark_running(), or manually for sources that don't use it) and doubles as the
     ordering key that keeps an older run's result from clobbering a newer one.
     """
+
     status: str
     started_at: str
     duration_seconds: float
@@ -388,7 +421,9 @@ class HealthSourceResult:
     error: BaseException | str | None = None
 
 
-def _merge_health_source(existing: dict[str, Any], result: HealthSourceResult) -> dict[str, Any]:
+def _merge_health_source(
+    existing: dict[str, Any], result: HealthSourceResult
+) -> dict[str, Any]:
     # An older/slower run's result must never clobber what a later attempt already recorded --
     # lastAttemptAt is the ordering key (this run's own started_at vs whatever's on disk).
     # Compared as parsed datetimes, not raw strings: started_at now carries microsecond
@@ -398,7 +433,9 @@ def _merge_health_source(existing: dict[str, Any], result: HealthSourceResult) -
     # ('.' < 'Z' in ASCII) even though .0 is chronologically earlier than .5, which would wrongly
     # reject a legitimate same-second update. Parsing both sides sidesteps that entirely.
     existing_attempt_at = existing.get("lastAttemptAt")
-    if existing_attempt_at and parse_health_timestamp(existing_attempt_at) > parse_health_timestamp(result.started_at):
+    if existing_attempt_at and parse_health_timestamp(
+        existing_attempt_at
+    ) > parse_health_timestamp(result.started_at):
         return existing
 
     record = dict(existing)
@@ -459,7 +496,9 @@ def health_mark_running(health_path: Path, source_id: str) -> str:
     return started_at
 
 
-def record_health_results(health_path: Path, results: dict[str, HealthSourceResult]) -> None:
+def record_health_results(
+    health_path: Path, results: dict[str, HealthSourceResult]
+) -> None:
     """Apply a batch of this run's HealthSourceResults to the health-state file, atomically and
     under the same cross-process lock as every other writer.
     """
@@ -467,7 +506,9 @@ def record_health_results(health_path: Path, results: dict[str, HealthSourceResu
         state = read_health_state(health_path)
         sources = state.setdefault("sources", {})
         for source_id, result in results.items():
-            sources[source_id] = _merge_health_source(sources.get(source_id, {}), result)
+            sources[source_id] = _merge_health_source(
+                sources.get(source_id, {}), result
+            )
         state["updatedAt"] = utc_now()
         write_json(health_path, state)
 
@@ -517,10 +558,15 @@ def classify_source_severity(
         # _merge_health_source()) is not a failure and must never render as full red just because
         # this happens to be its first-ever attempt.
         return "error" if status == HEALTH_STATUS_ERROR else "warning"
-    age_hours = (now_dt - parse_health_timestamp(last_success_at)).total_seconds() / 3600
+    age_hours = (
+        now_dt - parse_health_timestamp(last_success_at)
+    ).total_seconds() / 3600
     if age_hours > max_age_hours:
         return "error"
-    if status in (HEALTH_STATUS_WARNING, HEALTH_STATUS_SKIPPED) or consecutive_failures > 0:
+    if (
+        status in (HEALTH_STATUS_WARNING, HEALTH_STATUS_SKIPPED)
+        or consecutive_failures > 0
+    ):
         return "warning"
     return "ok"
 
@@ -587,17 +633,29 @@ def normalize_state(payload: dict[str, Any] | None) -> dict[str, Any]:
     payload = payload or {}
     return {
         "generatedAt": payload.get("generatedAt") or utc_now(),
-        "products": payload.get("products") if isinstance(payload.get("products"), list) else [],
+        "products": payload.get("products")
+        if isinstance(payload.get("products"), list)
+        else [],
         "paths": payload.get("paths") if isinstance(payload.get("paths"), list) else [],
-        "advisories": payload.get("advisories") if isinstance(payload.get("advisories"), list) else [],
-        "compatibilities": payload.get("compatibilities") if isinstance(payload.get("compatibilities"), list) else [],
+        "advisories": payload.get("advisories")
+        if isinstance(payload.get("advisories"), list)
+        else [],
+        "compatibilities": payload.get("compatibilities")
+        if isinstance(payload.get("compatibilities"), list)
+        else [],
         "cves": payload.get("cves") if isinstance(payload.get("cves"), list) else [],
-        "fortiosLifecycle": payload.get("fortiosLifecycle") if isinstance(payload.get("fortiosLifecycle"), dict) else {},
-        "searchHistory": payload.get("searchHistory") if isinstance(payload.get("searchHistory"), list) else [],
+        "fortiosLifecycle": payload.get("fortiosLifecycle")
+        if isinstance(payload.get("fortiosLifecycle"), dict)
+        else {},
+        "searchHistory": payload.get("searchHistory")
+        if isinstance(payload.get("searchHistory"), list)
+        else [],
     }
 
 
-def ensure_product(state: dict[str, Any], product_id: str, label: str) -> dict[str, Any]:
+def ensure_product(
+    state: dict[str, Any], product_id: str, label: str
+) -> dict[str, Any]:
     for product in state["products"]:
         if product.get("id") == product_id:
             product.setdefault("label", label)
@@ -609,8 +667,12 @@ def ensure_product(state: dict[str, Any], product_id: str, label: str) -> dict[s
     return product
 
 
-def ensure_model(state: dict[str, Any], product_id: str, model_id: str) -> dict[str, Any]:
-    product = ensure_product(state, product_id, PRODUCT_LABELS.get(product_id, DEFAULT_PRODUCT_LABEL))
+def ensure_model(
+    state: dict[str, Any], product_id: str, model_id: str
+) -> dict[str, Any]:
+    product = ensure_product(
+        state, product_id, PRODUCT_LABELS.get(product_id, DEFAULT_PRODUCT_LABEL)
+    )
     for model in product["models"]:
         if model.get("id") == model_id:
             model.setdefault("label", model_id)
@@ -631,7 +693,9 @@ def upsert_firmware(state: dict[str, Any], item: Firmware) -> bool:
             if item.build and item.build != "-":
                 existing["build"] = item.build
             if item.notes:
-                existing["notes"] = sorted(set(existing.get("notes", [])) | set(item.notes))
+                existing["notes"] = sorted(
+                    set(existing.get("notes", [])) | set(item.notes)
+                )
             if item.links:
                 existing["links"] = {**existing.get("links", {}), **item.links}
             return existing != before
@@ -643,7 +707,7 @@ def upsert_firmware(state: dict[str, Any], item: Firmware) -> bool:
         # Stamped only here, at first sight of this version — lets the frontend show a
         # "new" badge for a couple weeks. Never touched again once the entry exists, so a
         # daily rescan of an already-known version doesn't reset it.
-        "discoveredAt": dt.date.today().isoformat(),
+        "discoveredAt": dt.datetime.now(dt.timezone.utc).date().isoformat(),
     }
     if item.links:
         entry["links"] = dict(item.links)
@@ -672,7 +736,9 @@ def normalize_doc_model(doc_model: str) -> str:
     return f"{prefix}{compact}"
 
 
-def read_url_with_retry(request: urllib.request.Request, timeout: int, retries: int = 3) -> bytes:
+def read_url_with_retry(
+    request: urllib.request.Request, timeout: int, retries: int = 3
+) -> bytes:
     """Open and fully read one HTTP response, retrying transient failures at either stage.
 
     A server/proxy may close the response halfway through ``read()``
@@ -691,7 +757,7 @@ def read_url_with_retry(request: urllib.request.Request, timeout: int, retries: 
                 raise
             last_error = error
             if attempt < retries - 1:
-                time.sleep((2 ** attempt) + random.uniform(0, 1))
+                time.sleep((2**attempt) + random.uniform(0, 1))
         except (
             urllib.error.URLError,
             TimeoutError,
@@ -702,8 +768,10 @@ def read_url_with_retry(request: urllib.request.Request, timeout: int, retries: 
         ) as error:
             last_error = error
             if attempt < retries - 1:
-                time.sleep((2 ** attempt) + random.uniform(0, 1))
-    assert last_error is not None  # retries >= 1 and every successful attempt returns above
+                time.sleep((2**attempt) + random.uniform(0, 1))
+    assert (
+        last_error is not None
+    )  # retries >= 1 and every successful attempt returns above
     raise last_error
 
 
@@ -716,8 +784,12 @@ def fetch_text(url: str, timeout: int) -> str:
 
 
 def html_to_text(raw_html: str) -> str:
-    text = re.sub(r"<script\b[^>]*>.*?</script>", " ", raw_html, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<style\b[^>]*>.*?</style>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(
+        r"<script\b[^>]*>.*?</script>", " ", raw_html, flags=re.IGNORECASE | re.DOTALL
+    )
+    text = re.sub(
+        r"<style\b[^>]*>.*?</style>", " ", text, flags=re.IGNORECASE | re.DOTALL
+    )
     text = re.sub(r"<[^>]+>", " ", text)
     text = html.unescape(text)
     return re.sub(r"\s+", " ", text).strip()
@@ -728,12 +800,18 @@ def discover_docs_versions(major_versions: tuple[str, ...], timeout: int) -> lis
     for major in major_versions:
         product_url = f"{FORTINET_DOCS_BASE_URL}/product/fortigate/{major}"
         raw_html = fetch_text(product_url, timeout)
-        versions.update(re.findall(r"/document/fortigate/(\d+\.\d+\.\d+)/fortios-release-notes", raw_html))
+        versions.update(
+            re.findall(
+                r"/document/fortigate/(\d+\.\d+\.\d+)/fortios-release-notes", raw_html
+            )
+        )
     return sorted(versions, key=version_key)
 
 
 def parse_docs_release(version: str, timeout: int) -> DocsRelease | None:
-    source_url = f"{FORTINET_DOCS_BASE_URL}/document/fortigate/{version}/fortios-release-notes"
+    source_url = (
+        f"{FORTINET_DOCS_BASE_URL}/document/fortigate/{version}/fortios-release-notes"
+    )
     raw_html = fetch_text(source_url, timeout)
     text = html_to_text(raw_html)
 
@@ -766,10 +844,14 @@ def parse_docs_release(version: str, timeout: int) -> DocsRelease | None:
     )
     if not models:
         return None
-    return DocsRelease(version=version, build=build, models=models, source_url=source_url)
+    return DocsRelease(
+        version=version, build=build, models=models, source_url=source_url
+    )
 
 
-def collect_docs_catalog(major_versions: tuple[str, ...], timeout: int) -> tuple[dict[str, Any], list[str]]:
+def collect_docs_catalog(
+    major_versions: tuple[str, ...], timeout: int
+) -> tuple[dict[str, Any], list[str]]:
     state = normalize_state({})
     skipped: list[str] = []
 
@@ -790,7 +872,11 @@ def collect_docs_catalog(major_versions: tuple[str, ...], timeout: int) -> tuple
                 version=release.version,
                 build=release.build,
                 notes=("release-notes",),
-                links={"release-notes": release_notes_url(DEFAULT_PRODUCT_ID, release.version)},
+                links={
+                    "release-notes": release_notes_url(
+                        DEFAULT_PRODUCT_ID, release.version
+                    )
+                },
             )
             upsert_firmware(state, firmware)
 
@@ -806,14 +892,20 @@ FORTIOS_MATURITY_REFERENCE_MODEL = "FGT60F"
 
 def fetch_fortios_version_maturity(timeout: int) -> dict[str, str]:
     payload_json = post_official_upgrade_tool(
-        {"product_slug": PRODUCTS[DEFAULT_PRODUCT_ID]["slug"], "model": FORTIOS_MATURITY_REFERENCE_MODEL}, timeout
+        {
+            "product_slug": PRODUCTS[DEFAULT_PRODUCT_ID]["slug"],
+            "model": FORTIOS_MATURITY_REFERENCE_MODEL,
+        },
+        timeout,
     )
     result = payload_json.get("result")
     if not isinstance(result, dict):
         return {}
 
     maturity: dict[str, str] = {}
-    for item in (result.get("available_from_extended") or []) + (result.get("available_to_extended") or []):
+    for item in (result.get("available_from_extended") or []) + (
+        result.get("available_to_extended") or []
+    ):
         version = item.get("version")
         item_type = item.get("type")
         if version and item_type:
@@ -873,12 +965,19 @@ FORTICLIENT_EMS_DOC_SLUG = "ems-release-notes"
 FORTICLIENT_EMS_MODEL_ID = "ems"
 
 
-def discover_forticlient_versions(major_versions: tuple[str, ...], doc_slug: str, timeout: int) -> list[str]:
+def discover_forticlient_versions(
+    major_versions: tuple[str, ...], doc_slug: str, timeout: int
+) -> list[str]:
     versions: set[str] = set()
     for major in major_versions:
         url = f"{FORTINET_DOCS_BASE_URL}/product/forticlient/{major}"
         raw_html = fetch_text(url, timeout)
-        versions.update(re.findall(rf"/document/forticlient/(\d+\.\d+\.\d+)/{re.escape(doc_slug)}", raw_html))
+        versions.update(
+            re.findall(
+                rf"/document/forticlient/(\d+\.\d+\.\d+)/{re.escape(doc_slug)}",
+                raw_html,
+            )
+        )
     return sorted(versions, key=version_key)
 
 
@@ -886,11 +985,15 @@ def parse_forticlient_build(version: str, doc_slug: str, timeout: int) -> str | 
     url = f"{FORTINET_DOCS_BASE_URL}/document/forticlient/{version}/{doc_slug}"
     raw_html = fetch_text(url, timeout)
     text = html_to_text(raw_html)
-    match = re.search(rf"{re.escape(version)}\s+build\s+(\S+)\s*[.:]", text, flags=re.IGNORECASE)
+    match = re.search(
+        rf"{re.escape(version)}\s+build\s+(\S+)\s*[.:]", text, flags=re.IGNORECASE
+    )
     return match.group(1) if match else None
 
 
-def collect_forticlient_catalog(major_versions: tuple[str, ...], timeout: int) -> tuple[dict[str, Any], list[str]]:
+def collect_forticlient_catalog(
+    major_versions: tuple[str, ...], timeout: int
+) -> tuple[dict[str, Any], list[str]]:
     """FortiClient (one model per OS) + FortiClient EMS catalogs, scraped from release notes.
 
     Neither product is in Fortinet's Upgrade Path Tool, so there's no products.json/upgrade-path
@@ -901,10 +1004,18 @@ def collect_forticlient_catalog(major_versions: tuple[str, ...], timeout: int) -
     state = normalize_state({})
     skipped: list[str] = []
 
-    fc_product = ensure_product(state, FORTICLIENT_PRODUCT_ID, PRODUCT_LABELS[FORTICLIENT_PRODUCT_ID])
+    fc_product = ensure_product(
+        state, FORTICLIENT_PRODUCT_ID, PRODUCT_LABELS[FORTICLIENT_PRODUCT_ID]
+    )
     for platform, doc_slug in FORTICLIENT_PLATFORM_DOC_SLUGS.items():
         if not any(model.get("id") == platform for model in fc_product["models"]):
-            fc_product["models"].append({"id": platform, "label": FORTICLIENT_PLATFORM_LABELS[platform], "firmwares": []})
+            fc_product["models"].append(
+                {
+                    "id": platform,
+                    "label": FORTICLIENT_PLATFORM_LABELS[platform],
+                    "firmwares": [],
+                }
+            )
 
         for version in discover_forticlient_versions(major_versions, doc_slug, timeout):
             try:
@@ -922,15 +1033,29 @@ def collect_forticlient_catalog(major_versions: tuple[str, ...], timeout: int) -
                     version=version,
                     build=build,
                     notes=("release-notes",),
-                    links={"release-notes": f"{FORTINET_DOCS_BASE_URL}/document/forticlient/{version}/{doc_slug}"},
+                    links={
+                        "release-notes": f"{FORTINET_DOCS_BASE_URL}/document/forticlient/{version}/{doc_slug}"
+                    },
                 ),
             )
 
-    ems_product = ensure_product(state, FORTICLIENT_EMS_PRODUCT_ID, PRODUCT_LABELS[FORTICLIENT_EMS_PRODUCT_ID])
-    if not any(model.get("id") == FORTICLIENT_EMS_MODEL_ID for model in ems_product["models"]):
-        ems_product["models"].append({"id": FORTICLIENT_EMS_MODEL_ID, "label": "FortiClient EMS", "firmwares": []})
+    ems_product = ensure_product(
+        state, FORTICLIENT_EMS_PRODUCT_ID, PRODUCT_LABELS[FORTICLIENT_EMS_PRODUCT_ID]
+    )
+    if not any(
+        model.get("id") == FORTICLIENT_EMS_MODEL_ID for model in ems_product["models"]
+    ):
+        ems_product["models"].append(
+            {
+                "id": FORTICLIENT_EMS_MODEL_ID,
+                "label": "FortiClient EMS",
+                "firmwares": [],
+            }
+        )
 
-    for version in discover_forticlient_versions(major_versions, FORTICLIENT_EMS_DOC_SLUG, timeout):
+    for version in discover_forticlient_versions(
+        major_versions, FORTICLIENT_EMS_DOC_SLUG, timeout
+    ):
         try:
             build = parse_forticlient_build(version, FORTICLIENT_EMS_DOC_SLUG, timeout)
         except (urllib.error.URLError, TimeoutError, OSError):
@@ -977,7 +1102,9 @@ def release_notes_url(product_id: str, version: str) -> str:
     return f"{FORTINET_DOCS_BASE_URL}/document/{product_slug}/{version}/{doc_slug}"
 
 
-def official_note_links(item: dict[str, Any], product_id: str, version: str) -> dict[str, str]:
+def official_note_links(
+    item: dict[str, Any], product_id: str, version: str
+) -> dict[str, str]:
     """Deep links into the version's release notes, one per section badge (R/K/U/B), plus a
     "release-notes" entry for the general page (the D badge)."""
     slug_to_note = {
@@ -1010,7 +1137,9 @@ def post_official_upgrade_tool(payload: dict[str, str], timeout: int) -> dict[st
             "Referer": f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/{product_slug}",
         },
     )
-    return json.loads(read_url_with_retry(request, timeout).decode("utf-8", errors="ignore"))
+    return json.loads(
+        read_url_with_retry(request, timeout).decode("utf-8", errors="ignore")
+    )
 
 
 _FORTINET_MODEL_ALIASES: dict[str, dict[str, str]] = {}
@@ -1053,7 +1182,9 @@ def resolve_fortinet_model(product_id: str, model_id: str, timeout: int) -> str:
     return alias_map.get(normalize_model_key(model_label(model_id)), model_id)
 
 
-def fetch_official_upgrade_path(requested: OfficialPathRequest, timeout: int) -> tuple[UpgradePath, list[Firmware]] | None:
+def fetch_official_upgrade_path(
+    requested: OfficialPathRequest, timeout: int
+) -> tuple[UpgradePath, list[Firmware]] | None:
     if requested.product not in PRODUCTS:
         return None  # not in Fortinet's Upgrade Path Tool (e.g. FortiClient/EMS) — no path to fetch.
     product_slug = PRODUCTS[requested.product]["slug"]
@@ -1111,20 +1242,26 @@ def fetch_product_models(product_slug: str, timeout: int) -> list[dict[str, str]
     FortiAnalyzer/FortiManager release notes don't reliably have in the same format as FortiOS).
     """
     url = f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/products/{product_slug}.json"
-    request = urllib.request.Request(url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"}
+    )
     # Use the same three-total-attempt budget as transport retries. A syntactically valid but empty
     # payload is not usable catalog data, so give Fortinet's endpoint two bounded chances to recover.
     for attempt in range(3):
-        data = json.loads(read_url_with_retry(request, timeout).decode("utf-8", errors="ignore"))
+        data = json.loads(
+            read_url_with_retry(request, timeout).decode("utf-8", errors="ignore")
+        )
         products = data.get("products")
         if isinstance(products, list) and products:
             return products
         if attempt < 2:
-            time.sleep((2 ** attempt) + random.uniform(0, 1))
+            time.sleep((2**attempt) + random.uniform(0, 1))
     return []
 
 
-def fetch_model_firmwares(product_slug: str, hardware_model_name: str, timeout: int) -> list[dict[str, str]]:
+def fetch_model_firmwares(
+    product_slug: str, hardware_model_name: str, timeout: int
+) -> list[dict[str, str]]:
     """Version/build catalog for one model, from the tool's own available_from/to_extended lists."""
     payload_json = post_official_upgrade_tool(
         {"product_slug": product_slug, "model": hardware_model_name}, timeout
@@ -1134,7 +1271,9 @@ def fetch_model_firmwares(product_slug: str, hardware_model_name: str, timeout: 
         return []
 
     by_version: dict[str, dict[str, str]] = {}
-    for item in (result.get("available_from_extended") or []) + (result.get("available_to_extended") or []):
+    for item in (result.get("available_from_extended") or []) + (
+        result.get("available_to_extended") or []
+    ):
         version = item.get("version")
         if version:
             by_version[version] = item
@@ -1152,7 +1291,9 @@ def collect_tool_catalog(product_id: str, timeout: int) -> dict[str, Any]:
         if not model_id:
             continue
         model_label_value = entry.get("product_name") or model_id
-        model = next((item for item in product["models"] if item.get("id") == model_id), None)
+        model = next(
+            (item for item in product["models"] if item.get("id") == model_id), None
+        )
         if model is None:
             model = {"id": model_id, "label": model_label_value, "firmwares": []}
             product["models"].append(model)
@@ -1165,7 +1306,11 @@ def collect_tool_catalog(product_id: str, timeout: int) -> dict[str, Any]:
                     model=model_id,
                     version=firmware_info["version"],
                     build=firmware_info.get("build_number") or "-",
-                    links={"release-notes": release_notes_url(product_id, firmware_info["version"])},
+                    links={
+                        "release-notes": release_notes_url(
+                            product_id, firmware_info["version"]
+                        )
+                    },
                 ),
             )
 
@@ -1177,7 +1322,9 @@ def parse_official_path_spec(spec: str) -> OfficialPathRequest:
     parts = [part.strip() for part in re.split(r"[:,]", spec) if part.strip()]
     if len(parts) != 3:
         raise ValueError(f"Format attendu MODEL:FROM:TO, reçu: {spec}")
-    return OfficialPathRequest(model=parts[0], from_version=parts[1], to_version=parts[2])
+    return OfficialPathRequest(
+        model=parts[0], from_version=parts[1], to_version=parts[2]
+    )
 
 
 def read_official_path_requests(path: Path) -> list[OfficialPathRequest]:
@@ -1189,7 +1336,9 @@ def read_official_path_requests(path: Path) -> list[OfficialPathRequest]:
         reader = csv.DictReader(handle)
         for row in reader:
             model = row.get("model") or row.get("Model")
-            from_version = row.get("from") or row.get("current") or row.get("from_version")
+            from_version = (
+                row.get("from") or row.get("current") or row.get("from_version")
+            )
             to_version = row.get("to") or row.get("target") or row.get("to_version")
             if model and from_version and to_version:
                 requests.append(
@@ -1266,7 +1415,12 @@ SEARCH_HISTORY_LIMIT = 50
 
 
 def record_search_history(
-    state: dict[str, Any], product: str, model: str, from_version: str, to_version: str, hops: tuple[str, ...]
+    state: dict[str, Any],
+    product: str,
+    model: str,
+    from_version: str,
+    to_version: str,
+    hops: tuple[str, ...],
 ) -> None:
     history = [
         entry
@@ -1298,7 +1452,9 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
 
     for product in incoming["products"]:
         product_id = product.get("id") or DEFAULT_PRODUCT_ID
-        target_product = ensure_product(state, product_id, product.get("label") or DEFAULT_PRODUCT_LABEL)
+        target_product = ensure_product(
+            state, product_id, product.get("label") or DEFAULT_PRODUCT_LABEL
+        )
         model_by_id = {model.get("id"): model for model in target_product["models"]}
         for model in product.get("models", []):
             model_id = model.get("id")
@@ -1309,7 +1465,10 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
                 target_product["models"].append(model)
                 model_by_id[model_id] = model
                 continue
-            firmware_by_version = {firmware.get("version"): firmware for firmware in target_model.get("firmwares", [])}
+            firmware_by_version = {
+                firmware.get("version"): firmware
+                for firmware in target_model.get("firmwares", [])
+            }
             for firmware in model.get("firmwares", []):
                 version = firmware.get("version")
                 if not version:
@@ -1326,7 +1485,8 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
                 if existing_firmware is not None:
                     if "notes" in firmware:
                         merged_firmware["notes"] = sorted(
-                            set(existing_firmware.get("notes", [])) | set(firmware.get("notes") or [])
+                            set(existing_firmware.get("notes", []))
+                            | set(firmware.get("notes") or [])
                         )
                     if "links" in firmware:
                         merged_firmware["links"] = {
@@ -1343,7 +1503,9 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
                 # fresh stamp.
                 if existing_firmware is not None:
                     if "discoveredAt" in existing_firmware:
-                        merged_firmware["discoveredAt"] = existing_firmware["discoveredAt"]
+                        merged_firmware["discoveredAt"] = existing_firmware[
+                            "discoveredAt"
+                        ]
                     else:
                         merged_firmware.pop("discoveredAt", None)
                 firmware_by_version[version] = merged_firmware
@@ -1351,10 +1513,17 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
                 firmware_by_version.values(),
                 key=lambda firmware: version_key(firmware["version"]),
             )
-        target_product["models"].sort(key=lambda item: model_sort_key(item.get("id", "")))
+        target_product["models"].sort(
+            key=lambda item: model_sort_key(item.get("id", ""))
+        )
 
     path_keys = {
-        (path.get("product"), path.get("model"), path.get("from"), path.get("to")): index
+        (
+            path.get("product"),
+            path.get("model"),
+            path.get("from"),
+            path.get("to"),
+        ): index
         for index, path in enumerate(state["paths"])
     }
     for path in incoming["paths"]:
@@ -1386,7 +1555,10 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
     state["cves"] = list(cve_by_id.values())
 
     # Fetched wholesale from endoflife.date each time, so incoming (fresher) wins per train.
-    state["fortiosLifecycle"] = {**state["fortiosLifecycle"], **incoming["fortiosLifecycle"]}
+    state["fortiosLifecycle"] = {
+        **state["fortiosLifecycle"],
+        **incoming["fortiosLifecycle"],
+    }
 
     # Same product/model/from/to key as record_search_history — keep the most recent
     # requestedAt per key, then re-sort and cap, so a merge never resurrects a stale entry
@@ -1398,10 +1570,14 @@ def merge_state(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any
     for item in incoming["searchHistory"]:
         key = (item.get("product"), item.get("model"), item.get("from"), item.get("to"))
         existing = history_by_key.get(key)
-        if not existing or (item.get("requestedAt") or "") > (existing.get("requestedAt") or ""):
+        if not existing or (item.get("requestedAt") or "") > (
+            existing.get("requestedAt") or ""
+        ):
             history_by_key[key] = item
     state["searchHistory"] = sorted(
-        history_by_key.values(), key=lambda item: item.get("requestedAt") or "", reverse=True
+        history_by_key.values(),
+        key=lambda item: item.get("requestedAt") or "",
+        reverse=True,
     )[:SEARCH_HISTORY_LIMIT]
 
     state["generatedAt"] = utc_now()
@@ -1426,7 +1602,11 @@ def fetch_psirt_versions(timeout: int) -> set[str]:
     versions: set[str] = set()
     for node in root.iter():
         if node.text:
-            versions.update(version for version in VERSION_RE.findall(node.text) if is_fortios_version(version))
+            versions.update(
+                version
+                for version in VERSION_RE.findall(node.text)
+                if is_fortios_version(version)
+            )
     return versions
 
 
@@ -1463,7 +1643,9 @@ CVE_LISTING_PRODUCT_FILTERS = tuple(CVE_PRODUCT_MAP)
 
 
 def discover_advisory_ids_from_rss(timeout: int) -> list[str]:
-    request = urllib.request.Request(PSIRT_RSS_URL, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
+    request = urllib.request.Request(
+        PSIRT_RSS_URL, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"}
+    )
     root = ET.fromstring(read_url_with_retry(request, timeout))
 
     ids: list[str] = []
@@ -1475,7 +1657,9 @@ def discover_advisory_ids_from_rss(timeout: int) -> list[str]:
     return unique_in_order(ids)
 
 
-def discover_advisory_ids_from_listing(product_filter: str, max_pages: int, timeout: int) -> list[str]:
+def discover_advisory_ids_from_listing(
+    product_filter: str, max_pages: int, timeout: int
+) -> list[str]:
     ids: list[str] = []
     for page in range(1, max_pages + 1):
         url = f"{PSIRT_BASE_URL}/psirt?product={urllib.parse.quote(product_filter)}&page={page}"
@@ -1494,7 +1678,9 @@ def fetch_csaf_url(advisory_id: str, timeout: int) -> str | None:
     return match.group(1) if match else None
 
 
-def parse_known_affected_value(value: str) -> tuple[str, str | None, str | None, str | None] | None:
+def parse_known_affected_value(
+    value: str,
+) -> tuple[str, str | None, str | None, str | None] | None:
     """Parse one product_status.known_affected string.
 
     Returns (csaf_product_name, from_version, to_version, all_versions_branch) — the last
@@ -1557,7 +1743,9 @@ def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str,
             if not mapping:
                 continue
             product_id, model_id = mapping
-            branch = all_versions_branch or ".".join((from_version or to_version).split(".")[:2])
+            branch = all_versions_branch or ".".join(
+                (from_version or to_version).split(".")[:2]
+            )
             affected.append(
                 {
                     "product": product_id,
@@ -1590,7 +1778,9 @@ def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str,
     return list(entries_by_cve.values())
 
 
-def collect_cve_entries_for_advisory(advisory_id: str, timeout: int) -> list[dict[str, Any]] | None:
+def collect_cve_entries_for_advisory(
+    advisory_id: str, timeout: int
+) -> list[dict[str, Any]] | None:
     """Returns the definitive, current list of CVEs for this advisory (each already filtered to
     tracked products by parse_csaf_document — possibly empty if none apply anymore), or None if
     we can't confirm one way or another: no CSAF url found for this advisory could mean a
@@ -1622,7 +1812,7 @@ class CveReconciliationStats:
     updated: int = 0
     removed: int = 0
 
-    def __add__(self, other: "CveReconciliationStats") -> "CveReconciliationStats":
+    def __add__(self, other: CveReconciliationStats) -> CveReconciliationStats:
         return CveReconciliationStats(
             added=self.added + other.added,
             updated=self.updated + other.updated,
@@ -1641,12 +1831,16 @@ def replace_cves_for_advisory(
     were a new addition.
     """
     existing_for_advisory = {
-        item.get("id"): item for item in state["cves"] if item.get("advisoryId") == advisory_id
+        item.get("id"): item
+        for item in state["cves"]
+        if item.get("advisoryId") == advisory_id
     }
     new_ids = {entry["id"] for entry in new_entries}
     stale_ids = set(existing_for_advisory) - new_ids
     if stale_ids:
-        state["cves"] = [item for item in state["cves"] if item.get("id") not in stale_ids]
+        state["cves"] = [
+            item for item in state["cves"] if item.get("id") not in stale_ids
+        ]
 
     added = 0
     updated = 0
@@ -1687,9 +1881,17 @@ def collect_cve_catalog(
     if backfill:
         advisory_ids: list[str] = []
         for product_filter in CVE_LISTING_PRODUCT_FILTERS:
-            advisory_ids.extend(discover_advisory_ids_from_listing(product_filter, backfill_max_pages, timeout))
+            advisory_ids.extend(
+                discover_advisory_ids_from_listing(
+                    product_filter, backfill_max_pages, timeout
+                )
+            )
         advisory_ids = unique_in_order(advisory_ids)
-        advisory_ids = [advisory_id for advisory_id in advisory_ids if advisory_id not in existing_advisory_ids]
+        advisory_ids = [
+            advisory_id
+            for advisory_id in advisory_ids
+            if advisory_id not in existing_advisory_ids
+        ]
     else:
         advisory_ids = discover_advisory_ids_from_rss(timeout)
 
@@ -1754,7 +1956,10 @@ class UnsupportedExportShape(ValueError):
 
 
 def is_valid_version_string(value: Any) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", value) is not None
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", value) is not None
+    )
 
 
 def validated_hops_from_path_items(path_items: list[Any]) -> list[str]:
@@ -1775,7 +1980,9 @@ def validated_hops_from_path_items(path_items: list[Any]) -> list[str]:
         else:
             raise UnsupportedExportShape(f"Élément de chemin invalide : {item!r}")
         if not is_valid_version_string(version):
-            raise UnsupportedExportShape(f"Version invalide dans le chemin : {version!r}")
+            raise UnsupportedExportShape(
+                f"Version invalide dans le chemin : {version!r}"
+            )
         hops.append(version)
     if len(hops) < 2:
         raise UnsupportedExportShape("Chemin JSON avec moins de deux versions valides.")
@@ -1855,7 +2062,9 @@ def read_upgrade_exports(directory: Path) -> list[UpgradePath]:
             continue
 
         text = file_path.read_text(encoding="utf-8", errors="ignore")
-        hops = parse_upgrade_export(text, expected_from=from_version, expected_to=to_version)
+        hops = parse_upgrade_export(
+            text, expected_from=from_version, expected_to=to_version
+        )
         if not hops or len(hops) < 2:
             continue
 
@@ -1898,7 +2107,11 @@ def import_csv_advisories(path: Path) -> list[dict[str, Any]]:
         for row in reader:
             advisory = {key: value for key, value in row.items() if value}
             if "models" in advisory:
-                advisory["models"] = [item.strip() for item in advisory["models"].split(",") if item.strip()]
+                advisory["models"] = [
+                    item.strip()
+                    for item in advisory["models"].split(",")
+                    if item.strip()
+                ]
             if advisory.get("id"):
                 advisories.append(advisory)
     return advisories
@@ -1914,13 +2127,20 @@ def build_report(
     forticlient_catalog_enabled: bool = False,
     skipped_forticlient: list[str] | None = None,
     cve_catalog_enabled: bool = False,
-    cve_stats: "CveReconciliationStats | None" = None,
+    cve_stats: CveReconciliationStats | None = None,
     skipped_cves: list[str] | None = None,
 ) -> str:
     before_versions = all_versions(before)
     after_versions = all_versions(after)
     new_versions = sorted(after_versions - before_versions, key=version_key)
-    product = next((item for item in after.get("products", []) if item.get("id") == DEFAULT_PRODUCT_ID), {})
+    product = next(
+        (
+            item
+            for item in after.get("products", [])
+            if item.get("id") == DEFAULT_PRODUCT_ID
+        ),
+        {},
+    )
     model_count = len(product.get("models", []))
     skipped_docs_versions = skipped_docs_versions or []
 
@@ -1991,12 +2211,22 @@ def parse_retry_delays(raw: str) -> list[int]:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate FortiOS upgrade UI data.")
-    parser.add_argument("--base", type=Path, default=Path("data/fortios-data.sample.json"))
-    parser.add_argument("--output", type=Path, default=Path("data/fortios-data.generated.json"))
+    parser.add_argument(
+        "--base", type=Path, default=Path("data/fortios-data.sample.json")
+    )
+    parser.add_argument(
+        "--output", type=Path, default=Path("data/fortios-data.generated.json")
+    )
     parser.add_argument("--report", type=Path, default=Path("docs/last_report.md"))
-    parser.add_argument("--upgrade-exports", type=Path, default=Path("data/upgrade_exports"))
-    parser.add_argument("--advisories-csv", type=Path, default=Path("data/advisories.csv"))
-    parser.add_argument("--forticare-json", type=Path, default=os.environ.get("FORTICARE_FIRMWARE_JSON"))
+    parser.add_argument(
+        "--upgrade-exports", type=Path, default=Path("data/upgrade_exports")
+    )
+    parser.add_argument(
+        "--advisories-csv", type=Path, default=Path("data/advisories.csv")
+    )
+    parser.add_argument(
+        "--forticare-json", type=Path, default=os.environ.get("FORTICARE_FIRMWARE_JSON")
+    )
     parser.add_argument(
         "--official-path",
         action="append",
@@ -2043,7 +2273,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Backfill historique complet des CVE PSIRT via la liste paginée par produit (usage ponctuel, plus lent que --cve-catalog).",
     )
-    parser.add_argument("--cve-backfill-max-pages", type=int, default=30, help="Pages max à parcourir par produit lors du --cve-backfill.")
+    parser.add_argument(
+        "--cve-backfill-max-pages",
+        type=int,
+        default=30,
+        help="Pages max à parcourir par produit lors du --cve-backfill.",
+    )
     parser.add_argument(
         "--cve-retry-delays-seconds",
         type=parse_retry_delays,
@@ -2051,7 +2286,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help=(
             "Délais successifs (secondes, séparés par des virgules) avant de retenter les "
             "advisories PSIRT en échec réseau -- une relance par délai, dans l'ordre, tant qu'il "
-            "en reste en échec. Défaut : deux relances (5 min puis 15 min). Vide (\"\") pour désactiver."
+            'en reste en échec. Défaut : deux relances (5 min puis 15 min). Vide ("") pour désactiver.'
         ),
     )
     parser.add_argument(
@@ -2096,7 +2331,9 @@ def main(argv: list[str]) -> int:
     # a re-scan of the whole catalog, which is what keeps a first activation or a --cve-backfill
     # from spamming years of pre-existing history.
     health_before = read_health_state(args.health_output).get("sources", {})
-    cves_before_by_id = {item["id"]: item for item in before.get("cves", []) if item.get("id")}
+    cves_before_by_id = {
+        item["id"]: item for item in before.get("cves", []) if item.get("id")
+    }
 
     # Establish the notify checkpoint BEFORE any collection below can change the catalog --
     # not merely when it happens to still be missing once the notification block at the end of
@@ -2114,15 +2351,21 @@ def main(argv: list[str]) -> int:
         import fortios_notify
 
         if fortios_notify.load_email_config().enabled:
-            notify_checkpoint = fortios_notify.ensure_checkpoint(args.notify_history_output, {
-                "versionsByProduct": {
-                    product: sorted(versions) for product, versions in versions_by_product(before).items()
+            notify_checkpoint = fortios_notify.ensure_checkpoint(
+                args.notify_history_output,
+                {
+                    "versionsByProduct": {
+                        product: sorted(versions)
+                        for product, versions in versions_by_product(before).items()
+                    },
+                    "cvesById": cves_before_by_id,
+                    "health": health_before,
                 },
-                "cvesById": cves_before_by_id,
-                "health": health_before,
-            })
+            )
     except Exception as error:  # noqa: BLE001 - notification bookkeeping must never block collection.
-        sys.stderr.write(f"Avertissement : initialisation du point de contrôle des notifications impossible ({error}).\n")
+        sys.stderr.write(
+            f"Avertissement : initialisation du point de contrôle des notifications impossible ({error}).\n"
+        )
 
     # Populated as each source below finishes (success, failure, or deliberate skip), then
     # applied to args.health_output in one batch near the end — same delta pattern as the
@@ -2130,10 +2373,21 @@ def main(argv: list[str]) -> int:
     # sprinkled across the run when one atomic commit at the end is just as easy and safer.
     health_results: dict[str, HealthSourceResult] = {}
 
-    def record_source(source_id: str, started_at: str, t0: float, *, status: str, items: int | None = None, error: Any = None) -> None:
+    def record_source(
+        source_id: str,
+        started_at: str,
+        t0: float,
+        *,
+        status: str,
+        items: int | None = None,
+        error: Any = None,
+    ) -> None:
         health_results[source_id] = HealthSourceResult(
-            status=status, started_at=started_at, duration_seconds=round(time.monotonic() - t0, 3),
-            items_collected=items, error=error,
+            status=status,
+            started_at=started_at,
+            duration_seconds=round(time.monotonic() - t0, 3),
+            items_collected=items,
+            error=error,
         )
 
     forticare_json = args.forticare_json
@@ -2145,71 +2399,134 @@ def main(argv: list[str]) -> int:
         t0 = time.monotonic()
         started_at = health_mark_running(args.health_output, SOURCE_FORTIOS_DOCS)
         try:
-            major_versions = tuple(item.strip() for item in args.docs_major_versions.split(",") if item.strip())
-            docs_state, skipped_docs_versions = collect_docs_catalog(major_versions, args.timeout)
+            major_versions = tuple(
+                item.strip()
+                for item in args.docs_major_versions.split(",")
+                if item.strip()
+            )
+            docs_state, skipped_docs_versions = collect_docs_catalog(
+                major_versions, args.timeout
+            )
             items = count_firmwares(docs_state)
             state = merge_state(state, docs_state)
             try:
-                apply_fortios_maturity(state, fetch_fortios_version_maturity(args.timeout))
+                apply_fortios_maturity(
+                    state, fetch_fortios_version_maturity(args.timeout)
+                )
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
                 pass  # maturity is a soft enrichment on top of the docs catalog, not its core success
             record_source(
-                SOURCE_FORTIOS_DOCS, started_at, t0,
+                SOURCE_FORTIOS_DOCS,
+                started_at,
+                t0,
                 status=HEALTH_STATUS_OK if items > 0 else HEALTH_STATUS_WARNING,
                 items=items,
-                error=None if items > 0 else "Aucune version collectée depuis docs.fortinet.com",
+                error=None
+                if items > 0
+                else "Aucune version collectée depuis docs.fortinet.com",
             )
         except Exception as error:  # noqa: BLE001 - any failure here must still be recorded, then re-raised is NOT desired: a docs-catalog hiccup shouldn't abort the whole run either.
-            record_source(SOURCE_FORTIOS_DOCS, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
+            record_source(
+                SOURCE_FORTIOS_DOCS,
+                started_at,
+                t0,
+                status=HEALTH_STATUS_ERROR,
+                error=error,
+            )
 
         t0 = time.monotonic()
         started_at = health_mark_running(args.health_output, SOURCE_FORTIOS_LIFECYCLE)
         try:
             state["fortiosLifecycle"] = fetch_fortios_lifecycle(args.timeout)
             record_source(
-                SOURCE_FORTIOS_LIFECYCLE, started_at, t0,
-                status=HEALTH_STATUS_OK, items=len(state["fortiosLifecycle"]),
+                SOURCE_FORTIOS_LIFECYCLE,
+                started_at,
+                t0,
+                status=HEALTH_STATUS_OK,
+                items=len(state["fortiosLifecycle"]),
             )
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
-            record_source(SOURCE_FORTIOS_LIFECYCLE, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+        ) as error:
+            record_source(
+                SOURCE_FORTIOS_LIFECYCLE,
+                started_at,
+                t0,
+                status=HEALTH_STATUS_ERROR,
+                error=error,
+            )
     else:
-        skip_reason = "collecte ignorée avec --skip-network" if args.docs_catalog else None
+        skip_reason = (
+            "collecte ignorée avec --skip-network" if args.docs_catalog else None
+        )
         if skip_reason:
             skipped_docs_versions = [skip_reason]
         if args.skip_network:
             for source_id in (SOURCE_FORTIOS_DOCS, SOURCE_FORTIOS_LIFECYCLE):
-                record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+                record_source(
+                    source_id,
+                    utc_now_precise(),
+                    time.monotonic(),
+                    status=HEALTH_STATUS_SKIPPED,
+                )
         # else: --docs-catalog simply wasn't requested this run at all (a narrower invocation,
         # e.g. the afternoon CVE-only retry pass) -- leave these sources' health record exactly
         # as an earlier, more complete run left it, rather than clobbering a still-fresh real
         # success with a misleading "ignorée" every single afternoon.
 
-    tool_products = [item.strip() for item in args.tool_products.split(",") if item.strip()]
-    tool_product_health_sources = {"fortianalyzer": SOURCE_FORTIANALYZER, "fortimanager": SOURCE_FORTIMANAGER}
+    tool_products = [
+        item.strip() for item in args.tool_products.split(",") if item.strip()
+    ]
+    tool_product_health_sources = {
+        "fortianalyzer": SOURCE_FORTIANALYZER,
+        "fortimanager": SOURCE_FORTIMANAGER,
+    }
     if tool_products and not args.skip_network:
         for product_id in tool_products:
             if product_id not in PRODUCTS:
                 continue
             source_id = tool_product_health_sources.get(product_id)
             t0 = time.monotonic()
-            started_at = health_mark_running(args.health_output, source_id) if source_id else utc_now_precise()
+            started_at = (
+                health_mark_running(args.health_output, source_id)
+                if source_id
+                else utc_now_precise()
+            )
             try:
                 product_state = collect_tool_catalog(product_id, args.timeout)
                 items = count_firmwares_for_product(product_state, product_id)
                 state = merge_state(state, product_state)
                 if source_id:
                     record_source(
-                        source_id, started_at, t0,
+                        source_id,
+                        started_at,
+                        t0,
                         status=HEALTH_STATUS_OK if items > 0 else HEALTH_STATUS_WARNING,
                         items=items,
-                        error=None if items > 0 else f"Aucune version collectée pour {product_id}",
+                        error=None
+                        if items > 0
+                        else f"Aucune version collectée pour {product_id}",
                     )
             except Exception as error:  # noqa: BLE001 - one product's failure shouldn't abort the others.
                 if source_id:
-                    record_source(source_id, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
+                    record_source(
+                        source_id,
+                        started_at,
+                        t0,
+                        status=HEALTH_STATUS_ERROR,
+                        error=error,
+                    )
     elif args.skip_network:
         for source_id in tool_product_health_sources.values():
-            record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+            record_source(
+                source_id,
+                utc_now_precise(),
+                time.monotonic(),
+                status=HEALTH_STATUS_SKIPPED,
+            )
     # else (no --tool-products, not --skip-network): not requested this run at all -- leave
     # these sources' health record untouched, same reasoning as the docs-catalog branch above.
 
@@ -2219,32 +2536,67 @@ def main(argv: list[str]) -> int:
         started_at_fc = health_mark_running(args.health_output, SOURCE_FORTICLIENT)
         started_at_ems = health_mark_running(args.health_output, SOURCE_FORTICLIENT_EMS)
         try:
-            major_versions = tuple(item.strip() for item in args.docs_major_versions.split(",") if item.strip())
-            forticlient_state, skipped_forticlient = collect_forticlient_catalog(major_versions, args.timeout)
-            items_fc = count_firmwares_for_product(forticlient_state, FORTICLIENT_PRODUCT_ID)
-            items_ems = count_firmwares_for_product(forticlient_state, FORTICLIENT_EMS_PRODUCT_ID)
+            major_versions = tuple(
+                item.strip()
+                for item in args.docs_major_versions.split(",")
+                if item.strip()
+            )
+            forticlient_state, skipped_forticlient = collect_forticlient_catalog(
+                major_versions, args.timeout
+            )
+            items_fc = count_firmwares_for_product(
+                forticlient_state, FORTICLIENT_PRODUCT_ID
+            )
+            items_ems = count_firmwares_for_product(
+                forticlient_state, FORTICLIENT_EMS_PRODUCT_ID
+            )
             state = merge_state(state, forticlient_state)
             # One HTTP/scraping flow covers both products together, so they succeed/fail as a
             # pair — only the item counts are tracked per product.
             record_source(
-                SOURCE_FORTICLIENT, started_at_fc, t0,
-                status=HEALTH_STATUS_OK if items_fc > 0 else HEALTH_STATUS_WARNING, items=items_fc,
+                SOURCE_FORTICLIENT,
+                started_at_fc,
+                t0,
+                status=HEALTH_STATUS_OK if items_fc > 0 else HEALTH_STATUS_WARNING,
+                items=items_fc,
                 error=None if items_fc > 0 else "Aucune version FortiClient collectée",
             )
             record_source(
-                SOURCE_FORTICLIENT_EMS, started_at_ems, t0,
-                status=HEALTH_STATUS_OK if items_ems > 0 else HEALTH_STATUS_WARNING, items=items_ems,
-                error=None if items_ems > 0 else "Aucune version FortiClient EMS collectée",
+                SOURCE_FORTICLIENT_EMS,
+                started_at_ems,
+                t0,
+                status=HEALTH_STATUS_OK if items_ems > 0 else HEALTH_STATUS_WARNING,
+                items=items_ems,
+                error=None
+                if items_ems > 0
+                else "Aucune version FortiClient EMS collectée",
             )
         except Exception as error:  # noqa: BLE001 - recorded, not re-raised: doesn't abort the rest of the run.
-            record_source(SOURCE_FORTICLIENT, started_at_fc, t0, status=HEALTH_STATUS_ERROR, error=error)
-            record_source(SOURCE_FORTICLIENT_EMS, started_at_ems, t0, status=HEALTH_STATUS_ERROR, error=error)
+            record_source(
+                SOURCE_FORTICLIENT,
+                started_at_fc,
+                t0,
+                status=HEALTH_STATUS_ERROR,
+                error=error,
+            )
+            record_source(
+                SOURCE_FORTICLIENT_EMS,
+                started_at_ems,
+                t0,
+                status=HEALTH_STATUS_ERROR,
+                error=error,
+            )
     else:
         if args.forticlient_catalog:
             skipped_forticlient = ["collecte ignorée avec --skip-network"]
         if args.skip_network:
             for source_id in (SOURCE_FORTICLIENT, SOURCE_FORTICLIENT_EMS):
-                record_source(source_id, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+                record_source(
+                    source_id,
+                    utc_now_precise(),
+                    time.monotonic(),
+                    status=HEALTH_STATUS_SKIPPED,
+                )
         # else: --forticlient-catalog simply wasn't requested this run -- leave untouched.
 
     # Advisories and paths are the two fields a live user can create/edit/delete through
@@ -2258,17 +2610,23 @@ def main(argv: list[str]) -> int:
     path_deltas: list[UpgradePath] = []
 
     for advisory in import_csv_advisories(args.advisories_csv):
-        state["advisories"] = [item for item in state["advisories"] if item.get("id") != advisory["id"]]
+        state["advisories"] = [
+            item for item in state["advisories"] if item.get("id") != advisory["id"]
+        ]
         state["advisories"].append(advisory)
         advisory_deltas.append(advisory)
 
     changed_paths = 0
     official_requests = read_official_path_requests(args.official_paths_csv)
-    official_requests.extend(parse_official_path_spec(spec) for spec in args.official_path)
+    official_requests.extend(
+        parse_official_path_spec(spec) for spec in args.official_path
+    )
     if official_requests and not args.skip_network:
         for official_request in official_requests:
             try:
-                official_result = fetch_official_upgrade_path(official_request, args.timeout)
+                official_result = fetch_official_upgrade_path(
+                    official_request, args.timeout
+                )
             except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
                 continue
             if not official_result:
@@ -2298,7 +2656,9 @@ def main(argv: list[str]) -> int:
         t0 = time.monotonic()
         started_at = health_mark_running(args.health_output, SOURCE_CVE_PSIRT)
         try:
-            existing_advisory_ids = {item.get("advisoryId") for item in state.get("cves", [])}
+            existing_advisory_ids = {
+                item.get("advisoryId") for item in state.get("cves", [])
+            }
             cve_results_by_advisory, skipped_cves = collect_cve_catalog(
                 existing_advisory_ids,
                 args.timeout,
@@ -2319,7 +2679,9 @@ def main(argv: list[str]) -> int:
                 if not skipped_cves:
                     break
                 time.sleep(delay)
-                retried_results, skipped_cves = fetch_cve_entries_for_advisories(skipped_cves, args.timeout)
+                retried_results, skipped_cves = fetch_cve_entries_for_advisories(
+                    skipped_cves, args.timeout
+                )
                 cve_results_by_advisory.update(retried_results)
             # Each advisory here got a definitive CSAF result this run: replace (not just upsert)
             # whatever we had for it, so a CVE Fortinet has since removed/reattributed away from
@@ -2333,7 +2695,9 @@ def main(argv: list[str]) -> int:
             total_considered = len(cve_results_by_advisory) + len(skipped_cves)
             if total_considered > 0 and not cve_results_by_advisory:
                 cve_health_status = HEALTH_STATUS_ERROR
-                cve_health_error = f"{len(skipped_cves)} advisorie(s) PSIRT injoignable(s)"
+                cve_health_error = (
+                    f"{len(skipped_cves)} advisorie(s) PSIRT injoignable(s)"
+                )
             elif skipped_cves:
                 cve_health_status = HEALTH_STATUS_WARNING
                 cve_health_error = f"{len(skipped_cves)} advisorie(s) PSIRT ignorée(s) (réseau/parsing)"
@@ -2341,13 +2705,28 @@ def main(argv: list[str]) -> int:
                 cve_health_status = HEALTH_STATUS_OK
                 cve_health_error = None
             record_source(
-                SOURCE_CVE_PSIRT, started_at, t0, status=cve_health_status,
-                items=cve_stats.added + cve_stats.updated, error=cve_health_error,
+                SOURCE_CVE_PSIRT,
+                started_at,
+                t0,
+                status=cve_health_status,
+                items=cve_stats.added + cve_stats.updated,
+                error=cve_health_error,
             )
         except Exception as error:  # noqa: BLE001 - recorded, not re-raised.
-            record_source(SOURCE_CVE_PSIRT, started_at, t0, status=HEALTH_STATUS_ERROR, error=error)
+            record_source(
+                SOURCE_CVE_PSIRT,
+                started_at,
+                t0,
+                status=HEALTH_STATUS_ERROR,
+                error=error,
+            )
     elif args.skip_network:
-        record_source(SOURCE_CVE_PSIRT, utc_now_precise(), time.monotonic(), status=HEALTH_STATUS_SKIPPED)
+        record_source(
+            SOURCE_CVE_PSIRT,
+            utc_now_precise(),
+            time.monotonic(),
+            status=HEALTH_STATUS_SKIPPED,
+        )
     # else (no --cve-catalog/--cve-backfill, not --skip-network): not requested this run -- leave
     # untouched (see the docs-catalog branch above for why).
 
@@ -2371,7 +2750,12 @@ def main(argv: list[str]) -> int:
     # final_state, after the bulk merge, actually makes the removal stick.
     with cross_process_lock(args.output):
         latest_from_disk = normalize_state(read_json(args.output, {}))
-        state_for_bulk_merge = {**state, "advisories": [], "paths": [], "compatibilities": []}
+        state_for_bulk_merge = {
+            **state,
+            "advisories": [],
+            "paths": [],
+            "compatibilities": [],
+        }
         final_state = merge_state(latest_from_disk, state_for_bulk_merge)
         for advisory in advisory_deltas:
             upsert_advisory(final_state, advisory)
@@ -2403,8 +2787,16 @@ def main(argv: list[str]) -> int:
     # Overall summary across every source touched this run: red if anything hard-failed, orange
     # if only warnings/skips, green otherwise. Computed from health_results rather than any
     # separate bookkeeping, so it can never drift from what's actually being reported per source.
-    failed_sources = sorted(sid for sid, result in health_results.items() if result.status == HEALTH_STATUS_ERROR)
-    warned_sources = sorted(sid for sid, result in health_results.items() if result.status == HEALTH_STATUS_WARNING)
+    failed_sources = sorted(
+        sid
+        for sid, result in health_results.items()
+        if result.status == HEALTH_STATUS_ERROR
+    )
+    warned_sources = sorted(
+        sid
+        for sid, result in health_results.items()
+        if result.status == HEALTH_STATUS_WARNING
+    )
     if failed_sources:
         daily_run_status = HEALTH_STATUS_ERROR
         daily_run_error = f"En échec : {', '.join(failed_sources)}"
@@ -2429,7 +2821,9 @@ def main(argv: list[str]) -> int:
     try:
         record_health_results(args.health_output, health_results)
     except (OSError, ValueError) as error:
-        sys.stderr.write(f"Avertissement : échec de l'écriture de l'état de santé ({error}).\n")
+        sys.stderr.write(
+            f"Avertissement : échec de l'écriture de l'état de santé ({error}).\n"
+        )
 
     # Email notifications: entirely best-effort and additive, never touching the catalog or the
     # exit code.
@@ -2453,8 +2847,9 @@ def main(argv: list[str]) -> int:
     # stable dedup_key, not by which run happened to derive it) makes safe to attempt again from
     # a different, later run.
     try:
-        import fortios_notify  # deferred: avoids a load-time circular import with this module
         import uuid
+
+        import fortios_notify  # deferred: avoids a load-time circular import with this module
 
         email_config = fortios_notify.load_email_config()
         if email_config.enabled and notify_checkpoint is not None:
@@ -2462,7 +2857,8 @@ def main(argv: list[str]) -> int:
             notify_state = fortios_notify.load_notify_state(args.notify_history_output)
 
             checkpoint_versions = {
-                product: set(versions) for product, versions in notify_checkpoint["versionsByProduct"].items()
+                product: set(versions)
+                for product, versions in notify_checkpoint["versionsByProduct"].items()
             }
             checkpoint_cves_by_id = notify_checkpoint["cvesById"]
             checkpoint_health = notify_checkpoint["health"]
@@ -2471,53 +2867,81 @@ def main(argv: list[str]) -> int:
             # cves_after_by_id feeds the new checkpoint below regardless of --cve-backfill, so a
             # normal run right after a backfill still sees those CVEs as already-known rather
             # than spamming all of them as "new".
-            cves_after_by_id = {item["id"]: item for item in final_state.get("cves", []) if item.get("id")}
+            cves_after_by_id = {
+                item["id"]: item
+                for item in final_state.get("cves", [])
+                if item.get("id")
+            }
             if not args.cve_backfill:
-                product_labels = {p.get("id"): p.get("label", p.get("id")) for p in final_state.get("products", [])}
+                product_labels = {
+                    p.get("id"): p.get("label", p.get("id"))
+                    for p in final_state.get("products", [])
+                }
                 events += fortios_notify.derive_version_events(
-                    checkpoint_versions, versions_by_product(final_state), product_labels,
+                    checkpoint_versions,
+                    versions_by_product(final_state),
+                    product_labels,
                 )
                 newly_added_cves = [
-                    item for item in final_state.get("cves", [])
+                    item
+                    for item in final_state.get("cves", [])
                     if item.get("id") and item["id"] not in checkpoint_cves_by_id
                 ]
                 events += fortios_notify.derive_new_cve_events(newly_added_cves)
-                events += fortios_notify.derive_cve_modification_events(checkpoint_cves_by_id, cves_after_by_id)
+                events += fortios_notify.derive_cve_modification_events(
+                    checkpoint_cves_by_id, cves_after_by_id
+                )
 
                 eol_events, eol_state_after = fortios_notify.derive_eol_events(
-                    final_state.get("fortiosLifecycle", {}), notify_state.get("eolState", {}),
+                    final_state.get("fortiosLifecycle", {}),
+                    notify_state.get("eolState", {}),
                     now=final_state["generatedAt"],
                 )
                 # Committed immediately (state + outbox entries in one write), not folded into
                 # the `events` list below -- see commit_eol_transition()'s docstring for why the
                 # two must never be persisted as separate writes.
                 fortios_notify.commit_eol_transition(
-                    args.notify_history_output, eol_state_after, eol_events, now=final_state["generatedAt"],
+                    args.notify_history_output,
+                    eol_state_after,
+                    eol_events,
+                    now=final_state["generatedAt"],
                 )
 
-            events += fortios_notify.derive_source_health_events(checkpoint_health, health_after, HEALTH_SOURCE_LABELS)
+            events += fortios_notify.derive_source_health_events(
+                checkpoint_health, health_after, HEALTH_SOURCE_LABELS
+            )
 
             new_checkpoint = {
                 "versionsByProduct": {
-                    product: sorted(versions) for product, versions in versions_by_product(final_state).items()
+                    product: sorted(versions)
+                    for product, versions in versions_by_product(final_state).items()
                 },
                 "cvesById": cves_after_by_id,
                 "health": health_after,
             }
             claimant = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
             pending = fortios_notify.commit_events_with_checkpoint(
-                args.notify_history_output, new_checkpoint, events, claimant=claimant,
+                args.notify_history_output,
+                new_checkpoint,
+                events,
+                claimant=claimant,
             )
             if pending:
                 composed = fortios_notify.compose_email(
-                    pending, app_url=email_config.app_url, run_timestamp=final_state["generatedAt"],
+                    pending,
+                    app_url=email_config.app_url,
+                    run_timestamp=final_state["generatedAt"],
                 )
                 if composed:
                     subject, body = composed
                     if fortios_notify.send_email(email_config, subject, body):
-                        fortios_notify.finalize_sent_events(args.notify_history_output, pending)
+                        fortios_notify.finalize_sent_events(
+                            args.notify_history_output, pending
+                        )
                     else:
-                        fortios_notify.release_claim(args.notify_history_output, claimant)
+                        fortios_notify.release_claim(
+                            args.notify_history_output, claimant
+                        )
     except Exception as error:  # noqa: BLE001 - a broken notification path must never fail the run.
         sys.stderr.write(f"Avertissement : notification email non envoyée ({error}).\n")
 

@@ -20,7 +20,6 @@ from typing import Any
 
 import certctl
 
-
 MAX_CERTIFICATE_BYTES = 16 * 1024 * 1024
 MAX_PRIVATE_KEY_BYTES = 8 * 1024 * 1024
 MAX_CHAIN_BYTES = 16 * 1024 * 1024
@@ -38,13 +37,17 @@ class AdminSession:
 class SessionStore:
     def __init__(self, ttl_seconds: int = 30 * 60, maximum_sessions: int = 128) -> None:
         if min(ttl_seconds, maximum_sessions) <= 0:
-            raise ValueError("Les limites de session doivent être strictement positives.")
+            raise ValueError(
+                "Les limites de session doivent être strictement positives."
+            )
         self.ttl_seconds = ttl_seconds
         self.maximum_sessions = maximum_sessions
         self._sessions: dict[str, AdminSession] = {}
         self._lock = threading.Lock()
 
-    def create(self, username: str, credentials_revision: str = "") -> tuple[str, AdminSession]:
+    def create(
+        self, username: str, credentials_revision: str = ""
+    ) -> tuple[str, AdminSession]:
         now = time.monotonic()
         session_id = secrets.token_urlsafe(32)
         session = AdminSession(
@@ -75,7 +78,9 @@ class SessionStore:
             self._sessions.pop(session_id, None)
 
     def _prune(self, now: float) -> None:
-        expired = [key for key, session in self._sessions.items() if session.expires_at <= now]
+        expired = [
+            key for key, session in self._sessions.items() if session.expires_at <= now
+        ]
         for key in expired:
             self._sessions.pop(key, None)
 
@@ -89,7 +94,9 @@ class LoginRateLimiter:
         maximum_concurrent: int = 2,
     ) -> None:
         if min(max_failures, window_seconds, maximum_clients, maximum_concurrent) <= 0:
-            raise ValueError("Les limites de connexion doivent être strictement positives.")
+            raise ValueError(
+                "Les limites de connexion doivent être strictement positives."
+            )
         self.max_failures = max_failures
         self.window_seconds = window_seconds
         self.maximum_clients = maximum_clients
@@ -101,7 +108,9 @@ class LoginRateLimiter:
 
     def _recent(self, client: str, now: float) -> list[float]:
         cutoff = now - self.window_seconds
-        recent = [attempt for attempt in self._failures.get(client, []) if attempt > cutoff]
+        recent = [
+            attempt for attempt in self._failures.get(client, []) if attempt > cutoff
+        ]
         if recent:
             self._failures[client] = recent
         else:
@@ -130,7 +139,8 @@ class LoginRateLimiter:
             client_inflight = self._inflight.get(client, 0)
             if (
                 self._total_inflight >= self.maximum_concurrent
-                or len(self._failures.get(client, [])) + client_inflight >= self.max_failures
+                or len(self._failures.get(client, [])) + client_inflight
+                >= self.max_failures
                 or not self._make_room(client)
             ):
                 return False
@@ -160,7 +170,10 @@ class LoginRateLimiter:
         now = time.monotonic()
         with self._lock:
             self._prune_all(now)
-            return len(self._failures.get(client, [])) + self._inflight.get(client, 0) >= self.max_failures
+            return (
+                len(self._failures.get(client, [])) + self._inflight.get(client, 0)
+                >= self.max_failures
+            )
 
     def record_failure(self, client: str) -> None:
         now = time.monotonic()
@@ -192,7 +205,9 @@ class ValidationTicketStore:
 
     @staticmethod
     def _digest(payload: dict[str, Any]) -> bytes:
-        normalized = {key: value for key, value in payload.items() if key != "validationToken"}
+        normalized = {
+            key: value for key, value in payload.items() if key != "validationToken"
+        }
         encoded = json.dumps(
             normalized,
             ensure_ascii=False,
@@ -212,7 +227,9 @@ class ValidationTicketStore:
         with self._lock:
             self._prune(now)
             while len(self._tickets) >= self.maximum:
-                oldest = min(self._tickets, key=lambda key: self._tickets[key].expires_at)
+                oldest = min(
+                    self._tickets, key=lambda key: self._tickets[key].expires_at
+                )
                 self._tickets.pop(oldest, None)
             self._tickets[ticket_id] = ticket
         return ticket_id
@@ -233,7 +250,9 @@ class ValidationTicketStore:
             return True
 
     def _prune(self, now: float) -> None:
-        expired = [key for key, ticket in self._tickets.items() if ticket.expires_at <= now]
+        expired = [
+            key for key, ticket in self._tickets.items() if ticket.expires_at <= now
+        ]
         for key in expired:
             self._tickets.pop(key, None)
 
@@ -274,13 +293,23 @@ def certificate_summary(output_dir: Path, hostname: str) -> dict[str, Any]:
     fullchain = output_dir / "fullchain.pem"
     blocks = certctl.normalize_certificate_blocks(fullchain.read_bytes())
     leaf = blocks[0]
-    dates = certctl.run_openssl("x509", "-noout", "-startdate", "-enddate", input_data=leaf).stdout
+    dates = certctl.run_openssl(
+        "x509", "-noout", "-startdate", "-enddate", input_data=leaf
+    ).stdout
     serial = certctl.run_openssl("x509", "-noout", "-serial", input_data=leaf).stdout
     fingerprint = certctl.run_openssl(
-        "x509", "-noout", "-fingerprint", "-sha256", input_data=leaf,
+        "x509",
+        "-noout",
+        "-fingerprint",
+        "-sha256",
+        input_data=leaf,
     ).stdout
     san_output = certctl.run_openssl(
-        "x509", "-noout", "-ext", "subjectAltName", input_data=leaf,
+        "x509",
+        "-noout",
+        "-ext",
+        "subjectAltName",
+        input_data=leaf,
     ).stdout.decode("utf-8", errors="replace")
     dns_names = re.findall(r"DNS:([^,\s]+)", san_output)
     date_values = {}
@@ -290,13 +319,19 @@ def certificate_summary(output_dir: Path, hostname: str) -> dict[str, Any]:
             date_values[name] = value
     return {
         "hostname": hostname,
-        "subject": certctl.certificate_name(leaf, "subject").decode("utf-8", errors="replace"),
-        "issuer": certctl.certificate_name(leaf, "issuer").decode("utf-8", errors="replace"),
+        "subject": certctl.certificate_name(leaf, "subject").decode(
+            "utf-8", errors="replace"
+        ),
+        "issuer": certctl.certificate_name(leaf, "issuer").decode(
+            "utf-8", errors="replace"
+        ),
         "dnsNames": dns_names,
         "notBefore": date_values.get("notBefore", ""),
         "notAfter": date_values.get("notAfter", ""),
         "serial": serial.decode("ascii", errors="replace").strip().partition("=")[2],
-        "sha256Fingerprint": fingerprint.decode("ascii", errors="replace").strip().partition("=")[2],
+        "sha256Fingerprint": fingerprint.decode("ascii", errors="replace")
+        .strip()
+        .partition("=")[2],
         "chainLength": len(blocks),
     }
 
@@ -317,7 +352,9 @@ def _stage_uploaded_certificate(
     if not certificate:
         raise certctl.CertificateError("Certificat ou bundle manquant.")
     if not private_key and chain:
-        raise certctl.CertificateError("Une chaîne séparée nécessite une clé privée séparée.")
+        raise certctl.CertificateError(
+            "Une chaîne séparée nécessite une clé privée séparée."
+        )
 
     source = directory / "certificate-upload"
     key_path = directory / "private-key" if private_key else None
@@ -376,7 +413,9 @@ def install_uploaded_certificate(
                 raise
 
 
-def validate_uploaded_certificate(payload: dict[str, Any], hostname: str) -> dict[str, Any]:
+def validate_uploaded_certificate(
+    payload: dict[str, Any], hostname: str
+) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="fortios-cert-validation-") as temporary:
         directory = Path(temporary)
         staged = _stage_uploaded_certificate(payload, directory)

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-from http.cookies import SimpleCookie
 import hmac
 import ipaddress
 import json
@@ -19,19 +18,20 @@ import traceback
 import urllib.error
 import urllib.parse
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import certctl
 from cert_admin import (
-    CredentialError,
     DEFAULT_CREDENTIALS,
     MAX_PASSWORD_LENGTH,
+    CredentialError,
     authenticate_credentials,
     credential_lock,
     credentials_revision,
 )
-import certctl
 from cert_web import (
     AdminSession,
     LoginRateLimiter,
@@ -40,12 +40,10 @@ from cert_web import (
     install_uploaded_certificate,
     validate_uploaded_certificate,
 )
-from tls_lock import managed_pair_lock
-
 from fortios_watch import (
     DEFAULT_PRODUCT_ID,
-    PRODUCTS,
     PRODUCT_LABELS,
+    PRODUCTS,
     Firmware,
     OfficialPathRequest,
     UpgradePath,
@@ -62,6 +60,7 @@ from fortios_watch import (
     utc_now,
     write_json,
 )
+from tls_lock import managed_pair_lock
 
 if os.environ.get("FORTIOS_E2E_MOCK_NETWORK") == "1":
     # Inert unless this exact env var is set — never touched in production, only by the
@@ -72,18 +71,26 @@ if os.environ.get("FORTIOS_E2E_MOCK_NETWORK") == "1":
     # zero real network calls.
     def _mock_fetch_official_upgrade_path(request: OfficialPathRequest, timeout: int):
         response_path = Path(os.environ["FORTIOS_E2E_MOCK_RESPONSE_FILE"])
-        payload = json.loads(response_path.read_text()) if response_path.exists() else {}
+        payload = (
+            json.loads(response_path.read_text()) if response_path.exists() else {}
+        )
         if payload.get("error"):
             raise urllib.error.URLError(payload["error"])
         hops = payload.get("hops")
         if not hops:
             return None
         path = UpgradePath(
-            product=request.product, model=request.model,
-            from_version=request.from_version, to_version=request.to_version,
-            hops=tuple(hops), source="Simulation E2E (FORTIOS_E2E_MOCK_NETWORK)",
+            product=request.product,
+            model=request.model,
+            from_version=request.from_version,
+            to_version=request.to_version,
+            hops=tuple(hops),
+            source="Simulation E2E (FORTIOS_E2E_MOCK_NETWORK)",
         )
-        firmwares = [Firmware(product=request.product, model=request.model, version=version) for version in hops]
+        firmwares = [
+            Firmware(product=request.product, model=request.model, version=version)
+            for version in hops
+        ]
         return path, firmwares
 
     fetch_official_upgrade_path = _mock_fetch_official_upgrade_path
@@ -120,16 +127,26 @@ REQUEST_SOCKET_TIMEOUT_SECONDS = 15
 def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     title = str(payload.get("title", "")).strip()
     description = str(payload.get("description", "")).strip()
-    versions = [str(item).strip() for item in payload.get("versions") or [] if str(item).strip()]
-    min_versions = [str(item).strip() for item in payload.get("minVersions") or [] if str(item).strip()]
+    versions = [
+        str(item).strip() for item in payload.get("versions") or [] if str(item).strip()
+    ]
+    min_versions = [
+        str(item).strip()
+        for item in payload.get("minVersions") or []
+        if str(item).strip()
+    ]
     from_version = str(payload.get("from") or "").strip()
     to_version = str(payload.get("to") or "").strip()
     if not title or not description:
         raise ValueError("Titre et description sont obligatoires.")
     if bool(from_version) != bool(to_version):
-        raise ValueError("Une bascule précise nécessite une version de départ et une version cible.")
+        raise ValueError(
+            "Une bascule précise nécessite une version de départ et une version cible."
+        )
     if from_version and to_version and from_version == to_version:
-        raise ValueError("La version de départ et la version cible doivent être différentes.")
+        raise ValueError(
+            "La version de départ et la version cible doivent être différentes."
+        )
     targeting_modes = sum(
         (
             bool(versions),
@@ -140,7 +157,9 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     if targeting_modes > 1:
         raise ValueError("Choisir un seul mode de ciblage des versions.")
     if not versions and not min_versions and not (from_version and to_version):
-        raise ValueError("Indiquer au moins une version, un point de départ, ou une bascule précise.")
+        raise ValueError(
+            "Indiquer au moins une version, un point de départ, ou une bascule précise."
+        )
 
     product = str(payload.get("product") or DEFAULT_PRODUCT_ID).strip()
     if product not in PRODUCT_LABELS:
@@ -149,7 +168,9 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
     if severity not in VALID_SEVERITIES:
         raise ValueError(f"Sévérité invalide : {severity}")
 
-    models = [str(item).strip() for item in payload.get("models") or [] if str(item).strip()]
+    models = [
+        str(item).strip() for item in payload.get("models") or [] if str(item).strip()
+    ]
     command = str(payload.get("command") or "").strip()
     bug_id = str(payload.get("bugId") or "").strip()
     bug_version = str(payload.get("bugVersion") or "").strip()
@@ -185,7 +206,11 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
 
 def parse_compatibility_fields(payload: dict[str, Any]) -> dict[str, Any]:
     ems_version = str(payload.get("emsVersion") or "").strip()
-    client_versions = [str(item).strip() for item in payload.get("clientVersions") or [] if str(item).strip()]
+    client_versions = [
+        str(item).strip()
+        for item in payload.get("clientVersions") or []
+        if str(item).strip()
+    ]
     if not ems_version:
         raise ValueError("La version FortiClient EMS est obligatoire.")
     if not client_versions:
@@ -268,7 +293,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.cert_output_dir = cert_output_dir
         self.cert_direct_install = cert_direct_install
         self.cert_login_limiter = cert_login_limiter or LoginRateLimiter()
-        self.cert_validation_tickets = cert_validation_tickets or ValidationTicketStore()
+        self.cert_validation_tickets = (
+            cert_validation_tickets or ValidationTicketStore()
+        )
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def certificate_ui_available(self) -> bool:
@@ -324,10 +351,11 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
             return
-        if url_path == "/cert" or url_path.startswith("/cert/"):
-            if not self.certificate_ui_available():
-                self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
-                return
+        if (
+            url_path == "/cert" or url_path.startswith("/cert/")
+        ) and not self.certificate_ui_available():
+            self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
+            return
         super().do_GET()
 
     def authenticated_cert_session(self) -> AdminSession | None:
@@ -349,7 +377,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
-        except Exception:
+        except CookieError:
             return None
         morsel = cookie.get("fortios_cert_session")
         if morsel is None:
@@ -387,7 +415,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         url_path = urllib.parse.urlsplit(path).path
         if url_path == "/cert" or url_path.startswith("/cert/"):
             relative = urllib.parse.unquote(
-                url_path[len("/cert/"):] if url_path != "/cert" else "",
+                url_path[len("/cert/") :] if url_path != "/cert" else "",
             )
             candidate = (
                 (ALLOWED_STATIC_DIR_CERT / relative).resolve()
@@ -403,14 +431,22 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             # Resolved against DATA_DIR (overridable for isolated E2E tests), not against
             # self.directory/ROOT like the parent class would — otherwise FORTIOS_TEST_DATA_DIR
             # would have no effect on what gets served here.
-            relative = urllib.parse.unquote(url_path[len("/data/"):] if url_path != "/data" else "")
-            candidate = (DATA_DIR / relative).resolve() if relative else DATA_DIR.resolve()
-            if candidate == ALLOWED_STATIC_DIR_DATA or candidate.is_relative_to(ALLOWED_STATIC_DIR_DATA):
+            relative = urllib.parse.unquote(
+                url_path[len("/data/") :] if url_path != "/data" else ""
+            )
+            candidate = (
+                (DATA_DIR / relative).resolve() if relative else DATA_DIR.resolve()
+            )
+            if candidate == ALLOWED_STATIC_DIR_DATA or candidate.is_relative_to(
+                ALLOWED_STATIC_DIR_DATA
+            ):
                 return str(candidate)
             return str(ROOT / "__not_served__")
 
         resolved = Path(super().translate_path(path)).resolve()
-        if resolved == ALLOWED_STATIC_DIR_APP or resolved.is_relative_to(ALLOWED_STATIC_DIR_APP):
+        if resolved == ALLOWED_STATIC_DIR_APP or resolved.is_relative_to(
+            ALLOWED_STATIC_DIR_APP
+        ):
             return str(resolved)
         return str(ROOT / "__not_served__")
 
@@ -473,11 +509,16 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             payload = self.read_json_body(max_bytes=16 * 1024)
             username_value = payload.get("username")
             password_value = payload.get("password")
-            if not isinstance(username_value, str) or not isinstance(password_value, str):
-                raise ValueError("Identifiants invalides.")
+            if not isinstance(username_value, str) or not isinstance(
+                password_value, str
+            ):
+                raise TypeError("Identifiants invalides.")
             username = username_value
             password = password_value
-            if len(username) > 64 or len(password.encode("utf-8")) > MAX_PASSWORD_LENGTH:
+            if (
+                len(username) > 64
+                or len(password.encode("utf-8")) > MAX_PASSWORD_LENGTH
+            ):
                 raise ValueError("Identifiants invalides.")
             if not self.cert_login_limiter.try_begin(client):
                 self.write_json_response(
@@ -488,7 +529,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 return
             reserved = True
             with credential_lock(self.cert_admin_file, exclusive=False):
-                revision = authenticate_credentials(self.cert_admin_file, username, password)
+                revision = authenticate_credentials(
+                    self.cert_admin_file, username, password
+                )
                 if revision is None:
                     self.write_json_response(
                         {"error": "Identifiant ou mot de passe invalide."},
@@ -572,13 +615,17 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                         )
                         return
                     validation_token = payload.get("validationToken")
-                    if not isinstance(validation_token, str) or not self.cert_validation_tickets.consume(
+                    if not isinstance(
+                        validation_token, str
+                    ) or not self.cert_validation_tickets.consume(
                         validation_token,
                         session_id,
                         payload,
                     ):
                         self.write_json_response(
-                            {"error": "Prévalidation expirée ou non concordante. Valide à nouveau le certificat."},
+                            {
+                                "error": "Prévalidation expirée ou non concordante. Valide à nouveau le certificat."
+                            },
                             HTTPStatus.CONFLICT,
                             extra_headers={"Cache-Control": "no-store"},
                         )
@@ -595,13 +642,24 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 }
             else:
                 summary = validate_uploaded_certificate(payload, self.cert_hostname)
-                validation_token = self.cert_validation_tickets.issue(session_id, payload)
-                response = {"valid": True, "validationToken": validation_token, **summary}
+                validation_token = self.cert_validation_tickets.issue(
+                    session_id, payload
+                )
+                response = {
+                    "valid": True,
+                    "validationToken": validation_token,
+                    **summary,
+                }
             self.write_json_response(
                 response,
                 extra_headers={"Cache-Control": "no-store"},
             )
-        except (CredentialError, certctl.CertificateError, ValueError, OSError) as error:
+        except (
+            CredentialError,
+            certctl.CertificateError,
+            ValueError,
+            OSError,
+        ) as error:
             # This pattern redacts a temporary path from an error; it does not create or access one.
             message = re.sub(r"/tmp/fortios-[^\s:]+", "<upload>", str(error))  # nosec B108
             self.write_json_response(
@@ -647,10 +705,14 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         if not self.is_safe_origin():
             self.send_error(HTTPStatus.FORBIDDEN, "Origin invalide")
             return
-        if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(ADVISORIES_PREFIX):
-            self.handle_update_advisory(self.path[len(ADVISORIES_PREFIX):])
-        elif self.path.startswith(COMPATIBILITIES_PREFIX) and len(self.path) > len(COMPATIBILITIES_PREFIX):
-            self.handle_update_compatibility(self.path[len(COMPATIBILITIES_PREFIX):])
+        if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(
+            ADVISORIES_PREFIX
+        ):
+            self.handle_update_advisory(self.path[len(ADVISORIES_PREFIX) :])
+        elif self.path.startswith(COMPATIBILITIES_PREFIX) and len(self.path) > len(
+            COMPATIBILITIES_PREFIX
+        ):
+            self.handle_update_compatibility(self.path[len(COMPATIBILITIES_PREFIX) :])
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
@@ -658,10 +720,14 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         if not self.is_safe_origin():
             self.send_error(HTTPStatus.FORBIDDEN, "Origin invalide")
             return
-        if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(ADVISORIES_PREFIX):
-            self.handle_delete_advisory(self.path[len(ADVISORIES_PREFIX):])
-        elif self.path.startswith(COMPATIBILITIES_PREFIX) and len(self.path) > len(COMPATIBILITIES_PREFIX):
-            self.handle_delete_compatibility(self.path[len(COMPATIBILITIES_PREFIX):])
+        if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(
+            ADVISORIES_PREFIX
+        ):
+            self.handle_delete_advisory(self.path[len(ADVISORIES_PREFIX) :])
+        elif self.path.startswith(COMPATIBILITIES_PREFIX) and len(self.path) > len(
+            COMPATIBILITIES_PREFIX
+        ):
+            self.handle_delete_compatibility(self.path[len(COMPATIBILITIES_PREFIX) :])
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
@@ -672,7 +738,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             if product not in PRODUCT_LABELS:
                 raise ValueError(f"Produit invalide : {product}")
             if product not in PRODUCTS:
-                raise ValueError(f"{PRODUCT_LABELS[product]} n'a pas de chemin d'upgrade automatique Fortinet.")
+                raise ValueError(
+                    f"{PRODUCT_LABELS[product]} n'a pas de chemin d'upgrade automatique Fortinet."
+                )
             request = OfficialPathRequest(
                 product=product,
                 model=str(payload["model"]).strip(),
@@ -682,19 +750,28 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             result = fetch_official_upgrade_path(request, self.timeout)
             if not result:
                 self.write_json_response(
-                    {"error": "Fortinet n'a pas retourné de chemin pour cette requête."},
+                    {
+                        "error": "Fortinet n'a pas retourné de chemin pour cette requête."
+                    },
                     HTTPStatus.NOT_FOUND,
                 )
                 return
 
             official_path, firmwares = result
             with cross_process_lock(DATA_PATH):
-                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                state = normalize_state(
+                    read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {})
+                )
                 for firmware in firmwares:
                     upsert_firmware(state, firmware)
                 upsert_path(state, official_path)
                 record_search_history(
-                    state, request.product, request.model, request.from_version, request.to_version, official_path.hops
+                    state,
+                    request.product,
+                    request.model,
+                    request.from_version,
+                    request.to_version,
+                    official_path.hops,
                 )
                 state["generatedAt"] = utc_now()
                 write_json(DATA_PATH, state)
@@ -711,7 +788,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         except ValueError as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except KeyError as error:
-            self.write_json_response({"error": f"Champ manquant : {error.args[0]}"}, HTTPStatus.BAD_REQUEST)
+            self.write_json_response(
+                {"error": f"Champ manquant : {error.args[0]}"}, HTTPStatus.BAD_REQUEST
+            )
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
             self.log_exception("handle_official_path")
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
@@ -727,7 +806,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             }
 
             with cross_process_lock(DATA_PATH):
-                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                state = normalize_state(
+                    read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {})
+                )
                 upsert_advisory(state, advisory)
                 state["generatedAt"] = utc_now()
                 write_json(DATA_PATH, state)
@@ -743,10 +824,21 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         try:
             advisory_id = urllib.parse.unquote(raw_id)
             with cross_process_lock(DATA_PATH):
-                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-                existing = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
+                state = normalize_state(
+                    read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {})
+                )
+                existing = next(
+                    (
+                        item
+                        for item in state["advisories"]
+                        if item.get("id") == advisory_id
+                    ),
+                    None,
+                )
                 if existing is None:
-                    self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
+                    self.write_json_response(
+                        {"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND
+                    )
                     return
 
                 old_images = referenced_image_filenames(existing.get("description", ""))
@@ -776,16 +868,33 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         try:
             advisory_id = urllib.parse.unquote(raw_id)
             with cross_process_lock(DATA_PATH):
-                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-                target = next((item for item in state["advisories"] if item.get("id") == advisory_id), None)
+                state = normalize_state(
+                    read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {})
+                )
+                target = next(
+                    (
+                        item
+                        for item in state["advisories"]
+                        if item.get("id") == advisory_id
+                    ),
+                    None,
+                )
                 if target is None:
-                    self.write_json_response({"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND)
+                    self.write_json_response(
+                        {"error": "Alerte introuvable."}, HTTPStatus.NOT_FOUND
+                    )
                     return
 
-                state["advisories"] = [item for item in state["advisories"] if item.get("id") != advisory_id]
+                state["advisories"] = [
+                    item
+                    for item in state["advisories"]
+                    if item.get("id") != advisory_id
+                ]
                 state["generatedAt"] = utc_now()
                 write_json(DATA_PATH, state)
-                prune_unreferenced_images(referenced_image_filenames(target.get("description", "")), state)
+                prune_unreferenced_images(
+                    referenced_image_filenames(target.get("description", "")), state
+                )
 
             self.write_json_response({"state": state})
         except Exception as error:  # noqa: BLE001 - surface a readable local API error.
@@ -803,7 +912,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             }
 
             with cross_process_lock(DATA_PATH):
-                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+                state = normalize_state(
+                    read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {})
+                )
                 upsert_compatibility(state, item)
                 state["generatedAt"] = utc_now()
                 write_json(DATA_PATH, state)
@@ -819,10 +930,21 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         try:
             item_id = urllib.parse.unquote(raw_id)
             with cross_process_lock(DATA_PATH):
-                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-                existing = next((item for item in state["compatibilities"] if item.get("id") == item_id), None)
+                state = normalize_state(
+                    read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {})
+                )
+                existing = next(
+                    (
+                        item
+                        for item in state["compatibilities"]
+                        if item.get("id") == item_id
+                    ),
+                    None,
+                )
                 if existing is None:
-                    self.write_json_response({"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND)
+                    self.write_json_response(
+                        {"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND
+                    )
                     return
 
                 payload = self.read_json_body()
@@ -849,10 +971,18 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         try:
             item_id = urllib.parse.unquote(raw_id)
             with cross_process_lock(DATA_PATH):
-                state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
-                remaining = [item for item in state["compatibilities"] if item.get("id") != item_id]
+                state = normalize_state(
+                    read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {})
+                )
+                remaining = [
+                    item
+                    for item in state["compatibilities"]
+                    if item.get("id") != item_id
+                ]
                 if len(remaining) == len(state["compatibilities"]):
-                    self.write_json_response({"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND)
+                    self.write_json_response(
+                        {"error": "Combinaison introuvable."}, HTTPStatus.NOT_FOUND
+                    )
                     return
 
                 state["compatibilities"] = remaining
@@ -870,7 +1000,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             content_type = str(payload.get("contentType") or "").strip().lower()
             data_base64 = str(payload.get("dataBase64") or "").strip()
             if content_type not in IMAGE_EXTENSIONS:
-                raise ValueError(f"Format d'image non supporté : {content_type or 'inconnu'}")
+                raise ValueError(
+                    f"Format d'image non supporté : {content_type or 'inconnu'}"
+                )
             if not data_base64:
                 raise ValueError("Image manquante.")
 
@@ -896,7 +1028,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         # Requiring the exact Content-Type also closes the "CORS-simple request" loophole a
         # cross-origin fetch() could otherwise use (e.g. text/plain) to reach this endpoint
         # without a preflight — paired with is_safe_origin() above.
-        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        content_type = (
+            (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        )
         if content_type != "application/json":
             self.close_connection = True
             raise ValueError("Content-Type doit être application/json.")
@@ -909,18 +1043,22 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             raise ValueError("Corps JSON manquant.")
         if length > max_bytes:
             self.close_connection = True
-            raise ValueError(f"Corps de requête trop volumineux ({length} octets, max {max_bytes}).")
+            raise ValueError(
+                f"Corps de requête trop volumineux ({length} octets, max {max_bytes})."
+            )
         raw = self.rfile.read(length)
         if len(raw) != length:
             self.close_connection = True
             raise ValueError("Corps JSON incomplet.")
         payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, dict):
-            raise ValueError("Le corps JSON doit être un objet.")
+            raise TypeError("Le corps JSON doit être un objet.")
         return payload
 
     def log_exception(self, context: str) -> None:
-        sys.stderr.write(f"{self.log_date_time_string()} - unhandled error in {context}\n")
+        sys.stderr.write(
+            f"{self.log_date_time_string()} - unhandled error in {context}\n"
+        )
         traceback.print_exc(file=sys.stderr)
 
     def write_json_response(
@@ -939,7 +1077,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format: str, *args: Any) -> None:
-        sys.stderr.write("%s - %s\n" % (self.log_date_time_string(), format % args))
+        sys.stderr.write(f"{self.log_date_time_string()} - {format % args}\n")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -967,8 +1105,12 @@ def resolve_tls_pair(certificate: Path, private_key: Path) -> tuple[Path, Path]:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     tls_active = bool(args.tls_cert)
-    allow_insecure_localhost = os.environ.get("FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST") == "1"
-    cert_admin_file = Path(os.environ.get("FORTIOS_CERT_ADMIN_FILE", str(DEFAULT_CREDENTIALS)))
+    allow_insecure_localhost = (
+        os.environ.get("FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST") == "1"
+    )
+    cert_admin_file = Path(
+        os.environ.get("FORTIOS_CERT_ADMIN_FILE", str(DEFAULT_CREDENTIALS))
+    )
     cert_sessions = SessionStore()
     cert_login_limiter = LoginRateLimiter()
     cert_validation_tickets = ValidationTicketStore()
