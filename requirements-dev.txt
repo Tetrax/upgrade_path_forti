@@ -7,5 +7,5 @@
 #   uv venv .venv-test && uv pip install --python .venv-test/bin/python -r requirements-dev.txt
 #   .venv-test/bin/python -m playwright install --with-deps chromium
 #   .venv-test/bin/python -m pytest tests/e2e/
-pytest
-pytest-playwright
+pytest>=9.1,<9.2
+pytest-playwright>=0.8,<0.9
