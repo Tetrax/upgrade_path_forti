@@ -58,9 +58,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile all scripts
-        run: python3 -m py_compile scripts/fortios_watch.py scripts/fortios_server.py scripts/fortios_notify.py scripts/import_forticlient_compat.py
-      - name: Check deploy/install.sh syntax
-        run: bash -n deploy/install.sh
+        run: python3 -m compileall -q scripts
+      - name: Check shell script syntax
+        run: bash -n deploy/install.sh docker/*.sh
       - name: Run unittest suite
         run: python3 -m unittest discover -s tests -v
       - name: Audit Python dependencies for known vulnerabilities
