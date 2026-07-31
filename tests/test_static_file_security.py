@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import fortios_server as fs  # noqa: E402
+import fortios_server as fs
 
 
 def translate(path: str) -> str:

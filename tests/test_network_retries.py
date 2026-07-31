@@ -9,8 +9,8 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import fortios_watch as fw  # noqa: E402
-import import_forticlient_compat as compat  # noqa: E402
+import fortios_watch as fw
+import import_forticlient_compat as compat
 
 
 class _Response:
@@ -56,9 +56,9 @@ class HttpReadRetryTests(unittest.TestCase):
             patch("urllib.request.urlopen", side_effect=responses) as urlopen,
             patch.object(fw.time, "sleep"),
             patch.object(fw.random, "uniform", return_value=0),
+            self.assertRaises(http.client.IncompleteRead),
         ):
-            with self.assertRaises(http.client.IncompleteRead):
-                fw.fetch_text("https://docs.fortinet.com/example", timeout=12)
+            fw.fetch_text("https://docs.fortinet.com/example", timeout=12)
 
         self.assertEqual(urlopen.call_count, 3)
 
@@ -66,9 +66,11 @@ class HttpReadRetryTests(unittest.TestCase):
         error = urllib.error.HTTPError(
             "https://docs.fortinet.com/missing", 404, "Not Found", {}, MagicMock()
         )
-        with patch("urllib.request.urlopen", side_effect=error) as urlopen:
-            with self.assertRaises(urllib.error.HTTPError):
-                fw.fetch_text("https://docs.fortinet.com/missing", timeout=12)
+        with (
+            patch("urllib.request.urlopen", side_effect=error) as urlopen,
+            self.assertRaises(urllib.error.HTTPError),
+        ):
+            fw.fetch_text("https://docs.fortinet.com/missing", timeout=12)
 
         self.assertEqual(urlopen.call_count, 1)
 

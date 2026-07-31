@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
-import os
-import json
 import http.cookiejar
+import json
+import os
 import socket
 import ssl
 import subprocess
@@ -18,16 +18,16 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "scripts" / "fortios_server.py"
 sys.path.insert(0, str(ROOT / "scripts"))
-import cert_admin  # type: ignore[import-not-found]  # noqa: E402
-from tests.test_certctl import HOSTNAME, create_self_signed  # noqa: E402
+import cert_admin  # type: ignore[import-not-found]
+
+from tests.test_certctl import HOSTNAME, create_self_signed
 
 
 def free_port() -> int:
@@ -70,7 +70,7 @@ def running_server(environment: dict[str, str]) -> Iterator[str]:
                     context=tls_context,
                 ).close()
                 break
-            except Exception:
+            except urllib.error.URLError:
                 time.sleep(0.05)
         else:
             raise AssertionError("server did not become ready")

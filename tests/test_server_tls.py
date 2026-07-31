@@ -10,9 +10,9 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "scripts" / "fortios_server.py"
@@ -78,7 +78,7 @@ class ServerTlsTests(unittest.TestCase):
                 else:
                     self.fail(f"TLS server was not ready: {last_error}")
 
-                with self.assertRaises(Exception):
+                with self.assertRaises(OSError):
                     urllib.request.urlopen(f"http://127.0.0.1:{port}/app/", timeout=1)
 
                 health = subprocess.run(
@@ -128,7 +128,7 @@ class ServerTlsTests(unittest.TestCase):
                     ) as response:
                         self.assertEqual(response.status, 200)
                         break
-                except Exception:
+                except urllib.error.URLError:
                     time.sleep(0.05)
             else:
                 self.fail("HTTP server was not ready")

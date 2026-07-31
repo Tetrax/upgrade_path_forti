@@ -8,21 +8,22 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import fortios_notify as notify  # noqa: E402
-import fortios_watch as fw  # noqa: E402
+import fortios_notify as notify
+import fortios_watch as fw
 
 
 def make_config(**overrides) -> notify.EmailConfig:
-    defaults = dict(
-        enabled=True, smtp_host="smtp.example.com", smtp_port=587,
-        smtp_username="user@example.com", smtp_password="hunter2",
-        smtp_from="fortios@example.com", smtp_to=("alice@example.com",),
-        smtp_starttls=True, smtp_timeout=10, app_url="https://valdev.me:3001/app/",
-    )
+    defaults = {
+        "enabled": True, "smtp_host": "smtp.example.com", "smtp_port": 587,
+        "smtp_username": "user@example.com", "smtp_password": "hunter2",
+        "smtp_from": "fortios@example.com", "smtp_to": ("alice@example.com",),
+        "smtp_starttls": True, "smtp_timeout": 10, "app_url": "https://valdev.me:3001/app/",
+    }
     defaults.update(overrides)
     return notify.EmailConfig(**defaults)
 
@@ -377,7 +378,7 @@ class CveEventDerivationTests(unittest.TestCase):
 
 
 class SourceHealthEventDerivationTests(unittest.TestCase):
-    LABELS = {"forticlient": "FortiClient"}
+    LABELS: ClassVar[dict[str, str]] = {"forticlient": "FortiClient"}
 
     def test_no_email_on_first_failure(self):
         before = {"forticlient": {"consecutiveFailures": 0}}
@@ -424,7 +425,7 @@ class MainIntegrationTests(unittest.TestCase):
     here for email notifications.
     """
 
-    ENV = {
+    ENV: ClassVar[dict[str, str]] = {
         "FORTIOS_EMAIL_ENABLED": "true",
         "FORTIOS_SMTP_HOST": "smtp.example.com",
         "FORTIOS_SMTP_FROM": "fortios@example.com",

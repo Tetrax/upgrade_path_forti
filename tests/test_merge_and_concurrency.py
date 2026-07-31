@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import fortios_watch as fw  # noqa: E402
+import fortios_watch as fw
 
 
 def make_firmware_state(firmwares: list[dict]) -> dict:
@@ -61,7 +61,7 @@ class DiscoveredAtMigrationTests(unittest.TestCase):
         ))
         merged = fw.merge_state(base, incoming)
         firmware = merged["products"][0]["models"][0]["firmwares"][0]
-        self.assertEqual(firmware.get("discoveredAt"), fw.dt.date.today().isoformat())
+        self.assertEqual(firmware.get("discoveredAt"), fw.dt.datetime.now(fw.dt.timezone.utc).date().isoformat())
 
     def test_repeated_daily_merges_never_reset_an_already_discovered_version(self):
         """Simulates several consecutive daily runs against the same already-known version: a

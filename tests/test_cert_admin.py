@@ -11,11 +11,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 ROOT = Path(__file__).resolve().parents[1]
 CERT_ADMIN = ROOT / "scripts" / "cert_admin.py"
 sys.path.insert(0, str(ROOT / "scripts"))
-import cert_admin  # type: ignore[import-not-found]  # noqa: E402
+import cert_admin  # type: ignore[import-not-found]
 
 
 class CertificateAdminTests(unittest.TestCase):

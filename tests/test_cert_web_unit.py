@@ -13,11 +13,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-import cert_web  # type: ignore[import-not-found]  # noqa: E402
-from tests.test_certctl import HOSTNAME, create_self_signed  # noqa: E402
+import cert_web  # type: ignore[import-not-found]
+
+from tests.test_certctl import HOSTNAME, create_self_signed
 
 
 class CertificateSessionTests(unittest.TestCase):

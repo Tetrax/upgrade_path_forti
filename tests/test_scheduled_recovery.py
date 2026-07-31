@@ -14,8 +14,8 @@ from zoneinfo import ZoneInfo
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import container_scheduler as scheduler  # noqa: E402
-import scheduled_refresh as refresh  # noqa: E402
+import container_scheduler as scheduler
+import scheduled_refresh as refresh
 
 
 def _write_health(path: Path, sources: dict) -> None:

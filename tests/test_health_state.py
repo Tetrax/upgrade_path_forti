@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import fortios_watch as fw  # noqa: E402
+import fortios_watch as fw
 
 
 def _concurrent_write_worker(path, source_id, started_at, hold_seconds, barrier):

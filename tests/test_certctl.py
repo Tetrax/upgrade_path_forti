@@ -12,12 +12,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-
 ROOT = Path(__file__).resolve().parents[1]
 CERTCTL = ROOT / "scripts" / "certctl.py"
 HOSTNAME = "upgrade-path.sns-security.lan"
 sys.path.insert(0, str(ROOT / "scripts"))
-import certctl  # type: ignore[import-not-found]  # noqa: E402
+import certctl  # type: ignore[import-not-found]
 
 
 def run(
@@ -25,7 +24,7 @@ def run(
     check: bool = True,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(args, text=True, capture_output=True, env=env)
+    result = subprocess.run(args, text=True, capture_output=True, env=env, check=False)
     if check and result.returncode:
         raise AssertionError(f"command failed ({result.returncode}): {' '.join(args)}\n{result.stdout}\n{result.stderr}")
     return result
@@ -156,8 +155,8 @@ class CertificateInstallTests(unittest.TestCase):
                 mock.patch.dict(
                     certctl.os.environ, {"PUID": str(uid), "PGID": str(gid)}, clear=False,
                 ),
+                self.assertRaises(certctl.CertificateError),
             ):
-                with self.assertRaises(certctl.CertificateError):
                     certctl.configured_runtime_owner()
 
     def test_container_install_keeps_material_root_owned_and_group_readable(self) -> None:

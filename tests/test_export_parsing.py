@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import fortios_watch as fw  # noqa: E402
+import fortios_watch as fw
 
 
 class UpgradeExportParsingTests(unittest.TestCase):
