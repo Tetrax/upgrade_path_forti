@@ -137,6 +137,15 @@ def validate_certificate_dates(certificate: bytes, label: str) -> None:
         raise CertificateError(f"Le certificat {label} n'est pas encore valide.")
 
 
+def validate_certificate_hostname(certificate: Path, hostname: str) -> None:
+    result = _openssl_result(
+        "x509", "-in", str(certificate), "-noout", "-checkhost", hostname,
+    )
+    expected = f"Hostname {hostname} does match certificate".encode()
+    if result.returncode != 0 or result.stdout.strip() != expected:
+        raise CertificateError(f"Le certificat ne correspond pas au nom d'hôte {hostname}.")
+
+
 def certificate_name(certificate: bytes, field: str) -> bytes:
     result = run_openssl(
         "x509", "-noout", f"-{field}", "-nameopt", "RFC2253", input_data=certificate,
@@ -333,7 +342,7 @@ def install_pem(
     )
     if san.returncode != 0 or b"DNS:" not in san.stdout:
         raise CertificateError("Le certificat doit contenir un SAN DNS.")
-    run_openssl("x509", "-in", str(source), "-noout", "-checkhost", hostname)
+    validate_certificate_hostname(source, hostname)
     if public_key_from_certificate(source) != public_key_from_private_key(
         key,
         password_file,
