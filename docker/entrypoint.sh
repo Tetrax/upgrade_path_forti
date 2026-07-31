@@ -17,15 +17,9 @@ fi
 
 # Bind mounts are commonly created as root by Docker/Portainer. Prepare only
 # the persistent paths, then run every application process without root.
-mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs
+mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs /opt/fortios/certificates
 chown -R "$PUID:$PGID" /opt/fortios/data /opt/fortios/docs
-if [ -z "${FORTIOS_CERT_HELPER_SOCKET:-}" ]; then
-  mkdir -p /opt/fortios/certificates
-  chown -R "0:$PGID" /opt/fortios/certificates
-  chmod -R u=rwX,g=rX,o= /opt/fortios/certificates
-elif [ ! -d /opt/fortios/certificates ]; then
-  echo "The read-only certificate volume is unavailable." >&2
-  exit 78
-fi
+chown -R "0:$PGID" /opt/fortios/certificates
+chmod -R u=rwX,g=rX,o= /opt/fortios/certificates
 
 exec gosu "$PUID:$PGID" "$@"

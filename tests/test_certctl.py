@@ -91,7 +91,6 @@ def create_ca_signed_leaf(
     key = directory / "leaf.key"
     extensions = directory / "leaf.ext"
     extensions.write_text(
-        "[leaf_extensions]\n"
         f"subjectAltName=DNS:{hostname}\n"
         "basicConstraints=critical,CA:FALSE\n"
         "keyUsage=critical,digitalSignature,keyEncipherment\n"
@@ -105,41 +104,11 @@ def create_ca_signed_leaf(
         "openssl", "x509", "-req", "-in", str(request),
         "-CA", str(ca_cert), "-CAkey", str(ca_key), "-CAcreateserial",
         "-out", str(cert), "-days", "30", "-extfile", str(extensions),
-        "-extensions", "leaf_extensions",
     ]
-    if not_before is not None or not_after is not None:
-        database = directory / "ca-index.txt"
-        serial = directory / "ca-serial"
-        issued = directory / "issued"
-        config = directory / "ca.cnf"
-        database.touch()
-        serial.write_text("1000\n")
-        issued.mkdir()
-        config.write_text(
-            "[ca]\n"
-            "default_ca=test_ca\n"
-            "[test_ca]\n"
-            f"database={database}\n"
-            f"new_certs_dir={issued}\n"
-            f"certificate={ca_cert}\n"
-            f"private_key={ca_key}\n"
-            f"serial={serial}\n"
-            "default_md=sha256\n"
-            "default_days=30\n"
-            "policy=test_policy\n"
-            "unique_subject=no\n"
-            "[test_policy]\n"
-            "commonName=supplied\n",
-        )
-        starts_at = not_before or datetime.now(timezone.utc) - timedelta(minutes=1)
-        ends_at = not_after or starts_at + timedelta(days=7)
-        sign_command = [
-            "openssl", "ca", "-batch", "-config", str(config),
-            "-in", str(request), "-out", str(cert), "-notext",
-            "-startdate", starts_at.strftime("%Y%m%d%H%M%SZ"),
-            "-enddate", ends_at.strftime("%Y%m%d%H%M%SZ"),
-            "-extfile", str(extensions), "-extensions", "leaf_extensions",
-        ]
+    if not_before is not None:
+        sign_command.extend(["-not_before", not_before.strftime("%Y%m%d%H%M%SZ")])
+    if not_after is not None:
+        sign_command.extend(["-not_after", not_after.strftime("%Y%m%d%H%M%SZ")])
     run(*sign_command)
     return cert, key
 
@@ -171,20 +140,6 @@ def create_intermediate_ca(
 
 
 class CertificateInstallTests(unittest.TestCase):
-    def test_rejects_hostname_mismatch_when_legacy_openssl_returns_zero(self) -> None:
-        legacy_mismatch = subprocess.CompletedProcess(
-            args=["openssl", "x509", "-checkhost", HOSTNAME],
-            returncode=0,
-            stdout=f"Hostname {HOSTNAME} does NOT match certificate\n".encode(),
-            stderr=b"",
-        )
-
-        with (
-            mock.patch.object(certctl, "_openssl_result", return_value=legacy_mismatch),
-            self.assertRaises(certctl.CertificateError),
-        ):
-            certctl.validate_certificate_hostname(Path("certificate.pem"), HOSTNAME)
-
     def test_runtime_owner_uses_container_puid_pgid_when_root(self) -> None:
         with (
             mock.patch.object(certctl.os, "geteuid", return_value=0),

@@ -4,25 +4,19 @@ services:
   web:
     image: fortios-upgrade-intelligence:local
     restart: unless-stopped
-    depends_on:
-      cert-helper:
-        condition: service_healthy
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       FORTIOS_TLS_CERT: ${FORTIOS_TLS_CERT:-}
       FORTIOS_TLS_KEY: ${FORTIOS_TLS_KEY:-}
       FORTIOS_TLS_HOSTNAME: ${FORTIOS_TLS_HOSTNAME:-}
-      FORTIOS_CERT_ADMIN_FILE: ${FORTIOS_CERT_ADMIN_FILE:-/opt/fortios/certificates/admin/credentials.json}
-      FORTIOS_CERT_HELPER_SOCKET: /run/fortios-cert-helper/helper.sock
       FORTIOS_CONTAINER_HEALTHCHECK: "1"
     ports:
       - "${FORTIOS_HTTP_BIND_ADDRESS:-127.0.0.1}:${FORTIOS_HTTP_PORT:-8000}:8000"
     volumes:
       - ${FORTIOS_DATA_DIR}:/opt/fortios/data
       - ${FORTIOS_DOCS_DIR}:/opt/fortios/docs
-      - ${FORTIOS_CERTS_DIR}:/opt/fortios/certificates:ro
-      - fortios-cert-helper-run:/run/fortios-cert-helper:ro
+      - ${FORTIOS_CERTS_DIR}:/opt/fortios/certificates
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=128m
     healthcheck:
@@ -33,38 +27,6 @@ services:
       start_period: 10s
     security_opt:
       - no-new-privileges:true
-
-  cert-helper:
-    image: fortios-upgrade-intelligence:local
-    restart: unless-stopped
-    entrypoint: ["/usr/local/bin/fortios-cert-helper-entrypoint"]
-    network_mode: none
-    environment:
-      PUID: ${PUID:-1000}
-      PGID: ${PGID:-1000}
-      FORTIOS_TLS_HOSTNAME: ${FORTIOS_TLS_HOSTNAME:-}
-      FORTIOS_CERT_ADMIN_FILE: ${FORTIOS_CERT_ADMIN_FILE:-/opt/fortios/certificates/admin/credentials.json}
-      FORTIOS_CERT_OUTPUT_DIR: /opt/fortios/certificates/active
-      FORTIOS_CERT_HELPER_SOCKET: /run/fortios-cert-helper/helper.sock
-    volumes:
-      - ${FORTIOS_CERTS_DIR}:/opt/fortios/certificates
-      - fortios-cert-helper-run:/run/fortios-cert-helper
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=128m
-    read_only: true
-    cap_drop:
-      - ALL
-    cap_add:
-      - CHOWN
-      - DAC_OVERRIDE
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test: ["CMD", "python", "scripts/cert_helper.py", "ping"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
 
   scheduler:
     image: fortios-upgrade-intelligence:local
@@ -91,6 +53,3 @@ services:
       - /tmp:rw,noexec,nosuid,size=512m
     security_opt:
       - no-new-privileges:true
-
-volumes:
-  fortios-cert-helper-run:
