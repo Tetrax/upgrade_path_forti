@@ -22,7 +22,9 @@ PARIS = ZoneInfo("Europe/Paris")
 MORNING = (7, 0)
 RECOVERY = (7, 45)
 AFTERNOON = (15, 30)
-RECOVERY_ATTEMPT_PATH = Path(__file__).resolve().parents[1] / "data" / "fortios-recovery-attempt.lock"
+RECOVERY_ATTEMPT_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "fortios-recovery-attempt.lock"
+)
 
 
 def next_job(now: datetime) -> tuple[datetime, str]:
@@ -34,7 +36,9 @@ def next_job(now: datetime) -> tuple[datetime, str]:
             (*RECOVERY, "recovery"),
             (*AFTERNOON, "cve"),
         ):
-            scheduled = datetime(day.year, day.month, day.day, hour, minute, tzinfo=PARIS)
+            scheduled = datetime(
+                day.year, day.month, day.day, hour, minute, tzinfo=PARIS
+            )
             if scheduled > now:
                 candidates.append((scheduled, job))
     return min(candidates, key=lambda candidate: candidate[0])
@@ -48,7 +52,9 @@ def sleep_until(when: datetime) -> None:
         time.sleep(min(remaining, 60))
 
 
-def run_recovery_once(*, now: datetime, marker_path: Path = RECOVERY_ATTEMPT_PATH) -> int:
+def run_recovery_once(
+    *, now: datetime, marker_path: Path = RECOVERY_ATTEMPT_PATH
+) -> int:
     """Bound restart catch-up to one recovery attempt per Europe/Paris calendar day."""
     paris_now = now.astimezone(PARIS)
     try:
@@ -63,16 +69,22 @@ def run_recovery_once(*, now: datetime, marker_path: Path = RECOVERY_ATTEMPT_PAT
             except (ValueError, TypeError):
                 payload = {}
             if payload.get("parisDate") == paris_now.date().isoformat():
-                print("07:45 recovery was already attempted today; skipping duplicate.", flush=True)
+                print(
+                    "07:45 recovery was already attempted today; skipping duplicate.",
+                    flush=True,
+                )
                 return 0
             # Persist before starting: a container killed mid-collection must not retry forever
             # under a restart policy. The next normal opportunity is the following Paris day.
             marker.seek(0)
             marker.truncate()
-            json.dump({
-                "parisDate": paris_now.date().isoformat(),
-                "attemptedAt": paris_now.isoformat(),
-            }, marker)
+            json.dump(
+                {
+                    "parisDate": paris_now.date().isoformat(),
+                    "attemptedAt": paris_now.isoformat(),
+                },
+                marker,
+            )
             marker.flush()
             os.fsync(marker.fileno())
             return run_recovery(ensure_full_today=True)
@@ -122,7 +134,9 @@ def main() -> int:
     elif _recovery_missed_during_restart(now):
         # Container restarted after 07:45: perform the cheap health check/recovery once rather
         # than silently waiting until tomorrow. Healthy state exits without network requests.
-        print("Running missed 07:45 recovery check after scheduler restart.", flush=True)
+        print(
+            "Running missed 07:45 recovery check after scheduler restart.", flush=True
+        )
         run_recovery_once(now=now)
 
     while True:

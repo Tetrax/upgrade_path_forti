@@ -23,9 +23,7 @@ from __future__ import annotations
 
 import argparse
 import http.client
-import json
 import re
-import secrets
 import sys
 import time
 import urllib.error
@@ -34,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from fortios_watch import (  # noqa: E402
+from fortios_watch import (
     DEFAULT_HEALTH_PATH,
     HEALTH_STATUS_ERROR,
     HEALTH_STATUS_OK,
@@ -44,9 +42,9 @@ from fortios_watch import (  # noqa: E402
     health_mark_running,
     normalize_state,
     read_json,
+    read_url_with_retry,
     record_health_results,
     upsert_compatibility,
-    read_url_with_retry,
     utc_now,
     utc_now_precise,
     write_json,
@@ -56,21 +54,28 @@ FORTINET_DOCS_BASE_URL = "https://docs.fortinet.com"
 DEFAULT_MAJORS_TO_TRY = ("8.0", "7.4", "7.2")
 SOURCE_LABEL = "FortiClient EMS Compatibility Matrix (Fortinet, officielle)"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
-MIN_EXPECTED_ENTRIES = 10  # last known-good import found 22; refuse to commit far below that.
+MIN_EXPECTED_ENTRIES = (
+    10  # last known-good import found 22; refuse to commit far below that.
+)
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "fortios-data.generated.json"
 SAMPLE_PATH = ROOT / "data" / "fortios-data.sample.json"
 
 
 def fetch_url(url: str, timeout: int) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"})
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"}
+    )
     return read_url_with_retry(request, timeout)
 
 
 def find_pdf_url(major: str, timeout: int) -> str | None:
     url = f"{FORTINET_DOCS_BASE_URL}/document/forticlient/{major}.0/ems-compatibility-chart"
     html = fetch_url(url, timeout).decode("utf-8", errors="ignore")
-    match = re.search(r'href="(https://fortinetweb\.s3\.amazonaws\.com/[^"]+ems-compatibility-matrix\.pdf)"', html)
+    match = re.search(
+        r'href="(https://fortinetweb\.s3\.amazonaws\.com/[^"]+ems-compatibility-matrix\.pdf)"',
+        html,
+    )
     return match.group(1) if match else None
 
 
@@ -103,12 +108,23 @@ def parse_matrix(pdf_path: Path) -> list[dict[str, Any]]:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--major", help="Train FortiClient à utiliser pour trouver le PDF (ex: 8.0). Sinon, essaie 8.0, 7.4, 7.2 dans l'ordre.")
-    parser.add_argument("--commit", action="store_true", help="Écrire le résultat dans data/fortios-data.generated.json (sinon, aperçu seulement).")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--major",
+        help="Train FortiClient à utiliser pour trouver le PDF (ex: 8.0). Sinon, essaie 8.0, 7.4, 7.2 dans l'ordre.",
+    )
+    parser.add_argument(
+        "--commit",
+        action="store_true",
+        help="Écrire le résultat dans data/fortios-data.generated.json (sinon, aperçu seulement).",
+    )
     parser.add_argument("--timeout", type=int, default=15)
     parser.add_argument(
-        "--health-output", type=Path, default=DEFAULT_HEALTH_PATH,
+        "--health-output",
+        type=Path,
+        default=DEFAULT_HEALTH_PATH,
         help="Fichier d'état de santé partagé avec fortios_watch.py.",
     )
     args = parser.parse_args(argv)
@@ -119,21 +135,32 @@ def main(argv: list[str]) -> int:
     t0 = time.monotonic()
     started_at = (
         health_mark_running(args.health_output, SOURCE_COMPAT_MATRIX)
-        if args.commit else utc_now_precise()
+        if args.commit
+        else utc_now_precise()
     )
 
-    def record_and_return(status: str, code: int, *, items: int | None = None, error: Any = None) -> int:
+    def record_and_return(
+        status: str, code: int, *, items: int | None = None, error: Any = None
+    ) -> int:
         if args.commit:
             try:
-                record_health_results(args.health_output, {
-                    SOURCE_COMPAT_MATRIX: HealthSourceResult(
-                        status=status, started_at=started_at,
-                        duration_seconds=round(time.monotonic() - t0, 3),
-                        items_collected=items, error=error,
-                    ),
-                })
+                record_health_results(
+                    args.health_output,
+                    {
+                        SOURCE_COMPAT_MATRIX: HealthSourceResult(
+                            status=status,
+                            started_at=started_at,
+                            duration_seconds=round(time.monotonic() - t0, 3),
+                            items_collected=items,
+                            error=error,
+                        ),
+                    },
+                )
             except OSError as health_error:
-                print(f"Avertissement : échec de l'écriture de l'état de santé ({health_error}).", file=sys.stderr)
+                print(
+                    f"Avertissement : échec de l'écriture de l'état de santé ({health_error}).",
+                    file=sys.stderr,
+                )
         return code
 
     majors = (args.major,) if args.major else DEFAULT_MAJORS_TO_TRY
@@ -147,9 +174,13 @@ def main(argv: list[str]) -> int:
         if pdf_url:
             break
     if not pdf_url:
-        print("Impossible de trouver le PDF de compatibilité sur docs.fortinet.com.", file=sys.stderr)
+        print(
+            "Impossible de trouver le PDF de compatibilité sur docs.fortinet.com.",
+            file=sys.stderr,
+        )
         return record_and_return(
-            HEALTH_STATUS_ERROR, 1,
+            HEALTH_STATUS_ERROR,
+            1,
             error="Impossible de trouver le PDF de compatibilité sur docs.fortinet.com",
         )
     print(f"PDF trouvé : {pdf_url}")
@@ -172,14 +203,20 @@ def main(argv: list[str]) -> int:
             "— le format du PDF a peut-être changé, abandon par sécurité."
         )
         print(message, file=sys.stderr)
-        return record_and_return(HEALTH_STATUS_ERROR, 1, items=len(entries), error=message)
+        return record_and_return(
+            HEALTH_STATUS_ERROR, 1, items=len(entries), error=message
+        )
 
     print(f"\n{len(entries)} versions EMS trouvées :\n")
     for entry in sorted(entries, key=lambda e: e["emsVersion"]):
-        print(f"  EMS {entry['emsVersion']:<10} -> FortiClient {', '.join(entry['clientVersions'])}")
+        print(
+            f"  EMS {entry['emsVersion']:<10} -> FortiClient {', '.join(entry['clientVersions'])}"
+        )
 
     if not args.commit:
-        print("\nAperçu seulement. Relancer avec --commit pour écrire dans data/fortios-data.generated.json.")
+        print(
+            "\nAperçu seulement. Relancer avec --commit pour écrire dans data/fortios-data.generated.json."
+        )
         return 0
 
     # Shared with fortios_server.py's live handlers and fortios_watch.py's daily batch run — all
@@ -187,7 +224,9 @@ def main(argv: list[str]) -> int:
     added = 0
     try:
         with cross_process_lock(DATA_PATH):
-            state = normalize_state(read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {}))
+            state = normalize_state(
+                read_json(DATA_PATH, None) or read_json(SAMPLE_PATH, {})
+            )
             existing_by_id = {item.get("id"): item for item in state["compatibilities"]}
             for entry in entries:
                 item_id = f"compat-official-{entry['emsVersion']}"
@@ -210,7 +249,9 @@ def main(argv: list[str]) -> int:
     except Exception as error:  # noqa: BLE001 - persist write failures in health for 07:45 retry.
         print(f"Échec de l'import de la matrice : {error}", file=sys.stderr)
         return record_and_return(HEALTH_STATUS_ERROR, 1, error=error)
-    print(f"\n{added} combinaison(s) officielle(s) ajoutée(s)/mise(s) à jour dans {DATA_PATH}.")
+    print(
+        f"\n{added} combinaison(s) officielle(s) ajoutée(s)/mise(s) à jour dans {DATA_PATH}."
+    )
     return record_and_return(HEALTH_STATUS_OK, 0, items=len(entries))
 
 

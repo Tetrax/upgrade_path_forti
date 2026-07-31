@@ -32,20 +32,36 @@ def drop_container_root() -> None:
 def validate_tls_material(certificate: Path, key: Path, hostname: str) -> None:
     certificates = certctl.normalize_certificate_blocks(certificate.read_bytes())
     if not certificates:
-        raise certctl.CertificateError("Le fullchain TLS ne contient aucun certificat PEM.")
+        raise certctl.CertificateError(
+            "Le fullchain TLS ne contient aucun certificat PEM."
+        )
     leaf, *chain = certificates
     certctl.validate_certificate_dates(leaf, "feuille")
     certctl.validate_chain(leaf, chain)
     san = certctl.run_openssl(
-        "x509", "-in", str(certificate), "-noout", "-ext", "subjectAltName",
+        "x509",
+        "-in",
+        str(certificate),
+        "-noout",
+        "-ext",
+        "subjectAltName",
     ).stdout
     if b"DNS:" not in san:
         raise certctl.CertificateError("Le certificat TLS ne contient aucun SAN DNS.")
     certctl.run_openssl(
-        "x509", "-in", str(certificate), "-noout", "-checkhost", hostname,
+        "x509",
+        "-in",
+        str(certificate),
+        "-noout",
+        "-checkhost",
+        hostname,
     )
-    if certctl.public_key_from_certificate(certificate) != certctl.public_key_from_private_key(key):
-        raise certctl.CertificateError("La clé TLS active ne correspond pas au certificat.")
+    if certctl.public_key_from_certificate(
+        certificate
+    ) != certctl.public_key_from_private_key(key):
+        raise certctl.CertificateError(
+            "La clé TLS active ne correspond pas au certificat."
+        )
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certificate, key)
@@ -56,7 +72,9 @@ def main() -> int:
     certificate_value = os.environ.get("FORTIOS_TLS_CERT", "")
     key_value = os.environ.get("FORTIOS_TLS_KEY", "")
     if bool(certificate_value) != bool(key_value):
-        raise RuntimeError("FORTIOS_TLS_CERT et FORTIOS_TLS_KEY doivent être fournis ensemble.")
+        raise RuntimeError(
+            "FORTIOS_TLS_CERT et FORTIOS_TLS_KEY doivent être fournis ensemble."
+        )
 
     scheme = "http"
     context: ssl.SSLContext | None = None
@@ -76,7 +94,9 @@ def main() -> int:
 
     port = int(os.environ.get("FORTIOS_HEALTHCHECK_PORT", "8000"))
     with urllib.request.urlopen(
-        f"{scheme}://127.0.0.1:{port}/app/", timeout=5, context=context,
+        f"{scheme}://127.0.0.1:{port}/app/",
+        timeout=5,
+        context=context,
     ) as response:
         response.read(1)
     return 0
@@ -85,6 +105,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
         print(f"Healthcheck failed: {error}", file=sys.stderr)
         raise SystemExit(1)
