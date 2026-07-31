@@ -29,5 +29,12 @@ RUN mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs /opt/fortios/ce
       /usr/local/bin/fortios-cert-admin
 
 EXPOSE 8000
+
+# No HEALTHCHECK here — Compose is the intended orchestrator and provides
+# per-service healthchecks (docker-compose.yml, docker-compose.portainer.yml,
+# docker-compose.portainer-import.yml). A Dockerfile-level HEALTHCHECK would
+# apply to both the web and scheduler services, which is incorrect for the
+# scheduler (a batch job, not an HTTP server). The healthcheck script also
+# requires FORTIOS_CONTAINER_HEALTHCHECK=1, an orchestrator-level concern.
 ENTRYPOINT ["/usr/local/bin/fortios-entrypoint"]
 CMD ["python", "scripts/fortios_server.py", "--host", "0.0.0.0", "--port", "8000"]
