@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "scripts" / "fortios_server.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 import cert_admin  # type: ignore[import-not-found]
+import cert_helper  # type: ignore[import-not-found]
 
 from tests.test_certctl import HOSTNAME, create_self_signed
 
@@ -84,6 +85,26 @@ def running_server(environment: dict[str, str]) -> Iterator[str]:
             process.wait(timeout=5)
         if process.stdout:
             process.stdout.close()
+
+
+@contextmanager
+def running_helper(socket_path: Path, output: Path, credentials: Path) -> Iterator[None]:
+    processor = cert_helper.CertificateInstallProcessor(
+        hostname=HOSTNAME,
+        output_dir=output,
+        credentials_file=credentials,
+        allowed_uid=os.getuid(),
+        allowed_gid=os.getgid(),
+    )
+    server = cert_helper.CertificateHelperServer(socket_path, processor)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
 
 
 class CertificateWebTests(unittest.TestCase):
@@ -193,6 +214,7 @@ class CertificateWebTests(unittest.TestCase):
             environment = {
                 "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
                 "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_CERT_HELPER_SOCKET": str(Path(tmp) / "helper.sock"),
             }
             with running_server(environment) as base_url:
                 opener = urllib.request.build_opener(
@@ -223,6 +245,7 @@ class CertificateWebTests(unittest.TestCase):
             self.assertTrue(status_payload["authenticated"])
             self.assertEqual(status_payload["username"], "valentin")
             self.assertEqual(status_payload["csrfToken"], login_payload["csrfToken"])
+            self.assertTrue(status_payload["canInstall"])
 
     def test_resetting_credentials_revokes_existing_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -341,11 +364,13 @@ class CertificateWebTests(unittest.TestCase):
                     for client in slow_clients:
                         client.close()
 
-    def test_authenticated_admin_can_validate_then_install_a_certificate_locally(self) -> None:
+    def test_authenticated_admin_can_validate_then_install_through_privileged_helper(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             credentials = root / "credentials.json"
             output = root / "active"
+            socket_path = root / "run" / "helper.sock"
+            socket_path.parent.mkdir(mode=0o700)
             certificate, private_key = create_self_signed(root)
             cert_admin.write_credentials(
                 credentials,
@@ -353,12 +378,12 @@ class CertificateWebTests(unittest.TestCase):
             )
             environment = {
                 "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
-                "FORTIOS_CERT_DIRECT_INSTALL": "1",
+                "FORTIOS_CERT_HELPER_SOCKET": str(socket_path),
                 "FORTIOS_CERT_ADMIN_FILE": str(credentials),
                 "FORTIOS_CERT_OUTPUT_DIR": str(output),
                 "FORTIOS_TLS_HOSTNAME": HOSTNAME,
             }
-            with running_server(environment) as base_url:
+            with running_helper(socket_path, output, credentials), running_server(environment) as base_url:
                 opener = urllib.request.build_opener(
                     urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
                 )

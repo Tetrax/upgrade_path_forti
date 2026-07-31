@@ -1,4 +1,4 @@
-# TLS direct et gestion CLI des certificats
+# TLS direct et helper privilégié de certificats
 
 `upgrade_path` peut servir HTTPS directement depuis son conteneur Python, sans
 Nginx ni Caddy. Le FQDN cible recommandé est
@@ -93,21 +93,31 @@ FORTIOS_HTTP_BIND_ADDRESS=0.0.0.0
 FORTIOS_HTTP_PORT=8000
 FORTIOS_TLS_CERT=
 FORTIOS_TLS_KEY=
-FORTIOS_TLS_HOSTNAME=
+FORTIOS_TLS_HOSTNAME=upgrade-path.sns-security.lan
 FORTIOS_RUN_ON_START=0
 ```
 
 Le volume nommé `upgrade-path_fortios-certificates` est alors créé et préparé
-par l'entrypoint avec `root` comme propriétaire et le PGID applicatif en lecture.
+par le service `cert-helper` avec `root` comme propriétaire et le PGID applicatif
+en lecture. Le web monte ce volume en lecture seule. Le helper n'expose aucun port
+réseau : il accepte uniquement le socket Unix privé partagé avec le web et vérifie
+l'UID/GID du processus pair avec `SO_PEERCRED`.
 
-Sur la VM, retrouver le nom réel du conteneur web :
+Pour chaque activation web, le helper revérifie la révision du compte
+administrateur sous un verrou partagé qu'il conserve jusqu'à la fin du commit
+atomique. Un `reset` commencé pendant l'opération attend donc sa fin ; une requête
+portant une ancienne révision est refusée. Après l'envoi borné de la requête, le
+web attend la réponse définitive du helper au lieu d'expirer pendant une
+activation qui pourrait encore être en cours.
+
+Sur la VM, retrouver le nom réel du conteneur helper :
 
 ```bash
-WEB_CONTAINER="$(docker ps \
+HELPER_CONTAINER="$(docker ps \
   --filter label=com.docker.compose.project=upgrade-path \
-  --filter label=com.docker.compose.service=web \
+  --filter label=com.docker.compose.service=cert-helper \
   --format '{{.Names}}')"
-printf 'Conteneur web : %s\n' "$WEB_CONTAINER"
+printf 'Conteneur helper : %s\n' "$HELPER_CONTAINER"
 ```
 
 La variable ne doit contenir qu'un seul nom. Si elle est vide, vérifier dans
@@ -117,7 +127,7 @@ Créer ensuite le compte dédié à `/cert` dans le volume persistant. Cette com
 demande et confirme le mot de passe sans l'afficher :
 
 ```bash
-docker exec -it "$WEB_CONTAINER" fortios-cert-admin setup \
+docker exec -it "$HELPER_CONTAINER" fortios-cert-admin setup \
   --credentials /opt/fortios/certificates/admin/credentials.json \
   --username admin
 ```
@@ -130,7 +140,7 @@ de `setup`. Ne jamais placer le mot de passe dans la ligne de commande.
 Copier l'archive dans le tmpfs du conteneur :
 
 ```bash
-docker cp ./certificat-interne.pfx "$WEB_CONTAINER":/tmp/certificat.pfx
+docker cp ./certificat-interne.pfx "$HELPER_CONTAINER":/tmp/certificat.pfx
 ```
 
 Pour un PFX protégé, transférer le mot de passe par l'entrée standard, jamais en
@@ -138,17 +148,17 @@ argument de commande :
 
 ```bash
 read -rsp 'Mot de passe PFX : ' PFX_PASSWORD; echo
-printf '%s' "$PFX_PASSWORD" | docker exec -i "$WEB_CONTAINER" \
+printf '%s' "$PFX_PASSWORD" | docker exec -i "$HELPER_CONTAINER" \
   sh -c 'umask 077; cat > /tmp/cert-password'
 unset PFX_PASSWORD
 
-docker exec "$WEB_CONTAINER" fortios-certctl install \
+docker exec "$HELPER_CONTAINER" fortios-certctl install \
   /tmp/certificat.pfx \
   --password-file /tmp/cert-password \
   --hostname upgrade-path.sns-security.lan \
   --output-dir /opt/fortios/certificates/active
 
-docker exec "$WEB_CONTAINER" rm -f /tmp/certificat.pfx /tmp/cert-password
+docker exec "$HELPER_CONTAINER" rm -f /tmp/certificat.pfx /tmp/cert-password
 ```
 
 Pour un PFX sans mot de passe, omettre `--password-file`.
@@ -156,18 +166,18 @@ Pour un PFX sans mot de passe, omettre `--password-file`.
 ## 2B. Installer certificat, clé et chaîne séparés
 
 ```bash
-docker cp ./serveur.crt "$WEB_CONTAINER":/tmp/serveur.crt
-docker cp ./serveur.key "$WEB_CONTAINER":/tmp/serveur.key
-docker cp ./chaine.p7b "$WEB_CONTAINER":/tmp/chaine.p7b
+docker cp ./serveur.crt "$HELPER_CONTAINER":/tmp/serveur.crt
+docker cp ./serveur.key "$HELPER_CONTAINER":/tmp/serveur.key
+docker cp ./chaine.p7b "$HELPER_CONTAINER":/tmp/chaine.p7b
 
-docker exec "$WEB_CONTAINER" fortios-certctl install \
+docker exec "$HELPER_CONTAINER" fortios-certctl install \
   /tmp/serveur.crt \
   --key /tmp/serveur.key \
   --chain /tmp/chaine.p7b \
   --hostname upgrade-path.sns-security.lan \
   --output-dir /opt/fortios/certificates/active
 
-docker exec "$WEB_CONTAINER" rm -f \
+docker exec "$HELPER_CONTAINER" rm -f \
   /tmp/serveur.crt /tmp/serveur.key /tmp/chaine.p7b
 ```
 
@@ -207,12 +217,18 @@ mode HTTPS.
 
 ## Renouvellement
 
-Répéter l'installation CLI avec le nouveau certificat. Une fois le message de
-succès obtenu, redémarrer uniquement le conteneur `web` depuis Portainer pour
-charger le nouveau certificat. Ne pas recréer ou supprimer les volumes. Les
-installations sont sérialisées par verrou interprocessus et, après activation,
-toutes les générations remplacées ainsi que leurs clés sont supprimées. Un
-échec avant activation conserve la version courante.
+Ouvrir `https://upgrade-path.sns-security.lan/cert/`, charger le certificat ou
+le PFX, le valider, contrôler les métadonnées puis confirmer l'activation. Le web
+transmet uniquement le payload au helper par le socket privé ; le helper choisit
+lui-même le FQDN et la destination, revalide le contenu avec `certctl.py` puis
+effectue l'activation atomique. Ni chemin ni commande arbitraire ne sont acceptés.
+
+Une fois le message de succès obtenu, redémarrer uniquement le conteneur `web`
+depuis Portainer pour charger le nouveau certificat. Ne pas recréer ou supprimer
+les volumes. La procédure CLI dans le conteneur helper reste disponible en repli.
+Les installations sont sérialisées par verrou interprocessus et, après
+activation, toutes les générations remplacées ainsi que leurs clés sont
+supprimées. Un échec avant activation conserve la version courante.
 
 ## Sécurité
 
@@ -221,5 +237,8 @@ toutes les générations remplacées ainsi que leurs clés sont supprimées. Un
 - limiter 443 aux VLAN attendus avec le firewall de la VM ;
 - n'utiliser HTTP/8000 que pour l'amorçage ou un diagnostic interne contrôlé ;
 - conserver le certificat et sa clé uniquement dans le volume dédié ;
+- ne jamais monter le socket Docker dans `web` ou `cert-helper` ;
+- conserver le volume certificat en lecture seule dans `web` et en écriture
+  uniquement dans `cert-helper` ;
 - le CLI normalise la chaîne fournie, mais la confiance finale dépend de la CA
   installée sur les postes d'entreprise.

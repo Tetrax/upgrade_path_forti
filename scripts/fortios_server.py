@@ -1118,7 +1118,10 @@ def main(argv: list[str]) -> int:
     cert_output_dir = Path(
         os.environ.get("FORTIOS_CERT_OUTPUT_DIR", "/opt/fortios/certificates/active"),
     )
-    cert_direct_install = os.environ.get("FORTIOS_CERT_DIRECT_INSTALL") == "1"
+    cert_direct_install = (
+        os.environ.get("FORTIOS_CERT_DIRECT_INSTALL") == "1"
+        or bool(os.environ.get("FORTIOS_CERT_HELPER_SOCKET"))
+    )
 
     def handler(*handler_args: Any, **handler_kwargs: Any) -> FortiosHandler:
         return FortiosHandler(

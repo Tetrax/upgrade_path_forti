@@ -20,12 +20,14 @@ COPY scripts ./scripts
 COPY data ./data
 COPY docs ./docs
 COPY docker/entrypoint.sh /usr/local/bin/fortios-entrypoint
+COPY docker/cert_helper_entrypoint.sh /usr/local/bin/fortios-cert-helper-entrypoint
 COPY docker/certctl.sh /usr/local/bin/fortios-certctl
 COPY docker/cert_admin.sh /usr/local/bin/fortios-cert-admin
 
 RUN mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs /opt/fortios/certificates \
     && chmod -R a+rX /opt/fortios/app /opt/fortios/scripts \
-    && chmod 0755 /usr/local/bin/fortios-entrypoint /usr/local/bin/fortios-certctl \
+    && chmod 0755 /usr/local/bin/fortios-entrypoint \
+      /usr/local/bin/fortios-cert-helper-entrypoint /usr/local/bin/fortios-certctl \
       /usr/local/bin/fortios-cert-admin
 
 EXPOSE 8000

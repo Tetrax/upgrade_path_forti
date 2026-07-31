@@ -419,10 +419,12 @@ journalctl -u fortios-catalog-refresh.service -n 50
 
 ## Déploiement Docker / Portainer
 
-La stack Docker remplace le serveur systemd et ses deux timers par deux
+La stack Docker remplace le serveur systemd et ses deux timers par trois
 conteneurs :
 
 - `web` sert l'interface et l'API sur un listener unique, HTTP ou HTTPS ;
+- `cert-helper`, sans port réseau, revalide et active les certificats reçus par
+  un socket Unix privé ; le volume certificat reste en lecture seule dans `web` ;
 - `scheduler` lance le rafraîchissement complet à 07:00 Europe/Paris et la
   passe CVE à 15:30 Europe/Paris.
 
@@ -438,7 +440,7 @@ install -m 600 .env.example .env
 # Adapter PUID/PGID et les variables SMTP dans .env si nécessaire.
 docker compose up --build -d
 docker compose ps
-docker compose logs -f web scheduler
+docker compose logs -f web cert-helper scheduler
 ```
 
 Par défaut, le port applicatif est lié à l'interface loopback. Pour un test LAN
@@ -526,9 +528,10 @@ bouton d'import Portainer attend l'archive Docker `.tar` produite par
    ```
 5. Cliquer **Deploy the stack**.
 
-La Stack crée deux conteneurs, `web` et `scheduler`, et trois volumes nommés
+La Stack crée trois conteneurs, `web`, `cert-helper` et `scheduler`, et quatre volumes nommés
 préfixés par le nom de la Stack, généralement `upgrade-path_fortios-data` et
-`upgrade-path_fortios-docs`, plus `upgrade-path_fortios-certificates`.
+`upgrade-path_fortios-docs`, plus `upgrade-path_fortios-certificates` et le volume
+de socket `upgrade-path_fortios-cert-helper-run`.
 
 #### 4. Vérifier puis basculer
 

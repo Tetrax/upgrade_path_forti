@@ -9,6 +9,9 @@ data/*.lock
 .venv-test/
 test-results/
 playwright-report/
+.claude/
+*.swp
+
 # TLS material must stay in the dedicated runtime volume, never in Git.
 certificates/
 *.key
