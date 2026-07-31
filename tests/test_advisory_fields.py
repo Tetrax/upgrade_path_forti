@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from fortios_server import parse_advisory_fields  # noqa: E402
+from fortios_server import parse_advisory_fields
 
 
 class AdvisoryTargetingTests(unittest.TestCase):

@@ -12,12 +12,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-import fortios_notify as notify  # noqa: E402
-import fortios_watch as fw  # noqa: E402
+import fortios_notify as notify
+import fortios_watch as fw
 
 
 def _claim_worker(path, dedup_key, claimant_id, barrier, result_queue):
@@ -520,9 +521,11 @@ class EolTransitionAtomicityTests(unittest.TestCase):
             event = notify.NotificationEvent(
                 category="DAILY", dedup_key="support-eol|fortios|7.6|2026-07-17", summary="x",
             )
-            with patch.object(notify, "write_json", side_effect=OSError("disk full")):
-                with self.assertRaises(OSError):
-                    notify.commit_eol_transition(path, {"7.6": True}, [event])
+            with (
+                patch.object(notify, "write_json", side_effect=OSError("disk full")),
+                self.assertRaises(OSError),
+            ):
+                notify.commit_eol_transition(path, {"7.6": True}, [event])
 
             # The file on disk must be exactly what it was before the failed commit -- neither
             # eolState nor the outbox may have been partially updated.
@@ -649,7 +652,7 @@ class NotifyCheckpointMainIntegrationTests(unittest.TestCase):
     the big comment in fortios_watch.py main()'s notification block).
     """
 
-    ENV = {
+    ENV: ClassVar[dict[str, str]] = {
         "FORTIOS_EMAIL_ENABLED": "true", "FORTIOS_SMTP_HOST": "smtp.example.com",
         "FORTIOS_SMTP_FROM": "fortios@example.com", "FORTIOS_SMTP_TO": "alice@example.com",
     }
