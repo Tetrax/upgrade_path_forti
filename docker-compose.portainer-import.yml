@@ -3,7 +3,7 @@
 # once, then persist independently of container replacement.
 services:
   web:
-    image: fortios-upgrade-intelligence:local
+    image: ghcr.io/tetrax/upgrade_path_forti:latest
     restart: unless-stopped
     environment:
       PUID: ${PUID:-1000}
@@ -30,7 +30,7 @@ services:
       - no-new-privileges:true
 
   scheduler:
-    image: fortios-upgrade-intelligence:local
+    image: ghcr.io/tetrax/upgrade_path_forti:latest
     restart: unless-stopped
     command: ["python", "scripts/container_scheduler.py"]
     environment:
