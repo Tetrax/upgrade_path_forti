@@ -27,3 +27,6 @@ certificates/
 *.env
 .env*
 !*.env.example
+.claude/
+data/*.log
+data/fortios-data.generated.json
