@@ -2,7 +2,7 @@
 
 Version 2.0 — 3 août 2026
 
-CI : VERTE (4/4) | Déploiement : Portainer | Image : locale (docker save) | Stack : upgrade-path
+CI : VERTE (4/4) | Déploiement : Portainer (Repository) | Image : ghcr.io/tetrax/upgrade_path_forti:latest | Stack : upgrade-path
 
 > Guide complet : Revue de code, Déploiement Docker/Portainer, HTTPS et Maintenance.
 
@@ -33,9 +33,9 @@ Ce guide explique **pas à pas** comment déployer l'application Upgrade Path su
 
 **Upgrade Path** est une application Python d'intelligence de mise à jour FortiOS. Elle analyse les firmwares, vulnérabilités CVE, matrices de compatibilité, et prépare les chemins de montée de version pour les ingénieurs réseau.
 
-**Deux conteneurs Docker** : `web` (interface web + API) et `scheduler` (collectes planifiées), partageant la même image `fortios-upgrade-intelligence:local`.
+**Deux conteneurs Docker** : `web` (interface web + API) et `scheduler` (collectes planifiées), partageant la même image `ghcr.io/tetrax/upgrade_path_forti:latest`.
 
-> ■ L'image Docker est construite localement puis importée dans Portainer. Image : **fortios-upgrade-intelligence:local.**
+> ■ L'image Docker est construite par la CI et publiée sur GHCR. Portainer la télécharge automatiquement. Image : **ghcr.io/tetrax/upgrade_path_forti:latest.**
 
 ### Corrections appliquées (revue du 3 août 2026)
 
@@ -69,7 +69,7 @@ upgrade_path_forti/
 ├── deploy/                 # Scripts de déploiement
 ├── data/                   # Données métier (catalogue, CVE, etc.)
 ├── docs/                   # Documentation et tutoriels
-├── docker-compose.portainer-import.yml  # Stack Portainer (image locale)
+├── docker-compose.portainer.yml      # Stack Portainer (Repository)
 ├── docker-compose.yml      # Stack Docker Compose standard
 ├── Dockerfile              # Construction de l'image
 └── .github/workflows/      # CI/CD GitHub Actions
@@ -88,65 +88,44 @@ upgrade_path_forti/
 
 ### Ce que tu vas faire
 
-Déployer l'application sur une VM interne via Portainer Community Edition en important une image Docker locale, puis créer la Stack avec deux services (`web` + `scheduler`).
+Déployer l'application sur une VM interne via Portainer Community Edition en mode **Repository**. L'image est automatiquement téléchargée depuis `ghcr.io/tetrax/upgrade_path_forti:latest`.
 
 ### Pré-requis
 
-- Une VM interne avec Docker et Portainer Community Edition fonctionnels
-- Le dépôt `upgrade_path_forti` dans sa version validée sur la machine source
+- Une VM interne avec Docker (≥ 24.0) et Portainer Community Edition fonctionnels
 - Un poste ouvrant l'interface web Portainer
 - Un accès LAN à la VM interne (firewall TCP/8000 puis TCP/443)
 
-### Fichiers nécessaires
+### Méthode de déploiement
 
-| Fichier | Origine | Utilisation |
-|---|---|---|
-| `fortios-upgrade-intelligence.tar` | Exporté depuis la VM source (`docker save`) | Import de l'image dans Portainer |
-| `docker-compose.portainer-import.yml` | Dépôt Git | Import de la Stack dans Portainer |
+Le déploiement utilise le mode **Repository** de Portainer. L'image est automatiquement téléchargée depuis `ghcr.io`.
+**Ne pas utiliser le mode Upload ni importer d'archive `.tar`.**
+
+> ■ L'image `ghcr.io/tetrax/upgrade_path_forti:latest` est déjà buildée par la CI. **Aucune construction manuelle n'est nécessaire.**
 
 ---
 
-### ÉTAPE 1 — Construire l'image sur la VM source
+### ÉTAPE 1 — Créer la Stack dans Portainer
 
-```bash
-cd /chemin/vers/upgrade_path
-git status --short   # doit être vide ou contenir uniquement des fichiers non critiques
-docker build --pull -t fortios-upgrade-intelligence:local .
-docker image inspect fortios-upgrade-intelligence:local --format '{{.Id}} {{.Created}}'
+1. Ouvrir Portainer : `https://ADRESSE_IP_DE_LA_VM:9443`
+2. Menu latéral → **Stacks** → **+ Add stack**
+3. Nom : `upgrade-path`
+4. Build method : **Repository**
+5. Saisir les informations du dépôt :
+
+```
+Repository URL       : https://github.com/Tetrax/upgrade_path_forti
+Repository reference : refs/heads/main
+Compose path         : docker-compose.portainer.yml
 ```
 
----
-
-### ÉTAPE 2 — Exporter l'image au format TAR
-
-```bash
-docker save -o ~/fortios-upgrade-intelligence.tar fortios-upgrade-intelligence:local
-sha256sum ~/fortios-upgrade-intelligence.tar > ~/fortios-upgrade-intelligence.tar.sha256
-ls -lh ~/fortios-upgrade-intelligence.tar*
-```
-
-> ■ Garder l'archive au format `.tar`. **Ne pas la compresser en `.tar.gz`** : l'action Import de Portainer attend l'archive produite par `docker save`.
-
-Transférer `fortios-upgrade-intelligence.tar` et `docker-compose.portainer-import.yml` sur le poste qui ouvre Portainer.
+Le fichier `docker-compose.portainer.yml` référence directement l'image **ghcr.io/tetrax/upgrade_path_forti:latest** — Portainer la télécharge automatiquement lors du déploiement.
 
 ---
 
-### ÉTAPE 3 — Importer l'image dans Portainer
+### ÉTAPE 2 — Ajouter les variables d'environnement
 
-1. Ouvrir Portainer, sélectionner l'environnement Docker cible
-2. Menu latéral → **Images** (pas Registries)
-3. Cliquer **Import**
-4. Sélectionner `fortios-upgrade-intelligence.tar`, confirmer
-5. Vérifier que `fortios-upgrade-intelligence:local` apparaît dans la liste
-
----
-
-### ÉTAPE 4 — Déployer la Stack
-
-1. Menu latéral → **Stacks** → **Add stack**
-2. Nom : `upgrade-path`
-3. Méthode : **Upload** → sélectionner `docker-compose.portainer-import.yml`
-4. Section **Environment variables** :
+Dans la section **Environment variables**, ajouter :
 
 ```
 PUID=1000
@@ -159,13 +138,36 @@ FORTIOS_TLS_HOSTNAME=
 FORTIOS_RUN_ON_START=0
 FORTIOS_EMAIL_ENABLED=false
 FORTIOS_APP_URL=http://IP_LAN_VM:8000/app/
+FORTIOS_DATA_DIR=/srv/upgrade-path/data
+FORTIOS_DOCS_DIR=/srv/upgrade-path/docs
+FORTIOS_CERTS_DIR=/srv/upgrade-path/certificates
 ```
 
 Remplacer `IP_LAN_VM` par l'adresse IP réelle de la VM. `PUID` et `PGID` strictement supérieurs à zéro.
 
-5. Cliquer **Deploy the stack**
+---
 
-La Stack crée deux services (`web`, `scheduler`) et trois volumes persistants (`fortios-data`, `fortios-docs`, `fortios-certificates`).
+### ÉTAPE 3 — Créer les répertoires persistants sur la VM
+
+```bash
+ssh root@ADRESSE_IP_DE_LA_VM
+mkdir -p /srv/upgrade-path/data /srv/upgrade-path/docs /srv/upgrade-path/certificates
+chown -R 1000:1000 /srv/upgrade-path
+```
+
+> ■ Si Docker utilise un UID/GID différent, adapter avec `id docker`.
+
+---
+
+### ÉTAPE 4 — Déployer
+
+Cliquer **Deploy the stack**. Portainer :
+1. Clone le dépôt Git
+2. Télécharge l'image depuis `ghcr.io/tetrax/upgrade_path_forti:latest`
+3. Crée les deux services (`web`, `scheduler`)
+4. Démarre les conteneurs
+
+La Stack crée deux services et utilise trois volumes persistants (`fortios-data`, `fortios-docs`, `fortios-certificates`).
 
 > ■ Conserver `FORTIOS_EMAIL_ENABLED=false` pour le déploiement initial. Ajouter les variables SMTP uniquement si les notifications doivent être activées.
 
@@ -323,7 +325,7 @@ FORTIOS_TLS_HOSTNAME=upgrade-path.sns-security.lan
 FORTIOS_APP_URL=https://upgrade-path.sns-security.lan/app/
 ```
 
-3. Cliquer **Update the stack** (ne pas re-pull, l'image est locale)
+3. Cliquer **Update the stack**
 4. Le port hôte 443 est maintenant mappé vers le listener interne 8000 en TLS
 
 ---
@@ -351,12 +353,13 @@ https://upgrade-path.sns-security.lan/app/
 
 ### Mise à jour de l'application
 
-1. Sur la machine source, récupérer la dernière version : `git pull`
-2. Reconstruire l'image : `docker build --pull -t fortios-upgrade-intelligence:local .`
-3. Exporter : `docker save -o ~/fortios-upgrade-intelligence.tar fortios-upgrade-intelligence:local`
-4. Transférer le `.tar` sur le poste Portainer
-5. Dans Portainer → **Images** → **Import** → sélectionner le nouveau `.tar`
-6. Stacks → `upgrade-path` → **Update the stack** (sans re-pull)
+La mise à jour se fait directement dans Portainer, sans manipulation d'archive :
+
+1. Dans Portainer → **Stacks** → `upgrade-path`
+2. Cliquer **Pull and redeploy**
+3. Portainer télécharge la dernière image `ghcr.io/tetrax/upgrade_path_forti:latest`
+4. Les conteneurs sont recréés avec la nouvelle image
+5. Vérifier que `web` redevient **healthy**
 
 ### Renouvellement du certificat
 
@@ -392,7 +395,7 @@ Puis **Update the stack**. Il n'existe volontairement aucun mode dans lequel HTT
 | Le CLI refuse le certificat | SAN DNS présent ? Correspondance SAN/FQDN ? Période de validité ? Usage TLS serveur ? |
 | Navigateur affiche une alerte | Résolution DNS, SAN, dates, chaîne, CA interne dans le magasin de confiance |
 | HTTP/8000 toujours accessible après activation HTTPS | Vérifier `FORTIOS_HTTP_PORT=443`, mettre à jour la Stack, pas d'ancien conteneur |
-| Portainer : `no such image` | Importer l'image locale (`docker save` → Import), ne pas utiliser de registre |
+| Portainer : `no such image` | Vérifier le nom de l'image dans le compose (`ghcr.io/tetrax/upgrade_path_forti:latest`). Cliquer **Pull and redeploy** ou vérifier la connectivité réseau vers ghcr.io |
 | Scheduler ne collecte pas | Vérifier les logs, fuseau horaire Europe/Paris, `FORTIOS_RUN_ON_START` |
 | Données perdues après redéploiement | Ne pas supprimer les volumes `fortios-data` et `fortios-docs` |
 | Variables TLS incohérentes | `FORTIOS_TLS_CERT`, `FORTIOS_TLS_KEY` et `FORTIOS_TLS_HOSTNAME` doivent être définis ensemble |
@@ -401,7 +404,7 @@ Puis **Update the stack**. Il n'existe volontairement aucun mode dans lequel HTT
 
 ## 7. Checklist finale
 
-- [ ] Image `fortios-upgrade-intelligence:local` présente dans Portainer
+- [ ] Image `ghcr.io/tetrax/upgrade_path_forti:latest` téléchargée automatiquement par Portainer
 - [ ] Stack `upgrade-path` contient uniquement `web` et `scheduler`
 - [ ] Trois volumes persistants existent (`fortios-data`, `fortios-docs`, `fortios-certificates`)
 - [ ] Conteneur `web` est **healthy**
@@ -423,5 +426,5 @@ Puis **Update the stack**. Il n'existe volontairement aucun mode dans lequel HTT
 ### ■ Ressources
 
 - **Repo :** https://github.com/Tetrax/upgrade_path_forti
-- **Image :** fortios-upgrade-intelligence:local (build local, import Portainer)
+- **Image :** ghcr.io/tetrax/upgrade_path_forti:latest (pull automatique par Portainer)
 - **CI :** https://github.com/Tetrax/upgrade_path_forti/actions
