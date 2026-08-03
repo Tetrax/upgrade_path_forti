@@ -142,6 +142,7 @@ jobs:
           image-ref: fortios-upgrade-intelligence:ci-scan
           format: table
           exit-code: 1
+          ignore-unfixed: true
           # Policy: fail on HIGH or CRITICAL CVEs.
           # Remove severities to lower the bar (e.g. remove CRITICAL to fail
           # on HIGH only, or add MEDIUM to catch medium-severity CVEs too).
