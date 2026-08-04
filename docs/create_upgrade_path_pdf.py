@@ -444,7 +444,7 @@ def build_story(elements: list[dict]) -> list:
         callout(
             "MÉTHODE",
             "Dépôt GitHub public, image GHCR et redéploiement depuis Portainer. "
-            "Aucun transfert d'archive manuel.",
+            "Déploiement reproductible depuis le dépôt et le registre.",
             LIGHT_BLUE,
         )
     )
