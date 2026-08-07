@@ -27,6 +27,9 @@ services:
       start_period: 10s
     security_opt:
       - no-new-privileges:true
+    networks:
+      fortiflow_net:
+        ipv4_address: 172.30.240.3
 
   scheduler:
     image: ghcr.io/tetrax/upgrade_path_forti:latest
@@ -53,3 +56,10 @@ services:
       - /tmp:rw,noexec,nosuid,size=512m
     security_opt:
       - no-new-privileges:true
+    networks:
+      - fortiflow_net
+
+networks:
+  fortiflow_net:
+    external: true
+    name: fortiflow_fortiflow_net
