@@ -14,6 +14,7 @@ import re
 import secrets
 import ssl
 import sys
+import threading
 import traceback
 import urllib.error
 import urllib.parse
@@ -113,6 +114,44 @@ MAX_JSON_BODY_BYTES = 1 * 1024 * 1024
 MAX_IMAGE_UPLOAD_BODY_BYTES = 12 * 1024 * 1024
 MAX_CERT_UPLOAD_BODY_BYTES = 56 * 1024 * 1024
 REQUEST_SOCKET_TIMEOUT_SECONDS = 15
+
+# Persisted user-controlled text is deliberately bounded well above the current UI/data sizes,
+# while preventing accidental multi-megabyte records from turning the JSON catalog into an
+# unbounded storage sink. These limits apply at every HTTP mutation parser below.
+MAX_VERSION_LENGTH = 32
+MAX_MODEL_LENGTH = 64
+MAX_ADVISORY_TITLE_LENGTH = 200
+MAX_ADVISORY_DESCRIPTION_LENGTH = 20_000
+MAX_ADVISORY_COMMAND_LENGTH = 8_000
+MAX_ADVISORY_SOURCE_LENGTH = 200
+MAX_ADVISORY_BUG_ID_LENGTH = 64
+MAX_ADVISORY_VERSION_ITEMS = 128
+MAX_ADVISORY_MODEL_ITEMS = 512
+MAX_COMPAT_CLIENT_VERSION_ITEMS = 128
+MAX_COMPAT_NOTE_LENGTH = 4_000
+MAX_COMPAT_SOURCE_LENGTH = 200
+
+# ThreadingHTTPServer creates one handler per request. This semaphore is process-global (and thus
+# shared by all anonymous callers of this server) and bounds only the expensive live Fortinet call.
+# Set FORTIOS_OFFICIAL_PATH_MAX_CONCURRENCY before starting the server to tune it without adding
+# an identity/account system. Invalid or extreme values fall back to a small safe range.
+DEFAULT_OFFICIAL_PATH_MAX_CONCURRENCY = 2
+MAX_OFFICIAL_PATH_MAX_CONCURRENCY = 32
+try:
+    OFFICIAL_PATH_MAX_CONCURRENCY = int(
+        os.environ.get(
+            "FORTIOS_OFFICIAL_PATH_MAX_CONCURRENCY",
+            str(DEFAULT_OFFICIAL_PATH_MAX_CONCURRENCY),
+        )
+    )
+except ValueError:
+    OFFICIAL_PATH_MAX_CONCURRENCY = DEFAULT_OFFICIAL_PATH_MAX_CONCURRENCY
+OFFICIAL_PATH_MAX_CONCURRENCY = min(
+    max(1, OFFICIAL_PATH_MAX_CONCURRENCY), MAX_OFFICIAL_PATH_MAX_CONCURRENCY
+)
+OFFICIAL_PATH_SEMAPHORE = threading.BoundedSemaphore(OFFICIAL_PATH_MAX_CONCURRENCY)
+INTERNAL_ERROR_MESSAGE = "Erreur interne du serveur."
+OFFICIAL_PATH_BUSY_MESSAGE = "Trop de requêtes Fortinet en cours."
 # Only these two directories are anything the UI actually needs served over HTTP — ROOT is the
 # whole repo checkout, which also holds scripts/, deploy/, docs/ and .git/. Defined next to ROOT
 # below at import time (module globals resolve at call time regardless of source order).
@@ -124,21 +163,115 @@ REQUEST_SOCKET_TIMEOUT_SECONDS = 15
 # which would do nothing to stop those other processes from interleaving a conflicting write.
 
 
+def _bounded_text(
+    value: object,
+    label: str,
+    maximum: int,
+    *,
+    required: bool = False,
+) -> str:
+    if value is None:
+        text = ""
+    elif isinstance(value, str):
+        text = value.strip()
+    else:
+        raise ValueError(f"{label} invalide.")
+    if required and not text:
+        raise ValueError(f"{label} obligatoire.")
+    if len(text) > maximum:
+        raise ValueError(f"{label} trop long ({maximum} caractères maximum).")
+    return text
+
+
+def _bounded_text_list(
+    value: object,
+    label: str,
+    *,
+    maximum_items: int,
+    maximum_length: int,
+) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise TypeError(f"{label} doit être une liste.")
+    if len(value) > maximum_items:
+        raise ValueError(f"{label} contient trop d'éléments ({maximum_items} maximum).")
+
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise TypeError(f"Chaque élément de {label} doit être du texte.")
+        text = item.strip()
+        if not text:
+            continue
+        if len(text) > maximum_length:
+            raise ValueError(
+                f"Un élément de {label} est trop long ({maximum_length} caractères maximum)."
+            )
+        result.append(text)
+    return result
+
+
+def parse_official_path_request(payload: dict[str, Any]) -> OfficialPathRequest:
+    product = _bounded_text(
+        payload.get("product") or DEFAULT_PRODUCT_ID,
+        "Produit",
+        MAX_MODEL_LENGTH,
+        required=True,
+    )
+    if product not in PRODUCT_LABELS:
+        raise ValueError(f"Produit invalide : {product}")
+    if product not in PRODUCTS:
+        raise ValueError(
+            f"{PRODUCT_LABELS[product]} n'a pas de chemin d'upgrade automatique Fortinet."
+        )
+    missing = [name for name in ("model", "from", "to") if name not in payload]
+    if missing:
+        raise KeyError(missing[0])
+    model = _bounded_text(payload["model"], "Modèle", MAX_MODEL_LENGTH, required=True)
+    from_version = _bounded_text(
+        payload["from"], "Version de départ", MAX_VERSION_LENGTH, required=True
+    )
+    to_version = _bounded_text(
+        payload["to"], "Version cible", MAX_VERSION_LENGTH, required=True
+    )
+    return OfficialPathRequest(
+        product=product,
+        model=model,
+        from_version=from_version,
+        to_version=to_version,
+    )
+
+
 def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    title = str(payload.get("title", "")).strip()
-    description = str(payload.get("description", "")).strip()
-    versions = [
-        str(item).strip() for item in payload.get("versions") or [] if str(item).strip()
-    ]
-    min_versions = [
-        str(item).strip()
-        for item in payload.get("minVersions") or []
-        if str(item).strip()
-    ]
-    from_version = str(payload.get("from") or "").strip()
-    to_version = str(payload.get("to") or "").strip()
-    if not title or not description:
-        raise ValueError("Titre et description sont obligatoires.")
+    title = _bounded_text(
+        payload.get("title"),
+        "Titre",
+        MAX_ADVISORY_TITLE_LENGTH,
+        required=True,
+    )
+    description = _bounded_text(
+        payload.get("description"),
+        "Description",
+        MAX_ADVISORY_DESCRIPTION_LENGTH,
+        required=True,
+    )
+    versions = _bounded_text_list(
+        payload.get("versions"),
+        "Versions",
+        maximum_items=MAX_ADVISORY_VERSION_ITEMS,
+        maximum_length=MAX_VERSION_LENGTH,
+    )
+    min_versions = _bounded_text_list(
+        payload.get("minVersions"),
+        "Versions minimales",
+        maximum_items=MAX_ADVISORY_VERSION_ITEMS,
+        maximum_length=MAX_VERSION_LENGTH,
+    )
+    from_version = _bounded_text(
+        payload.get("from"), "Version de départ", MAX_VERSION_LENGTH
+    )
+    to_version = _bounded_text(payload.get("to"), "Version cible", MAX_VERSION_LENGTH)
     if bool(from_version) != bool(to_version):
         raise ValueError(
             "Une bascule précise nécessite une version de départ et une version cible."
@@ -161,21 +294,45 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
             "Indiquer au moins une version, un point de départ, ou une bascule précise."
         )
 
-    product = str(payload.get("product") or DEFAULT_PRODUCT_ID).strip()
+    product = _bounded_text(
+        payload.get("product") or DEFAULT_PRODUCT_ID,
+        "Produit",
+        MAX_MODEL_LENGTH,
+        required=True,
+    )
     if product not in PRODUCT_LABELS:
         raise ValueError(f"Produit invalide : {product}")
-    severity = str(payload.get("severity") or "important").strip()
+    severity = _bounded_text(
+        payload.get("severity") or "important",
+        "Sévérité",
+        MAX_ADVISORY_SOURCE_LENGTH,
+        required=True,
+    )
     if severity not in VALID_SEVERITIES:
         raise ValueError(f"Sévérité invalide : {severity}")
 
-    models = [
-        str(item).strip() for item in payload.get("models") or [] if str(item).strip()
-    ]
-    command = str(payload.get("command") or "").strip()
-    bug_id = str(payload.get("bugId") or "").strip()
-    bug_version = str(payload.get("bugVersion") or "").strip()
+    models = _bounded_text_list(
+        payload.get("models"),
+        "Modèles",
+        maximum_items=MAX_ADVISORY_MODEL_ITEMS,
+        maximum_length=MAX_MODEL_LENGTH,
+    )
+    command = _bounded_text(
+        payload.get("command"), "Commande", MAX_ADVISORY_COMMAND_LENGTH
+    )
+    bug_id = _bounded_text(
+        payload.get("bugId"), "Bug ID", MAX_ADVISORY_BUG_ID_LENGTH
+    )
+    bug_version = _bounded_text(
+        payload.get("bugVersion"), "Version du bug", MAX_VERSION_LENGTH
+    )
     behavior_change = bool(payload.get("behaviorChange"))
-    source = str(payload.get("source") or "Ingénieur SNS").strip()
+    source = _bounded_text(
+        payload.get("source") or "Ingénieur SNS",
+        "Source",
+        MAX_ADVISORY_SOURCE_LENGTH,
+        required=True,
+    )
 
     fields: dict[str, Any] = {
         "product": product,
@@ -205,19 +362,27 @@ def parse_advisory_fields(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_compatibility_fields(payload: dict[str, Any]) -> dict[str, Any]:
-    ems_version = str(payload.get("emsVersion") or "").strip()
-    client_versions = [
-        str(item).strip()
-        for item in payload.get("clientVersions") or []
-        if str(item).strip()
-    ]
+    ems_version = _bounded_text(
+        payload.get("emsVersion"), "La version FortiClient EMS", MAX_VERSION_LENGTH
+    )
+    client_versions = _bounded_text_list(
+        payload.get("clientVersions"),
+        "Versions FortiClient",
+        maximum_items=MAX_COMPAT_CLIENT_VERSION_ITEMS,
+        maximum_length=MAX_VERSION_LENGTH,
+    )
     if not ems_version:
         raise ValueError("La version FortiClient EMS est obligatoire.")
     if not client_versions:
         raise ValueError("Indiquer au moins une version FortiClient compatible.")
 
-    note = str(payload.get("note") or "").strip()
-    source = str(payload.get("source") or "Ingénieur SNS").strip()
+    note = _bounded_text(payload.get("note"), "Note", MAX_COMPAT_NOTE_LENGTH)
+    source = _bounded_text(
+        payload.get("source") or "Ingénieur SNS",
+        "Source",
+        MAX_COMPAT_SOURCE_LENGTH,
+        required=True,
+    )
 
     return {
         "emsVersion": ems_version,
@@ -734,20 +899,18 @@ class FortiosHandler(SimpleHTTPRequestHandler):
     def handle_official_path(self) -> None:
         try:
             payload = self.read_json_body()
-            product = str(payload.get("product") or DEFAULT_PRODUCT_ID).strip()
-            if product not in PRODUCT_LABELS:
-                raise ValueError(f"Produit invalide : {product}")
-            if product not in PRODUCTS:
-                raise ValueError(
-                    f"{PRODUCT_LABELS[product]} n'a pas de chemin d'upgrade automatique Fortinet."
+            request = parse_official_path_request(payload)
+            if not OFFICIAL_PATH_SEMAPHORE.acquire(blocking=False):
+                self.write_json_response(
+                    {"error": OFFICIAL_PATH_BUSY_MESSAGE},
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    extra_headers={"Retry-After": "1"},
                 )
-            request = OfficialPathRequest(
-                product=product,
-                model=str(payload["model"]).strip(),
-                from_version=str(payload["from"]).strip(),
-                to_version=str(payload["to"]).strip(),
-            )
-            result = fetch_official_upgrade_path(request, self.timeout)
+                return
+            try:
+                result = fetch_official_upgrade_path(request, self.timeout)
+            finally:
+                OFFICIAL_PATH_SEMAPHORE.release()
             if not result:
                 self.write_json_response(
                     {
@@ -785,15 +948,14 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 and path.get("to") == request.to_version
             )
             self.write_json_response({"state": state, "path": path_payload})
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
         except KeyError as error:
             self.write_json_response(
                 {"error": f"Champ manquant : {error.args[0]}"}, HTTPStatus.BAD_REQUEST
             )
-        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
-            self.log_exception("handle_official_path")
-            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        except Exception:  # noqa: BLE001 - log details, return only a safe client message.
+            self.write_internal_error("handle_official_path", HTTPStatus.BAD_GATEWAY)
 
     def handle_create_advisory(self) -> None:
         try:
@@ -814,11 +976,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 write_json(DATA_PATH, state)
 
             self.write_json_response({"state": state, "advisory": advisory})
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
-        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
-            self.log_exception("handle_create_advisory")
-            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        except Exception:  # noqa: BLE001 - log details, return only a safe client message.
+            self.write_internal_error("handle_create_advisory", HTTPStatus.BAD_GATEWAY)
 
     def handle_update_advisory(self, raw_id: str) -> None:
         try:
@@ -858,11 +1019,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 prune_unreferenced_images(old_images, state)
 
             self.write_json_response({"state": state, "advisory": advisory})
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
-        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
-            self.log_exception("handle_update_advisory")
-            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        except Exception:  # noqa: BLE001 - log details, return only a safe client message.
+            self.write_internal_error("handle_update_advisory", HTTPStatus.BAD_GATEWAY)
 
     def handle_delete_advisory(self, raw_id: str) -> None:
         try:
@@ -897,9 +1057,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 )
 
             self.write_json_response({"state": state})
-        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
-            self.log_exception("handle_delete_advisory")
-            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        except Exception:  # noqa: BLE001 - log details, return only a safe client message.
+            self.write_internal_error("handle_delete_advisory", HTTPStatus.BAD_GATEWAY)
 
     def handle_create_compatibility(self) -> None:
         try:
@@ -920,11 +1079,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 write_json(DATA_PATH, state)
 
             self.write_json_response({"state": state, "compatibility": item})
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
-        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
-            self.log_exception("handle_create_compatibility")
-            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        except Exception:  # noqa: BLE001 - log details, return only a safe client message.
+            self.write_internal_error("handle_create_compatibility", HTTPStatus.BAD_GATEWAY)
 
     def handle_update_compatibility(self, raw_id: str) -> None:
         try:
@@ -961,11 +1119,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 write_json(DATA_PATH, state)
 
             self.write_json_response({"state": state, "compatibility": item})
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
-        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
-            self.log_exception("handle_update_compatibility")
-            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        except Exception:  # noqa: BLE001 - log details, return only a safe client message.
+            self.write_internal_error("handle_update_compatibility", HTTPStatus.BAD_GATEWAY)
 
     def handle_delete_compatibility(self, raw_id: str) -> None:
         try:
@@ -990,9 +1147,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 write_json(DATA_PATH, state)
 
             self.write_json_response({"state": state})
-        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
-            self.log_exception("handle_delete_compatibility")
-            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        except Exception:  # noqa: BLE001 - log details, return only a safe client message.
+            self.write_internal_error("handle_delete_compatibility", HTTPStatus.BAD_GATEWAY)
 
     def handle_upload_image(self) -> None:
         try:
@@ -1018,11 +1174,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             (IMAGE_DIR / filename).write_bytes(raw)
 
             self.write_json_response({"url": f"{IMAGE_URL_PREFIX}{filename}"})
-        except ValueError as error:
+        except (TypeError, ValueError) as error:
             self.write_json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
-        except Exception as error:  # noqa: BLE001 - surface a readable local API error.
-            self.log_exception("handle_upload_image")
-            self.write_json_response({"error": str(error)}, HTTPStatus.BAD_GATEWAY)
+        except Exception:  # noqa: BLE001 - log details, return only a safe client message.
+            self.write_internal_error("handle_upload_image", HTTPStatus.BAD_GATEWAY)
 
     def read_json_body(self, max_bytes: int = MAX_JSON_BODY_BYTES) -> dict[str, Any]:
         # Requiring the exact Content-Type also closes the "CORS-simple request" loophole a
@@ -1054,6 +1209,14 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise TypeError("Le corps JSON doit être un objet.")
         return payload
+
+    def write_internal_error(
+        self,
+        context: str,
+        status: HTTPStatus = HTTPStatus.INTERNAL_SERVER_ERROR,
+    ) -> None:
+        self.log_exception(context)
+        self.write_json_response({"error": INTERNAL_ERROR_MESSAGE}, status)
 
     def log_exception(self, context: str) -> None:
         sys.stderr.write(
