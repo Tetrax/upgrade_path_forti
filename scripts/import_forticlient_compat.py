@@ -25,6 +25,7 @@ import argparse
 import http.client
 import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -190,10 +191,12 @@ def main(argv: list[str]) -> int:
     except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
         print(f"Échec du téléchargement du PDF : {error}", file=sys.stderr)
         return record_and_return(HEALTH_STATUS_ERROR, 1, error=error)
-    tmp_pdf = Path("/tmp") / "forticlient_ems_compat.pdf"
     try:
-        tmp_pdf.write_bytes(pdf_bytes)
-        entries = parse_matrix(tmp_pdf)
+        with tempfile.TemporaryDirectory(prefix="forticlient-ems-") as tmp_dir:
+            tmp_pdf = Path(tmp_dir) / "compatibility-matrix.pdf"
+            tmp_pdf.touch(mode=0o600)
+            tmp_pdf.write_bytes(pdf_bytes)
+            entries = parse_matrix(tmp_pdf)
     except Exception as error:  # noqa: BLE001 - every importer crash must become retryable health.
         print(f"Échec du traitement du PDF : {error}", file=sys.stderr)
         return record_and_return(HEALTH_STATUS_ERROR, 1, error=error)

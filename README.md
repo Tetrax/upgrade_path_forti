@@ -39,6 +39,8 @@ Pour que **Afficher le chemin** puisse interroger Fortinet en direct, lancer le 
 python3 scripts/fortios_server.py --port 8000
 ```
 
+L'endpoint borne les appels Fortinet à deux requêtes simultanées par défaut. Pour ajuster cette limite sans ajouter de compte utilisateur, définir `FORTIOS_OFFICIAL_PATH_MAX_CONCURRENCY` dans l'environnement du service web (valeur acceptée : 1 à 32) ; une saturation répond HTTP 429. La déduplication/cache des recherches reste volontairement différée afin de ne pas modifier la sémantique de rafraîchissement direct.
+
 Puis ouvrir :
 
 ```text
