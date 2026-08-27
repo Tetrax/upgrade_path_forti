@@ -1,154 +1,83 @@
-# Upgrade Path — Guide de Déploiement
+# Upgrade Path — Guide opérationnel
 
-Version 2.0 — 3 août 2026
+> Déploiement initial, HTTPS, mise à jour et dépannage avec Portainer Repository et l’image GHCR.
 
-CI : VERTE (4/4) | Déploiement : Portainer | Image : locale (docker save) | Stack : upgrade-path
+**Sommaire**
 
-> Guide complet : Revue de code, Déploiement Docker/Portainer, HTTPS et Maintenance.
+1. Prérequis
+2. Préparer le serveur cible
+3. Déployer avec Portainer
+4. Vérifier le déploiement
+5. Configurer HTTPS
+6. Mettre à jour
+7. Dépannage
+8. Checklist finale
 
-Ce guide explique **pas à pas** comment déployer l'application Upgrade Path sur une VM interne Docker administrée par Portainer Community Edition. L'application sera accessible en HTTPS sur le réseau interne à l'adresse **https://upgrade-path.sns-security.lan**.
+## 1. Prérequis
 
-> ■ **Déploiement interne uniquement.** L'application ne sera PAS exposée sur Internet. Certificat TLS : PKI entreprise. Nom de domaine : **upgrade-path.sns-security.lan.** Deux services : `web` (interface + API) et `scheduler` (collectes planifiées 07:00 et 15:30 Europe/Paris).
+- VM Linux avec une version Docker supportée par l’environnement Portainer.
+- Portainer Community Edition, compte administrateur et accès SSH administrateur.
+- Accès sortant vers GitHub et `ghcr.io`.
+- Adresse IP fixe ; pour HTTPS, FQDN interne, certificat avec ce FQDN dans le SAN et CA approuvée par les clients.
+- Trois chemins absolus pour les données, les documents et les certificats.
+- `PUID` et `PGID` numériques, strictement supérieurs à zéro.
+- Règles firewall limitées aux réseaux autorisés.
 
-| ■ Machine | ■ Où ? | ■ Qui ? | ■ Accès |
-|---|---|---|---|
-| SOURCE (dev) | VPS IONOS | Da Vinci (Hermes) | Automatique (CI/CD) |
-| DESTINATION (prod) | VM Entreprise | Valentin | Console/SSH (root) |
+| Élément | Valeur |
+|---|---|
+| Dépôt | `https://github.com/Tetrax/upgrade_path_forti` |
+| Référence | `refs/heads/main` |
+| Compose | `docker-compose.portainer.yml` |
+| Image | `ghcr.io/tetrax/upgrade_path_forti:latest` |
+| Services | `web`, `scheduler` |
+| Listener interne | `8000` |
+| Persistance | `FORTIOS_DATA_DIR`, `FORTIOS_DOCS_DIR`, `FORTIOS_CERTS_DIR` |
 
----
+> Utiliser la méthode Repository et l’image GHCR. Ne jamais stocker de clé privée ou de mot de passe dans Git, l’image ou une variable Portainer.
 
-## Sommaire
+## 2. Préparer le serveur cible
 
-1. Revue de code
-2. Architecture du projet
-3. Déploiement Docker / Portainer
-4. HTTPS — Installation du certificat TLS
-5. Mise à jour / Maintenance
-6. Dépannage
-7. Checklist finale
-
----
-
-## 1. Revue de code
-
-**Upgrade Path** est une application Python d'intelligence de mise à jour FortiOS. Elle analyse les firmwares, vulnérabilités CVE, matrices de compatibilité, et prépare les chemins de montée de version pour les ingénieurs réseau.
-
-**Deux conteneurs Docker** : `web` (interface web + API) et `scheduler` (collectes planifiées), partageant la même image `fortios-upgrade-intelligence:local`.
-
-> ■ L'image Docker est construite localement puis importée dans Portainer. Image : **fortios-upgrade-intelligence:local.**
-
-### Corrections appliquées (revue du 3 août 2026)
-
-| ■ Problème | ■ Correction | ■ Fichier(s) |
-|---|---|---|
-| CI rouge : actions/checkout@v7 n'existe pas | Rétrogradé vers checkout@v4, setup-python@v5 | `.github/workflows/tests.yml` |
-| cert_direct_install = False quand FORTIOS_CERT_HELPER_SOCKET défini | Ajout `bool(os.environ.get(...))` dans la condition | `scripts/fortios_server.py` |
-| Push SSH échoue (pas de clé en conteneur) | Fallback HTTPS avec GITHUB_TOKEN depuis .env | workflow git push |
-| Travaux parallèles bloqués (worktrees morts) | Nettoyage automatique .worktrees/t_* après chaque cycle | maintenance |
-| Tests e2e : 403 au lieu de 409 sur install sans ticket | Correction certificat direct_install (voir ci-dessus) | `tests/test_api.py` |
-
-Détails techniques :
-- Serveur Python custom HTTP(S) sur port interne 8000
-- Listener unique : HTTP ou HTTPS, jamais les deux en parallèle
-- Healthcheck intégré
-- CLI `fortios-certctl` pour la gestion des certificats
-- CI : ruff + python-tests + e2e-tests + docker-build-push + security-scan (Trivy)
-
----
-
-## 2. Architecture du projet
-
-```
-upgrade_path_forti/
-├── app/                    # Application web (frontend JS)
-├── scripts/                # Serveur Python, CLI certificat
-│   ├── fortios_server.py   # Serveur HTTP/HTTPS principal
-│   └── fortios_certctl     # CLI de gestion des certificats
-├── tests/                  # Tests unitaires + e2e
-├── docker/                 # Configuration Docker
-├── deploy/                 # Scripts de déploiement
-├── data/                   # Données métier (catalogue, CVE, etc.)
-├── docs/                   # Documentation et tutoriels
-├── docker-compose.portainer-import.yml  # Stack Portainer (image locale)
-├── docker-compose.yml      # Stack Docker Compose standard
-├── Dockerfile              # Construction de l'image
-└── .github/workflows/      # CI/CD GitHub Actions
-```
-
-**Volumes persistants** (créés par la Stack Portainer) :
-- `fortios-data` : données métier (catalogue firmware, CVE, compatibilités)
-- `fortios-docs` : rapports et documents générés
-- `fortios-certificates` : certificats TLS normalisés
-
-> ■ Ne jamais supprimer ces volumes pendant une mise à jour ou une recréation de Stack.
-
----
-
-## 3. Déploiement Docker / Portainer
-
-### Ce que tu vas faire
-
-Déployer l'application sur une VM interne via Portainer Community Edition en important une image Docker locale, puis créer la Stack avec deux services (`web` + `scheduler`).
-
-### Pré-requis
-
-- Une VM interne avec Docker et Portainer Community Edition fonctionnels
-- Le dépôt `upgrade_path_forti` dans sa version validée sur la machine source
-- Un poste ouvrant l'interface web Portainer
-- Un accès LAN à la VM interne (firewall TCP/8000 puis TCP/443)
-
-### Fichiers nécessaires
-
-| Fichier | Origine | Utilisation |
-|---|---|---|
-| `fortios-upgrade-intelligence.tar` | Exporté depuis la VM source (`docker save`) | Import de l'image dans Portainer |
-| `docker-compose.portainer-import.yml` | Dépôt Git | Import de la Stack dans Portainer |
-
----
-
-### ÉTAPE 1 — Construire l'image sur la VM source
+Vérifier Docker, Portainer et les ports de la première installation :
 
 ```bash
-cd /chemin/vers/upgrade_path
-git status --short   # doit être vide ou contenir uniquement des fichiers non critiques
-docker build --pull -t fortios-upgrade-intelligence:local .
-docker image inspect fortios-upgrade-intelligence:local --format '{{.Id}} {{.Created}}'
+docker version
+docker ps --filter name=portainer
+ss -tlnp | grep -E ':(8000|443)\b' || true
 ```
 
----
+Docker et Portainer doivent répondre. `8000` doit être libre pour l’amorçage HTTP ; `443` doit être libre avant HTTPS.
 
-### ÉTAPE 2 — Exporter l'image au format TAR
+Créer les chemins persistants. Adapter `PUID`, `PGID` et les trois chemins ensemble si la cible diffère :
 
 ```bash
-docker save -o ~/fortios-upgrade-intelligence.tar fortios-upgrade-intelligence:local
-sha256sum ~/fortios-upgrade-intelligence.tar > ~/fortios-upgrade-intelligence.tar.sha256
-ls -lh ~/fortios-upgrade-intelligence.tar*
+PUID=1000
+PGID=1000
+DATA_DIR=/opt/upgrade_path/data
+DOCS_DIR=/opt/upgrade_path/docs
+CERTS_DIR=/opt/upgrade_path/certificates
+
+mkdir -p "$DATA_DIR" "$DOCS_DIR" "$CERTS_DIR"
+chown -R "$PUID:$PGID" "$DATA_DIR" "$DOCS_DIR"
 ```
 
-> ■ Garder l'archive au format `.tar`. **Ne pas la compresser en `.tar.gz`** : l'action Import de Portainer attend l'archive produite par `docker save`.
+Le conteneur applique au répertoire des certificats une politique distincte `root:PGID`. Ne pas lui appliquer un `chown` uniforme. Les trois chemins doivent être préservés lors de toute recréation.
 
-Transférer `fortios-upgrade-intelligence.tar` et `docker-compose.portainer-import.yml` sur le poste qui ouvre Portainer.
+## 3. Déployer avec Portainer
 
----
+1. Ouvrir **Stacks** → **Add stack**.
+2. Nommer la stack `upgrade-path`.
+3. Choisir **Repository**.
+4. Renseigner :
 
-### ÉTAPE 3 — Importer l'image dans Portainer
-
-1. Ouvrir Portainer, sélectionner l'environnement Docker cible
-2. Menu latéral → **Images** (pas Registries)
-3. Cliquer **Import**
-4. Sélectionner `fortios-upgrade-intelligence.tar`, confirmer
-5. Vérifier que `fortios-upgrade-intelligence:local` apparaît dans la liste
-
----
-
-### ÉTAPE 4 — Déployer la Stack
-
-1. Menu latéral → **Stacks** → **Add stack**
-2. Nom : `upgrade-path`
-3. Méthode : **Upload** → sélectionner `docker-compose.portainer-import.yml`
-4. Section **Environment variables** :
-
+```text
+Repository URL       : https://github.com/Tetrax/upgrade_path_forti
+Repository reference : refs/heads/main
+Compose path         : docker-compose.portainer.yml
 ```
+
+5. Ajouter les variables suivantes, en remplaçant `IP_LAN_VM` et les chemins si nécessaire :
+
+```text
 PUID=1000
 PGID=1000
 FORTIOS_HTTP_BIND_ADDRESS=0.0.0.0
@@ -159,163 +88,99 @@ FORTIOS_TLS_HOSTNAME=
 FORTIOS_RUN_ON_START=0
 FORTIOS_EMAIL_ENABLED=false
 FORTIOS_APP_URL=http://IP_LAN_VM:8000/app/
+FORTIOS_DATA_DIR=/opt/upgrade_path/data
+FORTIOS_DOCS_DIR=/opt/upgrade_path/docs
+FORTIOS_CERTS_DIR=/opt/upgrade_path/certificates
 ```
 
-Remplacer `IP_LAN_VM` par l'adresse IP réelle de la VM. `PUID` et `PGID` strictement supérieurs à zéro.
+6. Cliquer **Deploy the stack**.
 
-5. Cliquer **Deploy the stack**
+Portainer tire `ghcr.io/tetrax/upgrade_path_forti:latest` et crée `web` et `scheduler`. Le bind `0.0.0.0` impose un filtrage firewall pendant l’amorçage.
 
-La Stack crée deux services (`web`, `scheduler`) et trois volumes persistants (`fortios-data`, `fortios-docs`, `fortios-certificates`).
+## 4. Vérifier le déploiement
 
-> ■ Conserver `FORTIOS_EMAIL_ENABLED=false` pour le déploiement initial. Ajouter les variables SMTP uniquement si les notifications doivent être activées.
-
----
-
-### ÉTAPE 5 — Vérifier le fonctionnement HTTP
-
-**Dans Portainer :**
-- Containers → `web` et `scheduler` doivent être **running (healthy)**
-- Logs de `web` : doit annoncer HTTP sur le listener interne 8000
-- Logs de `scheduler` : doit annoncer les prochaines collectes (07:00 et 15:30 Europe/Paris)
-
-**Depuis le réseau interne :**
-
-```
-http://IP_LAN_VM:8000/app/
-```
-
-**Depuis la VM Docker (SSH) :**
+Dans un nouveau terminal, résoudre le conteneur `web` avant de l’utiliser :
 
 ```bash
-WEB_CONTAINER="$(docker ps --filter label=com.docker.compose.project=upgrade-path --filter label=com.docker.compose.service=web --format '{{.Names}}')"
+WEB_CONTAINER="$(docker ps \
+  --filter label=com.docker.compose.project=upgrade-path \
+  --filter label=com.docker.compose.service=web \
+  --format '{{.Names}}')"
+test "$(printf '%s\n' "$WEB_CONTAINER" | sed '/^$/d' | wc -l)" -eq 1
+
 docker logs --tail 50 "$WEB_CONTAINER"
-docker inspect --format '{{.State.Health.Status}}' "$WEB_CONTAINER"
-# Doit afficher : healthy
+docker inspect --format '{{.State.Health.Status}}' \
+  "$WEB_CONTAINER"
+curl --fail --silent --show-error \
+  http://127.0.0.1:8000/app/ >/dev/null
 ```
 
-> ■ Le port 8000 doit être accessible uniquement depuis les sous-réseaux internes autorisés. Ne jamais le publier sur Internet. HTTP et HTTPS ne sont jamais exposés en parallèle.
+`web` doit être `running (healthy)` et la requête HTTP doit réussir. Contrôler séparément dans Portainer que `scheduler` est `running` et que ses logs annoncent ses prochains traitements ; il n’a pas de healthcheck Compose. Vérifier aussi le montage des trois chemins persistants.
 
----
+## 5. Configurer HTTPS
 
-## 4. HTTPS — Installation du certificat TLS
+L’application utilise un seul listener interne `8000`, en HTTP ou en HTTPS, jamais les deux. Le certificat doit contenir le FQDN dans le SAN.
 
-### Ce que tu vas faire
+### Installer un PFX/P12
 
-Installer un certificat TLS de la PKI interne pour que l'application soit accessible en HTTPS sur **https://upgrade-path.sns-security.lan**.
-
-### Contexte
-
-L'URL finale sera : **https://upgrade-path.sns-security.lan**
-
-Certificat fourni par la **PKI interne** de l'entreprise (AD CS, EJBCA, etc.). **Pas de Let's Encrypt** — le suffixe `.lan` n'est pas signé par les AC publiques. Le certificat doit contenir dans ses SAN DNS : `upgrade-path.sns-security.lan` (ou wildcard `*.sns-security.lan`).
-
----
-
-### Option A — PKI interne (PFX/P12)
-
-#### Obtenir le certificat
-
-Demander à l'équipe IT un fichier PFX/P12 pour `upgrade-path.sns-security.lan` (ou wildcard `*.sns-security.lan`).
-
-#### Transférer vers la VM
+Chaque bloc est autonome et recalcule `WEB_CONTAINER` :
 
 ```bash
-scp serveur-interne.pfx root@VM_IP:/tmp/
-```
+WEB_CONTAINER="$(docker ps \
+  --filter label=com.docker.compose.project=upgrade-path \
+  --filter label=com.docker.compose.service=web \
+  --format '{{.Names}}')"
+test "$(printf '%s\n' "$WEB_CONTAINER" | sed '/^$/d' | wc -l)" -eq 1
 
-#### Retrouver le conteneur web
-
-```bash
-FQDN='upgrade-path.sns-security.lan'
-WEB_CONTAINER="$(docker ps --filter label=com.docker.compose.project=upgrade-path --filter label=com.docker.compose.service=web --format '{{.Names}}')"
-test -n "$WEB_CONTAINER"
-```
-
-#### Installer le certificat (PFX avec mot de passe)
-
-```bash
-docker cp /tmp/serveur-interne.pfx "$WEB_CONTAINER":/tmp/certificat.pfx
+docker cp /chemin/certificat.pfx \
+  "$WEB_CONTAINER":/tmp/certificat.pfx
 read -rsp 'Mot de passe PFX : ' PFX_PASSWORD; echo
-printf '%s' "$PFX_PASSWORD" | docker exec -i "$WEB_CONTAINER" sh -c 'umask 077; cat > /tmp/cert-password'
+printf '%s' "$PFX_PASSWORD" | docker exec -i \
+  "$WEB_CONTAINER" sh -c \
+  'umask 077; cat > /tmp/cert-password'
 unset PFX_PASSWORD
 
 docker exec "$WEB_CONTAINER" fortios-certctl install \
   /tmp/certificat.pfx \
   --password-file /tmp/cert-password \
-  --hostname "$FQDN" \
+  --hostname upgrade-path.sns-security.lan \
   --output-dir /opt/fortios/certificates/active
-INSTALL_RC=$?
-
-docker exec "$WEB_CONTAINER" rm -f /tmp/certificat.pfx /tmp/cert-password
-test "$INSTALL_RC" -eq 0
+docker exec "$WEB_CONTAINER" rm -f \
+  /tmp/certificat.pfx /tmp/cert-password
 ```
 
-#### Installer le certificat (PFX sans mot de passe)
+Pour un PFX sans mot de passe, omettre le fichier de mot de passe et l’option correspondante. L’option `--chain` est interdite avec un PFX/P12.
+
+### Installer un certificat, une clé et une chaîne séparés
 
 ```bash
-docker exec "$WEB_CONTAINER" fortios-certctl install \
-  /tmp/certificat.pfx \
-  --hostname "$FQDN" \
-  --output-dir /opt/fortios/certificates/active
-INSTALL_RC=$?
-docker exec "$WEB_CONTAINER" rm -f /tmp/certificat.pfx
-test "$INSTALL_RC" -eq 0
-```
+WEB_CONTAINER="$(docker ps \
+  --filter label=com.docker.compose.project=upgrade-path \
+  --filter label=com.docker.compose.service=web \
+  --format '{{.Names}}')"
+test "$(printf '%s\n' "$WEB_CONTAINER" | sed '/^$/d' | wc -l)" -eq 1
 
----
-
-### Option B — Certificat, clé et chaîne séparés
-
-#### Transférer les fichiers
-
-```bash
-scp serveur.crt serveur.key chaine.p7b root@VM_IP:/tmp/
-```
-
-#### Copier dans le conteneur
-
-```bash
-docker cp /tmp/serveur.crt "$WEB_CONTAINER":/tmp/serveur.crt
-docker cp /tmp/serveur.key "$WEB_CONTAINER":/tmp/serveur.key
-docker cp /tmp/chaine.p7b "$WEB_CONTAINER":/tmp/chaine.p7b
-```
-
-#### Installer
-
-```bash
+docker cp /chemin/serveur.crt "$WEB_CONTAINER":/tmp/serveur.crt
+docker cp /chemin/serveur.key "$WEB_CONTAINER":/tmp/serveur.key
+docker cp /chemin/chaine.p7b "$WEB_CONTAINER":/tmp/chaine.p7b
 docker exec "$WEB_CONTAINER" fortios-certctl install \
   /tmp/serveur.crt \
   --key /tmp/serveur.key \
   --chain /tmp/chaine.p7b \
-  --hostname "$FQDN" \
+  --hostname upgrade-path.sns-security.lan \
   --output-dir /opt/fortios/certificates/active
-INSTALL_RC=$?
-
-docker exec "$WEB_CONTAINER" rm -f /tmp/serveur.crt /tmp/serveur.key /tmp/chaine.p7b
-test "$INSTALL_RC" -eq 0
+docker exec "$WEB_CONTAINER" rm -f \
+  /tmp/serveur.crt /tmp/serveur.key /tmp/chaine.p7b
 ```
 
-> ■ Si aucune chaîne séparée n'est nécessaire, omettre l'option `--chain`. Si la clé est chiffrée, utiliser `--password-file /tmp/cert-password` comme dans l'Option A.
+Omettre la copie et l’option `--chain` si aucune chaîne séparée n’est fournie.
 
----
+### Activer HTTPS
 
-### Vérifier le certificat installé
+Dans les variables de la stack, remplacer :
 
-```bash
-docker exec "$WEB_CONTAINER" openssl x509 \
-  -in /opt/fortios/certificates/active/fullchain.pem \
-  -noout -subject -issuer -dates \
-  -ext subjectAltName,extendedKeyUsage
-```
-
----
-
-### Activer HTTPS dans Portainer
-
-1. Stacks → `upgrade-path` → **Editor**
-2. Modifier les variables d'environnement :
-
-```
+```text
+FORTIOS_HTTP_BIND_ADDRESS=0.0.0.0
 FORTIOS_HTTP_PORT=443
 FORTIOS_TLS_CERT=/opt/fortios/certificates/active/fullchain.pem
 FORTIOS_TLS_KEY=/opt/fortios/certificates/active/privkey.pem
@@ -323,105 +188,101 @@ FORTIOS_TLS_HOSTNAME=upgrade-path.sns-security.lan
 FORTIOS_APP_URL=https://upgrade-path.sns-security.lan/app/
 ```
 
-3. Cliquer **Update the stack** (ne pas re-pull, l'image est locale)
-4. Le port hôte 443 est maintenant mappé vers le listener interne 8000 en TLS
-
----
-
-### Vérifier HTTPS
-
-**Depuis un poste approuvé :**
+Cliquer **Update the stack**. Le port hôte `443` pointe alors vers le listener interne `8000` devenu HTTPS ; le port hôte `8000` n’est plus publié. Après la recréation, vérifier avec un bloc autonome :
 
 ```bash
-curl --fail --silent --show-error --cacert /chemin/ca-interne.pem \
-  "https://upgrade-path.sns-security.lan/app/" >/dev/null
+WEB_CONTAINER="$(docker ps \
+  --filter label=com.docker.compose.project=upgrade-path \
+  --filter label=com.docker.compose.service=web \
+  --format '{{.Names}}')"
+test "$(printf '%s\n' "$WEB_CONTAINER" | sed '/^$/d' | wc -l)" -eq 1
+
+docker inspect --format '{{.State.Health.Status}}' \
+  "$WEB_CONTAINER"
+docker logs --tail 50 "$WEB_CONTAINER"
+curl --fail --silent --show-error \
+  https://upgrade-path.sns-security.lan/app/ >/dev/null
 ```
 
-**Navigateur :**
+Le résultat doit être `healthy` et HTTPS doit répondre depuis un poste qui résout le FQDN et approuve la CA.
 
-```
-https://upgrade-path.sns-security.lan/app/
-```
+## 6. Mettre à jour
 
-> ■ Le poste doit faire confiance à la CA interne et résoudre le FQDN. Si le DNS n'est pas encore en place, ajouter `IP_VM upgrade-path.sns-security.lan` dans `/etc/hosts`.
+Le workflow publie `latest` et un tag immuable `ghcr.io/tetrax/upgrade_path_forti:<SHA>`. Avant toute mise à jour, relever un `<SHA_PRECEDENT>` connu et sauvegarder à froid les trois chemins réellement configurés.
 
----
+1. Arrêter la stack depuis Portainer, puis exécuter :
 
-## 5. Mise à jour / Maintenance
+```bash
+DATA_DIR=/opt/upgrade_path/data
+DOCS_DIR=/opt/upgrade_path/docs
+CERTS_DIR=/opt/upgrade_path/certificates
+BACKUP_DIR="/srv/backups/upgrade-path/$(date +%Y%m%d-%H%M%S)"
 
-### Mise à jour de l'application
-
-1. Sur la machine source, récupérer la dernière version : `git pull`
-2. Reconstruire l'image : `docker build --pull -t fortios-upgrade-intelligence:local .`
-3. Exporter : `docker save -o ~/fortios-upgrade-intelligence.tar fortios-upgrade-intelligence:local`
-4. Transférer le `.tar` sur le poste Portainer
-5. Dans Portainer → **Images** → **Import** → sélectionner le nouveau `.tar`
-6. Stacks → `upgrade-path` → **Update the stack** (sans re-pull)
-
-### Renouvellement du certificat
-
-1. Conserver la Stack en HTTPS
-2. Répéter la méthode PFX ou certificat/clé/chaîne avec les nouveaux fichiers
-3. Dans Portainer, **Containers** → redémarrer uniquement le conteneur `web`
-4. Ne pas redémarrer le scheduler, ne pas supprimer les volumes
-
-> ■ Le CLI `fortios-certctl` valide entièrement la nouvelle génération avant activation. Si l'installation échoue, le certificat actif est conservé.
-
-### Retour temporaire en HTTP (exceptionnel)
-
-Dans les variables de la Stack, définir :
-
-```
-FORTIOS_HTTP_PORT=8000
-FORTIOS_TLS_CERT=
-FORTIOS_TLS_KEY=
-FORTIOS_TLS_HOSTNAME=
-FORTIOS_APP_URL=http://IP_LAN_VM:8000/app/
+install -d -m 700 "$BACKUP_DIR"
+cp -a "$DATA_DIR" "$BACKUP_DIR/data"
+cp -a "$DOCS_DIR" "$BACKUP_DIR/docs"
+cp -a "$CERTS_DIR" "$BACKUP_DIR/certificates"
 ```
 
-Puis **Update the stack**. Il n'existe volontairement aucun mode dans lequel HTTP et HTTPS sont servis simultanément.
+2. Redémarrer la stack, ouvrir `upgrade-path`, cliquer **Pull and redeploy** puis confirmer avec **Update**.
+3. Après la recréation, recalculer `WEB_CONTAINER` dans le même bloc qui le contrôle :
 
----
+```bash
+WEB_CONTAINER="$(docker ps \
+  --filter label=com.docker.compose.project=upgrade-path \
+  --filter label=com.docker.compose.service=web \
+  --format '{{.Names}}')"
+test "$(printf '%s\n' "$WEB_CONTAINER" | sed '/^$/d' | wc -l)" -eq 1
 
-## 6. Dépannage
+docker inspect --format '{{.State.Health.Status}}' \
+  "$WEB_CONTAINER"
+docker logs --tail 50 "$WEB_CONTAINER"
+```
 
-| ■ Problème | ■ Vérification / Action |
+`web` doit être `healthy`. Dans Portainer, `scheduler` doit être `running` et ses logs doivent rester cohérents. Tester HTTPS et vérifier les trois montages.
+
+Pour revenir en arrière, faire valider dans la référence Git utilisée par la stack un compose où les deux lignes `image:` pointent vers `ghcr.io/tetrax/upgrade_path_forti:<SHA_PRECEDENT>`, puis refaire **Pull and redeploy** → **Update**. `latest` ne constitue pas un rollback fiable.
+
+Si les données doivent aussi être restaurées, arrêter la stack, conserver les chemins en échec, puis restaurer la sauvegarde :
+
+```bash
+DATA_DIR=/opt/upgrade_path/data
+DOCS_DIR=/opt/upgrade_path/docs
+CERTS_DIR=/opt/upgrade_path/certificates
+BACKUP_DIR='/srv/backups/upgrade-path/<SAUVEGARDE_VALIDEE>'
+FAILED_SUFFIX="failed-$(date +%Y%m%d-%H%M%S)"
+
+mv "$DATA_DIR" "${DATA_DIR}.${FAILED_SUFFIX}"
+mv "$DOCS_DIR" "${DOCS_DIR}.${FAILED_SUFFIX}"
+mv "$CERTS_DIR" "${CERTS_DIR}.${FAILED_SUFFIX}"
+cp -a "$BACKUP_DIR/data" "$DATA_DIR"
+cp -a "$BACKUP_DIR/docs" "$DOCS_DIR"
+cp -a "$BACKUP_DIR/certificates" "$CERTS_DIR"
+```
+
+Redémarrer ensuite la stack épinglée au SHA précédent et refaire les contrôles des chapitres 4 et 5. Tester cette restauration hors production avant de l’adopter.
+
+## 7. Dépannage
+
+| Symptôme | Vérification ou action |
 |---|---|
-| Stack ne se déploie pas | Vérifier toutes les variables d'environnement requises |
-| Conteneur web pas healthy | `docker logs --tail 100 "$WEB_CONTAINER"`, vérifier les variables TLS |
-| Le CLI refuse le certificat | SAN DNS présent ? Correspondance SAN/FQDN ? Période de validité ? Usage TLS serveur ? |
-| Navigateur affiche une alerte | Résolution DNS, SAN, dates, chaîne, CA interne dans le magasin de confiance |
-| HTTP/8000 toujours accessible après activation HTTPS | Vérifier `FORTIOS_HTTP_PORT=443`, mettre à jour la Stack, pas d'ancien conteneur |
-| Portainer : `no such image` | Importer l'image locale (`docker save` → Import), ne pas utiliser de registre |
-| Scheduler ne collecte pas | Vérifier les logs, fuseau horaire Europe/Paris, `FORTIOS_RUN_ON_START` |
-| Données perdues après redéploiement | Ne pas supprimer les volumes `fortios-data` et `fortios-docs` |
-| Variables TLS incohérentes | `FORTIOS_TLS_CERT`, `FORTIOS_TLS_KEY` et `FORTIOS_TLS_HOSTNAME` doivent être définis ensemble |
+| Stack non déployée | Vérifier URL, référence, compose, variables de chemins et accès à `ghcr.io`. |
+| `web` non healthy | Recalculer son nom, lire ses logs et vérifier que les variables TLS sont fournies ensemble. |
+| `scheduler` arrêté | Lire ses logs et contrôler les montages data/docs et ses variables. |
+| Certificat refusé | Vérifier SAN, dates, usage serveur, clé correspondante et chaîne. |
+| Alerte navigateur | Vérifier DNS, SAN, chaîne et confiance dans la CA. |
+| HTTP encore exposé | Confirmer le port hôte `443`, mettre à jour la stack et vérifier le firewall. |
+| Données absentes | Vérifier les trois chemins et leurs montages ; ne rien supprimer avant diagnostic. |
+| Mise à jour défaillante | Épingler le SHA précédent ; restaurer les chemins seulement si nécessaire et depuis une sauvegarde testée. |
 
----
+## 8. Checklist finale
 
-## 7. Checklist finale
-
-- [ ] Image `fortios-upgrade-intelligence:local` présente dans Portainer
-- [ ] Stack `upgrade-path` contient uniquement `web` et `scheduler`
-- [ ] Trois volumes persistants existent (`fortios-data`, `fortios-docs`, `fortios-certificates`)
-- [ ] Conteneur `web` est **healthy**
-- [ ] `http://IP_LAN_VM:8000/app/` accessible depuis le LAN
-- [ ] Certificat TLS installé dans `/opt/fortios/certificates/active/`
-- [ ] SAN DNS correct (`upgrade-path.sns-security.lan`)
-- [ ] DNS interne résout le FQDN
-- [ ] CA interne approuvée sur les postes clients
-- [ ] `https://upgrade-path.sns-security.lan/app/` accessible, cadenas vert
-- [ ] HTTP/8000 n'est plus accessible après activation HTTPS
-- [ ] Firewall limite TCP/443 aux réseaux internes autorisés
-- [ ] Aucun secret ou certificat privé dans Git ou dans l'image
-- [ ] Ancienne instance arrêtée uniquement après validation complète
-
-■ **Déploiement terminé. Application accessible en HTTPS sur le réseau interne.** ■
-
----
-
-### ■ Ressources
-
-- **Repo :** https://github.com/Tetrax/upgrade_path_forti
-- **Image :** fortios-upgrade-intelligence:local (build local, import Portainer)
-- **CI :** https://github.com/Tetrax/upgrade_path_forti/actions
+- [ ] Docker et Portainer sont opérationnels.
+- [ ] Les trois chemins persistants existent avec les droits adaptés à `PUID` et `PGID`.
+- [ ] La stack utilise Repository, la bonne référence et le bon compose.
+- [ ] `web` est `healthy` ; `scheduler` est `running` et ses logs sont cohérents.
+- [ ] `WEB_CONTAINER` est recalculé dans chaque nouveau terminal et après chaque recréation.
+- [ ] HTTPS répond avec le bon FQDN, le bon SAN et une CA approuvée.
+- [ ] Le firewall n’expose que le port attendu aux réseaux autorisés.
+- [ ] Une sauvegarde à froid des trois chemins et sa restauration ont été testées.
+- [ ] Le SHA précédent est connu et la procédure **Pull and redeploy** → **Update** est validée.
