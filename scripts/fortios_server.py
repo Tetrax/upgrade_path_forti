@@ -45,6 +45,7 @@ from fortios_watch import (
     DEFAULT_PRODUCT_ID,
     PRODUCT_LABELS,
     PRODUCTS,
+    UPGRADE_DIRECTION_ERROR,
     Firmware,
     OfficialPathRequest,
     UpgradePath,
@@ -59,6 +60,7 @@ from fortios_watch import (
     upsert_firmware,
     upsert_path,
     utc_now,
+    version_key,
     write_json,
 )
 from tls_lock import managed_pair_lock
@@ -235,6 +237,8 @@ def parse_official_path_request(payload: dict[str, Any]) -> OfficialPathRequest:
     to_version = _bounded_text(
         payload["to"], "Version cible", MAX_VERSION_LENGTH, required=True
     )
+    if version_key(to_version) <= version_key(from_version):
+        raise ValueError(UPGRADE_DIRECTION_ERROR)
     return OfficialPathRequest(
         product=product,
         model=model,
