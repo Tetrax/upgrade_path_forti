@@ -1612,20 +1612,16 @@ def fetch_psirt_versions(timeout: int) -> set[str]:
 
 # --- PSIRT CVE tracking -------------------------------------------------
 #
-# Fortinet publishes a CSAF (Common Security Advisory Framework — a standard,
-# machine-readable JSON format) export for every PSIRT advisory. Its
-# vulnerabilities[].product_status.known_affected list gives exact per-branch
-# version ranges (e.g. "FortiOS >=7.6.0|<=7.6.4" or "FortiClientEMS 7.0 all
-# versions"), far more reliable than parsing the human-readable advisory page.
-# The CSAF file's own URL isn't guessable (it embeds a slugified title), so a
-# single HTML fetch per new advisory is still needed to find it.
+# Fortinet publishes a CVRF (Common Vulnerability Reporting Framework) XML
+# export for every PSIRT advisory. The export is a stable machine-readable
+# endpoint and remains available even when the human-readable advisory page
+# presents an anti-bot challenge.
 PSIRT_BASE_URL = "https://fortiguard.fortinet.com"
-CSAF_URL_RE = re.compile(r'csaf_url=([^"&]+\.json)')
 ADVISORY_LINK_RE = re.compile(r"location\.href\s*=\s*'/psirt/(FG-IR-[\w-]+)'")
-KNOWN_AFFECTED_RE = re.compile(r"^(?P<product>Forti\w+)\s+(?P<rest>.+)$")
-ALL_VERSIONS_RE = re.compile(r"^(?P<branch>\d+\.\d+)\s+all versions$", re.IGNORECASE)
+CVRF_NAMESPACE = "http://docs.oasis-open.org/csaf/ns/csaf-cvrf/v1.2/cvrf"
+CVRF_VERSION_RE = re.compile(r"\b\d+\.\d+(?:\.\d+){0,2}\b")
 
-# CSAF product name -> (our internal product id, model id or None when the product
+# CVRF product name -> (our internal product id, model id or None when the product
 # has no FortiClient-style per-platform model).
 CVE_PRODUCT_MAP: dict[str, tuple[str, str | None]] = {
     "FortiOS": (DEFAULT_PRODUCT_ID, None),
@@ -1672,92 +1668,126 @@ def discover_advisory_ids_from_listing(
     return unique_in_order(ids)
 
 
-def fetch_csaf_url(advisory_id: str, timeout: int) -> str | None:
-    raw_html = fetch_text(f"{PSIRT_BASE_URL}/psirt/{advisory_id}", timeout)
-    match = CSAF_URL_RE.search(raw_html)
-    return match.group(1) if match else None
+def cvrf_local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
 
 
-def parse_known_affected_value(
-    value: str,
-) -> tuple[str, str | None, str | None, str | None] | None:
-    """Parse one product_status.known_affected string.
+def cvrf_text(element: ET.Element | None, child_name: str) -> str:
+    if element is None:
+        return ""
+    child = next(
+        (candidate for candidate in element if cvrf_local_name(candidate.tag) == child_name),
+        None,
+    )
+    return " ".join((child.text or "").split()) if child is not None else ""
 
-    Returns (csaf_product_name, from_version, to_version, all_versions_branch) — the last
-    element is set instead of from/to when the whole train is affected (e.g. "FortiClientEMS
-    7.0 all versions"). Returns None if the string doesn't match a recognized shape.
+
+def cvss_severity(score: float | None) -> str:
+    if score is None:
+        return "unknown"
+    if score >= 9.0:
+        return "critical"
+    if score >= 7.0:
+        return "high"
+    if score >= 4.0:
+        return "medium"
+    if score > 0:
+        return "low"
+    return "unknown"
+
+
+def parse_cvrf_product_id(value: str) -> dict[str, Any] | None:
+    """Translate one CVRF ProductID into the application's affected-range shape.
+
+    Fortinet uses both exact product IDs (``FortiOS-7.6.4``) and whole-train
+    product IDs (``FortiOS-FortiOS 7.6``). Exact IDs become a one-version
+    range; two-component train IDs keep open bounds, matching the frontend's
+    existing "all versions of this branch" semantics.
     """
-    match = KNOWN_AFFECTED_RE.match(value.strip())
-    if not match:
-        return None
-    product_name = match.group("product")
-    rest = match.group("rest").strip()
+    for product_name, (product_id, model_id) in CVE_PRODUCT_MAP.items():
+        prefix = f"{product_name}-"
+        if not value.startswith(prefix):
+            continue
+        versions = CVRF_VERSION_RE.findall(value[len(prefix) :])
+        if not versions:
+            return None
+        version = versions[-1]
+        parts = version.split(".")
+        return {
+            "product": product_id,
+            "models": [model_id] if model_id else [],
+            "branch": ".".join(parts[:2]),
+            "from": version if len(parts) >= 3 else None,
+            "to": version if len(parts) >= 3 else None,
+        }
+    return None
 
-    all_match = ALL_VERSIONS_RE.match(rest)
-    if all_match:
-        return product_name, None, None, all_match.group("branch")
 
-    from_match = re.search(r">=([\d.]+)", rest)
-    to_match = re.search(r"<=([\d.]+)", rest)
-    from_version = from_match.group(1) if from_match else None
-    to_version = to_match.group(1) if to_match else None
-    if not from_version and not to_version:
-        return None
-    return product_name, from_version, to_version, None
-
-
-def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str, Any]]:
-    document = doc.get("document") or {}
-    tracking = document.get("tracking") or {}
-    title = document.get("title") or advisory_id
-    published_at = (tracking.get("initial_release_date") or "")[:10]
-    updated_at = (tracking.get("current_release_date") or "")[:10]
+def parse_cvrf_document(advisory_id: str, raw_xml: str | bytes) -> list[dict[str, Any]]:
+    root = ET.fromstring(raw_xml)
+    title = cvrf_text(root, "DocumentTitle") or advisory_id
+    tracking = next(
+        (element for element in root if cvrf_local_name(element.tag) == "DocumentTracking"),
+        None,
+    )
+    published_at = cvrf_text(tracking, "InitialReleaseDate")[:10]
+    updated_at = cvrf_text(tracking, "CurrentReleaseDate")[:10]
     url = f"{PSIRT_BASE_URL}/psirt/{advisory_id}"
 
-    # A single CVE can show up as several vulnerabilities[] entries in one CSAF document —
-    # e.g. FG-IR-22-230 has one entry per FortiClient platform, all under CVE-2022-45856.
-    # Merge them into one entry per CVE with a combined `affected` list, otherwise later
-    # entries would silently clobber earlier ones once upserted by id.
     entries_by_cve: dict[str, dict[str, Any]] = {}
-    for vuln in doc.get("vulnerabilities") or []:
-        cve_id = vuln.get("cve")
+    for vulnerability in (
+        element for element in root.iter() if cvrf_local_name(element.tag) == "Vulnerability"
+    ):
+        cve_id = cvrf_text(vulnerability, "CVE")
         if not cve_id:
             continue
 
-        severity = None
         cvss_score = None
-        for score in vuln.get("scores") or []:
-            metrics = score.get("cvss_v3") or score.get("cvss_v4")
-            if metrics:
-                severity = (metrics.get("baseSeverity") or "").lower() or None
-                cvss_score = metrics.get("baseScore")
+        for score_name in ("BaseScoreV3", "BaseScoreV4"):
+            score_text = next(
+                (
+                    " ".join((element.text or "").split())
+                    for element in vulnerability.iter()
+                    if cvrf_local_name(element.tag) == score_name
+                    if element.text and element.text.strip()
+                ),
+                "",
+            )
+            if score_text:
+                try:
+                    cvss_score = float(score_text)
+                except ValueError:
+                    pass
                 break
 
-        affected: list[dict[str, Any]] = []
-        for value in (vuln.get("product_status") or {}).get("known_affected") or []:
-            parsed = parse_known_affected_value(value)
-            if not parsed:
+        affected_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for status in (
+            element
+            for element in vulnerability.iter()
+            if cvrf_local_name(element.tag) == "Status"
+        ):
+            if status.get("Type", "").casefold() != "known affected":
                 continue
-            product_name, from_version, to_version, all_versions_branch = parsed
-            mapping = CVE_PRODUCT_MAP.get(product_name)
-            if not mapping:
-                continue
-            product_id, model_id = mapping
-            branch = all_versions_branch or ".".join(
-                (from_version or to_version).split(".")[:2]
-            )
-            affected.append(
-                {
-                    "product": product_id,
-                    "models": [model_id] if model_id else [],
-                    "branch": branch,
-                    "from": from_version,
-                    "to": to_version,
-                }
-            )
+            for product_element in (
+                element
+                for element in status.iter()
+                if cvrf_local_name(element.tag) == "ProductID"
+            ):
+                product_id = " ".join((product_element.text or "").split())
+                affected = parse_cvrf_product_id(product_id)
+                if affected is None:
+                    continue
+                key = (
+                    affected["product"],
+                    tuple(affected["models"]),
+                    affected["branch"],
+                    affected["from"],
+                    affected["to"],
+                )
+                affected_by_key[key] = affected
 
-        if not affected:
-            continue  # this vulnerability entry doesn't touch any product this tool tracks.
+        if not affected_by_key:
+            continue  # the vulnerability does not touch a product tracked here.
 
         entry = entries_by_cve.setdefault(
             cve_id,
@@ -1765,7 +1795,7 @@ def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str,
                 "id": cve_id,
                 "advisoryId": advisory_id,
                 "title": title,
-                "severity": severity or "unknown",
+                "severity": cvss_severity(cvss_score),
                 "cvssScore": cvss_score,
                 "url": url,
                 "publishedAt": published_at,
@@ -1773,26 +1803,27 @@ def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str,
                 "affected": [],
             },
         )
-        entry["affected"].extend(affected)
+        entry["affected"].extend(affected_by_key.values())
 
     return list(entries_by_cve.values())
 
 
+def fetch_cvrf_document(advisory_id: str, timeout: int) -> str:
+    return fetch_text(f"{PSIRT_BASE_URL}/psirt/cvrf/{advisory_id}", timeout)
+
+
 def collect_cve_entries_for_advisory(
     advisory_id: str, timeout: int
-) -> list[dict[str, Any]] | None:
-    """Returns the definitive, current list of CVEs for this advisory (each already filtered to
-    tracked products by parse_csaf_document — possibly empty if none apply anymore), or None if
-    we can't confirm one way or another: no CSAF url found for this advisory could mean a
-    transient PSIRT hiccup, or a legitimately CSAF-less legacy advisory — since those aren't
-    distinguishable here, callers must never treat None as "confirmed zero CVEs" (see
-    replace_cves_for_advisory()).
+) -> list[dict[str, Any]]:
+    """Return the definitive CVE list from Fortinet's public CVRF export.
+
+    Transport failures and malformed XML are intentionally raised to the
+    caller, which records the advisory as skipped and preserves its previous
+    data instead of treating an unverified response as an empty result.
     """
-    csaf_url = fetch_csaf_url(advisory_id, timeout)
-    if not csaf_url:
-        return None
-    doc = json.loads(fetch_text(csaf_url, timeout))
-    return parse_csaf_document(advisory_id, doc)
+    return parse_cvrf_document(
+        advisory_id, fetch_cvrf_document(advisory_id, timeout)
+    )
 
 
 def upsert_cve(state: dict[str, Any], item: dict[str, Any]) -> bool:
@@ -1824,8 +1855,8 @@ def replace_cves_for_advisory(
     state: dict[str, Any], advisory_id: str, new_entries: list[dict[str, Any]]
 ) -> CveReconciliationStats:
     """Replace every CVE previously recorded under `advisory_id` with exactly `new_entries` —
-    only ever call this with a DEFINITIVE, successfully-parsed CSAF result (never for an advisory
-    that was skipped due to a network/parse failure or an unresolved CSAF lookup), since a
+    only ever call this with a DEFINITIVE, successfully-parsed CVRF result (never for an advisory
+    that was skipped due to a network/parse failure), since a
     transient PSIRT hiccup must never be allowed to wipe real, previously-confirmed CVE data.
     Returns distinct added/updated/removed counts — a removal must never be reported as if it
     were a new addition.
@@ -1861,7 +1892,7 @@ def collect_cve_catalog(
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
     """Per-advisory CVE entries to reconcile (keyed by advisory_id), plus a skipped-id list.
 
-    An advisory_id present in the returned dict got a DEFINITIVE, successfully-parsed CSAF
+    An advisory_id present in the returned dict got a DEFINITIVE, successfully-parsed CVRF
     result this run (see collect_cve_entries_for_advisory()) — its entries are the complete,
     current set of CVEs for that advisory among our tracked products, so the caller should
     replace whatever it previously had for that advisory_id, dropping anything no longer
@@ -1901,7 +1932,7 @@ def collect_cve_catalog(
 def fetch_cve_entries_for_advisories(
     advisory_ids: list[str], timeout: int
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
-    """Fetch the definitive CSAF result for each id in `advisory_ids`, split into resolved
+    """Fetch the definitive CVRF result for each id in `advisory_ids`, split into resolved
     results and a skipped list (see collect_cve_catalog's docstring for what each side means to
     callers). Factored out of collect_cve_catalog() so main() can call it a second time with just
     the skipped ids after a delay, without re-running RSS/listing discovery.
@@ -1911,7 +1942,13 @@ def fetch_cve_entries_for_advisories(
     for advisory_id in advisory_ids:
         try:
             entries = collect_cve_entries_for_advisory(advisory_id, timeout)
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        except (
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+            ET.ParseError,
+        ):
             entries = None
         if entries is None:
             skipped.append(advisory_id)
@@ -2670,7 +2707,7 @@ def main(argv: list[str]) -> int:
             # on its own -- retrying seconds later (the per-request backoff in read_url_with_retry)
             # mostly doesn't help with that, so wait for real before giving the still-failing ones
             # another shot. Bounded and spaced out (not "retry forever until green"): an advisory
-            # can be legitimately CSAF-less (see collect_cve_entries_for_advisory's docstring),
+            # can be legitimately CVRF-less (see collect_cve_entries_for_advisory's docstring),
             # indistinguishable here from a real failure, so an unbounded loop would spin on it
             # forever every single day; and hammering PSIRT harder/faster when it's already
             # struggling only makes the rate limiting worse, not better (observed directly: 1
@@ -2683,7 +2720,7 @@ def main(argv: list[str]) -> int:
                     skipped_cves, args.timeout
                 )
                 cve_results_by_advisory.update(retried_results)
-            # Each advisory here got a definitive CSAF result this run: replace (not just upsert)
+            # Each advisory here got a definitive CVRF result this run: replace (not just upsert)
             # whatever we had for it, so a CVE Fortinet has since removed/reattributed away from
             # our tracked products actually disappears instead of lingering forever. Advisories
             # in skipped_cves are left completely untouched. Reconciling `state` here (in
