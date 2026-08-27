@@ -3,12 +3,11 @@
 Before this fix, the daily CVE collector only ever upserted (added/updated) entries, so a CVE
 Fortinet later removed from an advisory (reattributed away from our tracked products, or
 corrected off entirely) lingered in state["cves"] forever. The fix distinguishes a definitive,
-successfully-parsed CSAF result (replace everything for that advisory, dropping anything no
-longer present) from an unresolved one — no CSAF url found, or a network/parse failure — which
+successfully-parsed CVRF result (replace everything for that advisory, dropping anything no
+longer present) from an unresolved one — a network/parse failure — which
 must leave existing data completely untouched.
 """
 
-import json
 import sys
 import tempfile
 import unittest
@@ -19,55 +18,105 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import fortios_watch as fw
 
 
-def make_csaf_doc(cve_ids: list[str]) -> dict:
-    return {
-        "document": {
-            "title": "Test advisory",
-            "tracking": {
-                "initial_release_date": "2026-01-01T00:00:00Z",
-                "current_release_date": "2026-01-01T00:00:00Z",
-            },
-        },
-        "vulnerabilities": [
-            {
-                "cve": cve_id,
-                "scores": [{"cvss_v3": {"baseSeverity": "high", "baseScore": 7.5}}],
-                "product_status": {"known_affected": ["FortiOS >=7.6.0 <=7.6.4"]},
-            }
-            for cve_id in cve_ids
-        ],
-    }
+def make_cvrf_xml(cve_ids: list[str] | None = None) -> str:
+    cve_ids = ["CVE-2026-71407"] if cve_ids is None else cve_ids
+    vulnerabilities = "\n".join(
+        f"""  <Vulnerability Ordinal="{index}">
+    <Title>Stack buffer overflow in WAD</Title>
+    <cvrf:CVE>{cve_id}</cvrf:CVE>
+    <ProductStatuses>
+      <Status Type="Known Affected">
+        <ProductID>FortiOS-FortiOS 7.6</ProductID>
+        <ProductID>FortiOS-7.6.4</ProductID>
+      </Status>
+    </ProductStatuses>
+    <CVSSScoreSets>
+      <ScoreSetV3>
+        <BaseScoreV3>8.8</BaseScoreV3>
+      </ScoreSetV3>
+    </CVSSScoreSets>
+  </Vulnerability>"""
+        for index, cve_id in enumerate(cve_ids, 1)
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<cvrf:cvrfdoc xmlns:cvrf="http://docs.oasis-open.org/csaf/ns/csaf-cvrf/v1.2/cvrf">
+  <cvrf:DocumentTitle>Stack buffer overflow in WAD</cvrf:DocumentTitle>
+  <cvrf:DocumentTracking>
+    <cvrf:InitialReleaseDate>2026-08-12T00:00:00</cvrf:InitialReleaseDate>
+    <cvrf:CurrentReleaseDate>2026-08-19T00:00:00</cvrf:CurrentReleaseDate>
+  </cvrf:DocumentTracking>
+{vulnerabilities}
+</cvrf:cvrfdoc>
+"""
 
 
 class CollectCveEntriesForAdvisoryTests(unittest.TestCase):
     def setUp(self):
-        self._orig_fetch_csaf_url = fw.fetch_csaf_url
+        self._orig_fetch_cvrf_document = fw.fetch_cvrf_document
         self._orig_fetch_text = fw.fetch_text
 
     def tearDown(self):
-        fw.fetch_csaf_url = self._orig_fetch_csaf_url
+        fw.fetch_cvrf_document = self._orig_fetch_cvrf_document
         fw.fetch_text = self._orig_fetch_text
 
-    def test_returns_none_when_no_csaf_url_found(self):
-        fw.fetch_csaf_url = lambda advisory_id, timeout: None
-        result = fw.collect_cve_entries_for_advisory("FG-IR-99-999", timeout=5)
-        self.assertIsNone(result, "an unresolved CSAF lookup must be None, never an empty list")
+    def test_network_failure_is_propagated_for_the_batch_wrapper_to_record(self):
+        fw.fetch_cvrf_document = lambda advisory_id, timeout: (_ for _ in ()).throw(
+            TimeoutError("PSIRT unreachable")
+        )
+        with self.assertRaises(TimeoutError):
+            fw.collect_cve_entries_for_advisory("FG-IR-99-999", timeout=5)
 
-    def test_returns_definitive_list_when_csaf_parses_successfully(self):
-        fw.fetch_csaf_url = lambda advisory_id, timeout: "https://example/csaf.json"
-        doc = make_csaf_doc(["CVE-2026-00001"])
-        fw.fetch_text = lambda url, timeout: __import__("json").dumps(doc)
+    def test_returns_definitive_list_when_cvrf_parses_successfully(self):
+        fw.fetch_cvrf_document = lambda advisory_id, timeout: make_cvrf_xml(
+            ["CVE-2026-00001"]
+        )
         result = fw.collect_cve_entries_for_advisory("FG-IR-26-001", timeout=5)
-        self.assertIsNotNone(result)
         self.assertEqual([entry["id"] for entry in result], ["CVE-2026-00001"])
 
     def test_returns_definitive_empty_list_when_no_cves_apply_anymore(self):
-        """A successfully-parsed CSAF doc with zero CVEs relevant to tracked products is still a
+        """A successfully-parsed CVRF doc with zero CVEs relevant to tracked products is still a
         DEFINITIVE result (empty, not None) — the advisory really has nothing for us anymore."""
-        fw.fetch_csaf_url = lambda advisory_id, timeout: "https://example/csaf.json"
-        fw.fetch_text = lambda url, timeout: __import__("json").dumps({"document": {}, "vulnerabilities": []})
+        fw.fetch_cvrf_document = lambda advisory_id, timeout: make_cvrf_xml([])
         result = fw.collect_cve_entries_for_advisory("FG-IR-26-002", timeout=5)
         self.assertEqual(result, [])
+
+    def test_reads_public_cvrf_export_without_fetching_challenged_html_page(self):
+        calls = []
+
+        def fetch_text(url, timeout):
+            calls.append(url)
+            return make_cvrf_xml()
+
+        fw.fetch_text = fetch_text
+        result = fw.collect_cve_entries_for_advisory("FG-IR-26-161", timeout=5)
+
+        self.assertEqual(
+            calls,
+            ["https://fortiguard.fortinet.com/psirt/cvrf/FG-IR-26-161"],
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["id"], "CVE-2026-71407")
+        self.assertEqual(result[0]["severity"], "high")
+        self.assertEqual(result[0]["cvssScore"], 8.8)
+        self.assertEqual(
+            result[0]["affected"],
+            [
+                {
+                    "product": "fortigate-fortios",
+                    "models": [],
+                    "branch": "7.6",
+                    "from": None,
+                    "to": None,
+                },
+                {
+                    "product": "fortigate-fortios",
+                    "models": [],
+                    "branch": "7.6",
+                    "from": "7.6.4",
+                    "to": "7.6.4",
+                },
+            ],
+        )
 
 
 class ReplaceCvesForAdvisoryTests(unittest.TestCase):
@@ -135,12 +184,12 @@ class CollectCveCatalogReconciliationTests(unittest.TestCase):
 
     def setUp(self):
         self._orig_rss = fw.discover_advisory_ids_from_rss
-        self._orig_fetch_csaf_url = fw.fetch_csaf_url
+        self._orig_fetch_cvrf_document = fw.fetch_cvrf_document
         self._orig_fetch_text = fw.fetch_text
 
     def tearDown(self):
         fw.discover_advisory_ids_from_rss = self._orig_rss
-        fw.fetch_csaf_url = self._orig_fetch_csaf_url
+        fw.fetch_cvrf_document = self._orig_fetch_cvrf_document
         fw.fetch_text = self._orig_fetch_text
 
     def test_stale_cve_removed_after_successful_refetch_returns_fewer(self):
@@ -149,9 +198,9 @@ class CollectCveCatalogReconciliationTests(unittest.TestCase):
             {"id": "CVE-2026-00002", "advisoryId": "FG-IR-26-001", "title": "old, now removed by Fortinet"},
         ]})
         fw.discover_advisory_ids_from_rss = lambda timeout: ["FG-IR-26-001"]
-        fw.fetch_csaf_url = lambda advisory_id, timeout: "https://example/csaf.json"
-        doc = make_csaf_doc(["CVE-2026-00001"])  # CVE-2026-00002 no longer in the CSAF doc
-        fw.fetch_text = lambda url, timeout: __import__("json").dumps(doc)
+        fw.fetch_cvrf_document = lambda advisory_id, timeout: make_cvrf_xml(
+            ["CVE-2026-00001"]
+        )  # CVE-2026-00002 no longer in the CVRF document
 
         cve_results, skipped = fw.collect_cve_catalog(
             existing_advisory_ids={"FG-IR-26-001"}, timeout=5, backfill=False,
@@ -173,7 +222,7 @@ class CollectCveCatalogReconciliationTests(unittest.TestCase):
         def raise_network_error(advisory_id, timeout):
             raise TimeoutError("PSIRT unreachable")
 
-        fw.fetch_csaf_url = raise_network_error
+        fw.fetch_cvrf_document = raise_network_error
 
         cve_results, skipped = fw.collect_cve_catalog(
             existing_advisory_ids={"FG-IR-26-001"}, timeout=5, backfill=False,
@@ -212,7 +261,7 @@ class MainCommitSequenceCveReconciliationTests(unittest.TestCase):
             # 1. main() reads its working-copy snapshot at the top of the run.
             state = fw.normalize_state(fw.read_json(output_path, {}))
 
-            # 2. A definitive CSAF re-fetch for FG-IR-26-001 now only returns CVE-KEEP.
+            # 2. A definitive CVRF re-fetch for FG-IR-26-001 now only returns CVE-KEEP.
             cve_results_by_advisory = {
                 "FG-IR-26-001": [{"id": "CVE-KEEP", "advisoryId": "FG-IR-26-001", "title": "keep"}],
             }
@@ -249,12 +298,12 @@ class CveRetryAfterDelayIntegrationTests(unittest.TestCase):
     day's run as a warning. main() retries the still-skipped ids after each delay in
     --cve-retry-delays-seconds (default "300,900" -- 5 min then 15 min), stopping early once
     nothing is left to retry. Deliberately bounded, not "retry forever until green": an advisory
-    can be legitimately CSAF-less (indistinguishable here from a real failure), and hammering an
+    can be legitimately CVRF-less (indistinguishable here from a real failure), and hammering an
     already-struggling PSIRT harder only makes rate limiting worse, not better."""
 
     def setUp(self):
         self._orig_rss = fw.discover_advisory_ids_from_rss
-        self._orig_fetch_csaf_url = fw.fetch_csaf_url
+        self._orig_fetch_cvrf_document = fw.fetch_cvrf_document
         self._orig_fetch_text = fw.fetch_text
         self._orig_psirt_versions = fw.fetch_psirt_versions
         self._orig_sleep = fw.time.sleep
@@ -264,7 +313,7 @@ class CveRetryAfterDelayIntegrationTests(unittest.TestCase):
 
     def tearDown(self):
         fw.discover_advisory_ids_from_rss = self._orig_rss
-        fw.fetch_csaf_url = self._orig_fetch_csaf_url
+        fw.fetch_cvrf_document = self._orig_fetch_cvrf_document
         fw.fetch_text = self._orig_fetch_text
         fw.fetch_psirt_versions = self._orig_psirt_versions
         fw.time.sleep = self._orig_sleep
@@ -281,22 +330,17 @@ class CveRetryAfterDelayIntegrationTests(unittest.TestCase):
 
     def _install_fakes(self, flaky_advisory_id: str, fail_times: int = 1):
         """FG-IR-26-002 always succeeds; `flaky_advisory_id` fails its first `fail_times`
-        fetch_csaf_url calls (simulated network error) then succeeds on every subsequent one.
+        fetch_cvrf_document calls (simulated network error) then succeeds on every subsequent one.
         `fail_times=math.inf`-like large int simulates an advisory that never recovers."""
         call_counts: dict[str, int] = {}
 
-        def fetch_csaf_url(advisory_id, timeout):
+        def fetch_cvrf_document(advisory_id, timeout):
             call_counts[advisory_id] = call_counts.get(advisory_id, 0) + 1
             if advisory_id == flaky_advisory_id and call_counts[advisory_id] <= fail_times:
                 raise TimeoutError("PSIRT unreachable")
-            return f"https://example/{advisory_id}.json"
+            return make_cvrf_xml([f"CVE-{advisory_id}"])
 
-        def fetch_text(url, timeout):
-            advisory_id = url.rsplit("/", 1)[1].removesuffix(".json")
-            return json.dumps(make_csaf_doc([f"CVE-{advisory_id}"]))
-
-        fw.fetch_csaf_url = fetch_csaf_url
-        fw.fetch_text = fetch_text
+        fw.fetch_cvrf_document = fetch_cvrf_document
         return call_counts
 
     def test_advisory_that_fails_once_then_succeeds_on_first_retry_ends_up_green(self):
