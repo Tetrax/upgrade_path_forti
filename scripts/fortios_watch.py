@@ -83,6 +83,10 @@ PRODUCT_LABELS = {
     **{product_id: meta["label"] for product_id, meta in PRODUCTS.items()},
     **NO_PATH_PRODUCT_LABELS,
 }
+UPGRADE_DIRECTION_ERROR = (
+    "La version cible doit être supérieure à la version source. "
+    "Upgrade Path ne prend pas en charge les downgrades."
+)
 RELEASE_NOTES_DOC_SLUGS = {
     DEFAULT_PRODUCT_ID: "fortios-release-notes",
     "fortianalyzer": "release-notes",
@@ -1187,6 +1191,8 @@ def fetch_official_upgrade_path(
 ) -> tuple[UpgradePath, list[Firmware]] | None:
     if requested.product not in PRODUCTS:
         return None  # not in Fortinet's Upgrade Path Tool (e.g. FortiClient/EMS) — no path to fetch.
+    if version_key(requested.to_version) <= version_key(requested.from_version):
+        raise ValueError(UPGRADE_DIRECTION_ERROR)
     product_slug = PRODUCTS[requested.product]["slug"]
     api_model = resolve_fortinet_model(requested.product, requested.model, timeout)
     payload = {

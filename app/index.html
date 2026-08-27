@@ -285,6 +285,8 @@
       renderResult();
     });
     els.current.addEventListener("change", () => {
+      const previousTarget = els.target.value;
+      populateTargetVersions(previousTarget);
       pathRequested = false;
       renderResult();
     });
@@ -528,16 +530,32 @@
       if (!model) {
         els.current.innerHTML = "";
         els.target.innerHTML = "";
+        els.target.disabled = true;
         return;
       }
       const versions = model.firmwares.map(item => item.version);
       els.current.innerHTML = versions.map(version => option(version, version)).join("");
-      els.target.innerHTML = versions.map(version => option(version, version)).join("");
 
       const defaultCurrent = model.firmwares.find(item => item.current)?.version || versions[0];
       const defaultTarget = model.firmwares.find(item => item.target)?.version || versions[versions.length - 1];
       els.current.value = defaultCurrent;
-      els.target.value = defaultTarget;
+      populateTargetVersions(defaultTarget, true);
+    }
+
+    function populateTargetVersions(preferredTarget = "", fallbackToLatest = false) {
+      const model = currentModel();
+      const versions = model?.firmwares.map(item => item.version) || [];
+      const validTargets = versions.filter(version => compareVersions(version, els.current.value) > 0);
+      els.target.innerHTML = validTargets.map(version => option(version, version)).join("");
+      els.target.disabled = validTargets.length === 0;
+
+      if (validTargets.includes(preferredTarget)) {
+        els.target.value = preferredTarget;
+      } else if (fallbackToLatest && validTargets.length) {
+        els.target.value = validTargets[validTargets.length - 1];
+      } else {
+        els.target.value = "";
+      }
     }
 
     function option(value, label) {
@@ -588,7 +606,7 @@
     // automatically whenever showPath() is triggered.
     async function fetchOfficialPath() {
       const model = currentModel();
-      if (!model) return;
+      if (!model || !els.current.value || !els.target.value) return;
 
       const selection = {
         product: els.product.value,

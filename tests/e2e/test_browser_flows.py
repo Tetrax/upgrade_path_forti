@@ -38,6 +38,50 @@ def test_select_product_model_version(app_page):
     expect(app_page.locator("#result")).not_to_contain_text("Recommended path")
 
 
+def test_target_versions_only_offer_strict_upgrades_after_source_change(app_page):
+    app_page.select_option("#productSelect", "fortigate-fortios")
+    app_page.select_option("#modelSelect", "FGT60F")
+    app_page.select_option("#currentSelect", "6.2.4")
+    target_values = app_page.locator("#targetSelect option").evaluate_all("options => options.map(option => option.value)")
+    assert target_values == ["7.0.14", "8.0.0"]
+
+    app_page.select_option("#currentSelect", "7.0.14")
+    target_values = app_page.locator("#targetSelect option").evaluate_all("options => options.map(option => option.value)")
+    assert target_values == ["8.0.0"]
+    assert app_page.locator("#targetSelect").input_value() == "8.0.0"
+
+    app_page.select_option("#currentSelect", "8.0.0")
+    expect(app_page.locator("#targetSelect option")).to_have_count(0)
+    expect(app_page.locator("#targetSelect")).to_be_disabled()
+
+
+def test_official_path_api_rejects_downgrade_and_equal_version(page, fortios_server):
+    page.goto(f"{fortios_server.base_url}/app/")
+
+    for current, target in (("7.2.10", "7.2.8"), ("7.2.10", "7.2.10")):
+        response = page.evaluate(
+            """async ({current, target}) => {
+                const response = await fetch('/api/official-path', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        product: 'fortigate-fortios',
+                        model: 'FGT60F',
+                        from: current,
+                        to: target,
+                    }),
+                });
+                return {status: response.status, body: await response.json()};
+            }""",
+            {"current": current, "target": target},
+        )
+        assert response["status"] == 400
+        assert response["body"]["error"] == (
+            "La version cible doit être supérieure à la version source. "
+            "Upgrade Path ne prend pas en charge les downgrades."
+        )
+
+
 # 3 & 4. Successful simulated Fortinet fetch, hops/builds displayed correctly ------------
 
 def test_successful_path_fetch_shows_hops_and_builds(app_page, fortios_server):

@@ -44,6 +44,7 @@ from fortios_watch import (
     DEFAULT_PRODUCT_ID,
     PRODUCT_LABELS,
     PRODUCTS,
+    UPGRADE_DIRECTION_ERROR,
     Firmware,
     OfficialPathRequest,
     UpgradePath,
@@ -58,6 +59,7 @@ from fortios_watch import (
     upsert_firmware,
     upsert_path,
     utc_now,
+    version_key,
     write_json,
 )
 from tls_lock import managed_pair_lock
@@ -741,11 +743,15 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 raise ValueError(
                     f"{PRODUCT_LABELS[product]} n'a pas de chemin d'upgrade automatique Fortinet."
                 )
+            from_version = str(payload["from"]).strip()
+            to_version = str(payload["to"]).strip()
+            if version_key(to_version) <= version_key(from_version):
+                raise ValueError(UPGRADE_DIRECTION_ERROR)
             request = OfficialPathRequest(
                 product=product,
                 model=str(payload["model"]).strip(),
-                from_version=str(payload["from"]).strip(),
-                to_version=str(payload["to"]).strip(),
+                from_version=from_version,
+                to_version=to_version,
             )
             result = fetch_official_upgrade_path(request, self.timeout)
             if not result:
