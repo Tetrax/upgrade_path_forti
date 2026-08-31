@@ -1,8 +1,9 @@
 """Email notifications for FortiOS Upgrade Intelligence — stdlib only (smtplib,
-email.message.EmailMessage), disabled by default, activated purely by environment variables.
+email.message.EmailMessage), disabled by default, with functional settings persisted in data/ and
+SMTP infrastructure supplied by environment variables plus a mounted password file.
 
-Design in one paragraph: main() derives a list of NotificationEvents by diffing this run's
-before/after state (never by re-scanning the whole catalog, which is what keeps a first-time
+Design in one paragraph: main() derives a list of NotificationEvents by diffing the durable
+pre-collection checkpoint against the collected state (never by re-scanning the whole catalog, which is what keeps a first-time
 activation or a --cve-backfill from spamming years of history). Events are deduplicated against
 a small persistent history file keyed by a stable string, then whatever's left gets folded into
 a single synthetic email per run (never one email per event) and sent over SMTP. Any failure
@@ -14,12 +15,15 @@ break the actual data collection.
 from __future__ import annotations
 
 import datetime as dt
+import html
+import json
 import os
 import re
 import smtplib
 import ssl
 import sys
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -41,14 +45,209 @@ CATEGORY_OPERATIONS = "OPERATIONS"
 NOTIFY_HISTORY_RETENTION_DAYS = 180
 MAX_EVENTS_PER_SECTION = 20
 CONSECUTIVE_FAILURE_NOTIFY_THRESHOLD = 2
-# A CVSS delta smaller than this is rounding/rescoring noise, not worth an email on its own.
-CVSS_SIGNIFICANT_DELTA = 1.0
 # How long a claimed-but-unfinished outbox entry stays "reserved" before a later run is allowed
 # to retry it -- long enough to cover the slowest realistic SMTP timeout many times over, short
 # enough that a genuinely crashed run's claim doesn't block retries for hours.
 CLAIM_STALE_SECONDS = 600
 
 _EMAIL_ADDRESS_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+DEFAULT_NOTIFICATION_SETTINGS_PATH = Path("data/notification-settings.json")
+_SETTINGS_PRODUCT_KEYS = (
+    "fortigate-fortios",
+    "fortimanager",
+    "fortianalyzer",
+    "forticlient-ems",
+)
+_FORTICLIENT_PLATFORM_KEYS = ("windows", "macos", "linux")
+_MONITORED_SEVERITIES = frozenset({"high", "critical"})
+_SEVERITY_RANK = {"unknown": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+PRODUCT_DISPLAY_LABELS = {
+    "fortigate-fortios": "FortiGate / FortiOS",
+    "fortimanager": "FortiManager",
+    "fortianalyzer": "FortiAnalyzer",
+    "forticlient-ems": "FortiClient EMS",
+    "forticlient:windows": "FortiClient Windows",
+    "forticlient:macos": "FortiClient macOS",
+    "forticlient:linux": "FortiClient Linux",
+}
+
+
+def _default_notification_settings_payload() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "minimumSeverity": "high",
+        "products": {
+            **{key: True for key in _SETTINGS_PRODUCT_KEYS},
+            "forticlient": {key: True for key in _FORTICLIENT_PLATFORM_KEYS},
+        },
+        "recipients": [],
+    }
+
+
+@dataclass(frozen=True)
+class NotificationSettings:
+    enabled: bool
+    minimum_severity: str
+    products: dict[str, Any]
+    recipients: tuple[str, ...]
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "minimumSeverity": self.minimum_severity,
+            "products": {
+                **{key: self.products[key] for key in _SETTINGS_PRODUCT_KEYS},
+                "forticlient": dict(self.products["forticlient"]),
+            },
+            "recipients": list(self.recipients),
+        }
+
+    def selected_product_keys(self) -> dict[str, bool]:
+        selected = {key: bool(self.products[key]) for key in _SETTINGS_PRODUCT_KEYS}
+        selected.update(
+            {
+                f"forticlient-{platform}": bool(
+                    self.products["forticlient"][platform]
+                )
+                for platform in _FORTICLIENT_PLATFORM_KEYS
+            }
+        )
+        return selected
+
+
+def validate_notification_settings(payload: Any) -> NotificationSettings:
+    if not isinstance(payload, dict) or set(payload) != {
+        "enabled",
+        "minimumSeverity",
+        "products",
+        "recipients",
+    }:
+        raise ValueError("Configuration de notifications invalide.")
+    if not isinstance(payload["enabled"], bool):
+        raise TypeError("Le champ enabled doit être un booléen.")
+    if payload["minimumSeverity"] != "high":
+        raise ValueError("La sévérité minimale doit être high.")
+
+    products = payload["products"]
+    expected_product_keys = {*_SETTINGS_PRODUCT_KEYS, "forticlient"}
+    if not isinstance(products, dict) or set(products) != expected_product_keys:
+        raise ValueError("Liste de produits surveillés invalide.")
+    if any(not isinstance(products[key], bool) for key in _SETTINGS_PRODUCT_KEYS):
+        raise ValueError("Chaque produit surveillé doit être un booléen.")
+    forticlient = products["forticlient"]
+    if not isinstance(forticlient, dict) or set(forticlient) != set(
+        _FORTICLIENT_PLATFORM_KEYS
+    ):
+        raise ValueError("Plateformes FortiClient invalides.")
+    if any(not isinstance(forticlient[key], bool) for key in _FORTICLIENT_PLATFORM_KEYS):
+        raise ValueError("Chaque plateforme FortiClient doit être un booléen.")
+
+    recipients = payload["recipients"]
+    if not isinstance(recipients, list) or len(recipients) > 50:
+        raise ValueError("Liste de destinataires invalide (50 maximum).")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in recipients:
+        if not isinstance(value, str):
+            raise TypeError("Chaque destinataire doit être une adresse email.")
+        address = value.strip()
+        if not _EMAIL_ADDRESS_RE.fullmatch(address):
+            raise ValueError(f"Adresse email destinataire invalide : {address or '?'}.")
+        folded = address.casefold()
+        if folded in seen:
+            raise ValueError(f"Adresse email destinataire dupliquée : {address}.")
+        seen.add(folded)
+        normalized.append(address)
+
+    return NotificationSettings(
+        enabled=payload["enabled"],
+        minimum_severity="high",
+        products={
+            **{key: products[key] for key in _SETTINGS_PRODUCT_KEYS},
+            "forticlient": dict(forticlient),
+        },
+        recipients=tuple(normalized),
+    )
+
+
+def _legacy_settings_from_env(env: dict[str, str]) -> NotificationSettings:
+    payload = _default_notification_settings_payload()
+    payload["enabled"] = _env_bool(env, "FORTIOS_EMAIL_ENABLED", False)
+    payload["recipients"] = [
+        address.strip()
+        for address in (env.get("FORTIOS_SMTP_TO") or "").split(",")
+        if address.strip()
+    ]
+    try:
+        return validate_notification_settings(payload)
+    except (TypeError, ValueError):
+        return validate_notification_settings(_default_notification_settings_payload())
+
+
+def _archive_corrupt_settings_marker(path: Path, raw_text: str) -> None:
+    """Record corruption without copying potentially secret unknown fields from invalid JSON."""
+    timestamp = dt.datetime.now(dt.UTC).strftime("%Y%m%d%H%M%S%f")
+    archive = path.with_name(f"{path.name}.corrupt-{timestamp}")
+    temporary = archive.with_name(f"{archive.name}.tmp-{os.getpid()}")
+    try:
+        write_json(
+            temporary,
+            {
+                "invalidNotificationSettings": True,
+                "originalSizeBytes": len(raw_text.encode("utf-8")),
+            },
+        )
+        os.replace(temporary, archive)
+    except OSError:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def load_notification_settings(
+    path: Path = DEFAULT_NOTIFICATION_SETTINGS_PATH,
+    *,
+    env: dict[str, str] | None = None,
+) -> NotificationSettings:
+    environment = dict(os.environ) if env is None else env
+    if not path.exists():
+        # Backward-compatible bootstrap for existing deployments. As soon as the web UI saves
+        # notification-settings.json, that file becomes authoritative and these two legacy
+        # functional environment variables are ignored.
+        return _legacy_settings_from_env(environment)
+    safe_default = validate_notification_settings(_default_notification_settings_payload())
+    with cross_process_lock(path):
+        # It existed before locking but disappeared while a competing operation held the lock:
+        # fail closed for this run rather than treating the race as a first migration.
+        if not path.exists():
+            return safe_default
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return safe_default
+        try:
+            return validate_notification_settings(json.loads(raw_text))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            # Write a secret-free marker first (never move/copy the invalid payload): if the
+            # safe-default write fails, the invalid live file remains present and every later
+            # process continues to fail closed. The same lock is also used by
+            # save_notification_settings(), so a concurrent valid save cannot be mistaken for
+            # the invalid file we just read.
+            _archive_corrupt_settings_marker(path, raw_text)
+            try:
+                write_json(path, safe_default.to_payload())
+            except OSError:
+                pass
+            return safe_default
+
+
+def save_notification_settings(path: Path, payload: Any) -> NotificationSettings:
+    settings = validate_notification_settings(payload)
+    with cross_process_lock(path):
+        write_json(path, settings.to_payload())
+    return settings
 
 # Short, stable names for dedup keys (type|source|resource_id|new_value) — independent of our
 # internal product ids so the key format stays human-readable and matches the spec's examples.
@@ -74,6 +273,8 @@ class EmailConfig:
     smtp_starttls: bool
     smtp_timeout: int
     app_url: str
+    smtp_password_file: str = ""
+    smtp_password_error: str = ""
 
     def is_complete(self) -> bool:
         if not (self.smtp_host and self.smtp_from and self.smtp_to):
@@ -84,7 +285,11 @@ class EmailConfig:
             return False
         if not _EMAIL_ADDRESS_RE.match(self.smtp_from.strip()):
             return False
-        return all(_EMAIL_ADDRESS_RE.match(addr.strip()) for addr in self.smtp_to)
+        if not all(_EMAIL_ADDRESS_RE.match(addr.strip()) for addr in self.smtp_to):
+            return False
+        return not (
+            self.smtp_username and (not self.smtp_password or self.smtp_password_error)
+        )
 
 
 @dataclass
@@ -92,6 +297,8 @@ class NotificationEvent:
     category: str
     dedup_key: str
     summary: str
+    severity: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 def _env_bool(env: dict[str, str], key: str, default: bool) -> bool:
@@ -111,37 +318,56 @@ def _env_int(env: dict[str, str], key: str, default: int) -> int:
         return default
 
 
-def _env_secret(env: dict[str, str], key: str) -> str:
+def _env_secret(env: dict[str, str], key: str) -> tuple[str, str, str]:
     secret_file = (env.get(f"{key}_FILE") or "").strip()
     if not secret_file:
-        return env.get(key) or ""
+        return "", "", ""
     try:
-        return Path(secret_file).read_text(encoding="utf-8").rstrip("\r\n")
-    except OSError:
-        return ""
+        value = Path(secret_file).read_text(encoding="utf-8").rstrip("\r\n")
+    except (OSError, UnicodeError) as error:
+        return "", secret_file, sanitize_health_error(error) or "Secret SMTP illisible."
+    if not value:
+        return "", secret_file, "Le fichier secret SMTP est vide."
+    return value, secret_file, ""
 
 
-def load_email_config(env: dict[str, str] | None = None) -> EmailConfig:
+def load_email_config(
+    env: dict[str, str] | None = None,
+    *,
+    settings: NotificationSettings | None = None,
+    settings_path: Path = DEFAULT_NOTIFICATION_SETTINGS_PATH,
+) -> EmailConfig:
     environment = dict(os.environ) if env is None else env
-    smtp_to = tuple(
-        addr.strip()
-        for addr in (environment.get("FORTIOS_SMTP_TO") or "").split(",")
-        if addr.strip()
+    settings = settings or load_notification_settings(settings_path, env=environment)
+    smtp_password, smtp_password_file, smtp_password_error = _env_secret(
+        environment, "FORTIOS_SMTP_PASSWORD"
     )
     return EmailConfig(
-        enabled=_env_bool(environment, "FORTIOS_EMAIL_ENABLED", False),
+        enabled=settings.enabled,
         smtp_host=(environment.get("FORTIOS_SMTP_HOST") or "").strip(),
         smtp_port=_env_int(environment, "FORTIOS_SMTP_PORT", 587),
         smtp_username=(environment.get("FORTIOS_SMTP_USERNAME") or "").strip(),
-        smtp_password=_env_secret(environment, "FORTIOS_SMTP_PASSWORD"),
+        smtp_password=smtp_password,
         smtp_from=(environment.get("FORTIOS_SMTP_FROM") or "").strip(),
-        smtp_to=smtp_to,
+        smtp_to=settings.recipients,
         smtp_starttls=_env_bool(environment, "FORTIOS_SMTP_STARTTLS", True),
         smtp_timeout=_env_int(environment, "FORTIOS_SMTP_TIMEOUT", 10),
         app_url=(
             environment.get("FORTIOS_APP_URL") or "https://valdev.me:3001/app/"
         ).strip(),
+        smtp_password_file=smtp_password_file,
+        smtp_password_error=smtp_password_error,
     )
+
+
+def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
+    return {
+        "state": "operational" if config.is_complete() else "incomplete",
+        "host": config.smtp_host,
+        "port": config.smtp_port,
+        "starttls": config.smtp_starttls,
+        "from": config.smtp_from,
+    }
 
 
 # --- Persistent state: sent-history dedup, pending outbox, EOL bootstrap state ------------
@@ -223,6 +449,12 @@ def _is_valid_outbox_entry(entry: Any) -> bool:
     if claimed_at is not None and (
         not claimed_at.strip() or not _is_valid_notify_timestamp(claimed_at)
     ):
+        return False
+    severity = entry.get("severity")
+    if severity is not None and severity not in _MONITORED_SEVERITIES:
+        return False
+    details = entry.get("details", {})
+    if not isinstance(details, dict):
         return False
     # must be both-null (unclaimed) or both-set (claimed) -- never just one
     return (claimed_by is None) == (claimed_at is None)
@@ -385,6 +617,8 @@ def _enqueue_new_events(
                 "category": event.category,
                 "dedupKey": event.dedup_key,
                 "summary": event.summary,
+                "severity": event.severity,
+                "details": event.details,
                 "queuedAt": now,
                 "claimedBy": None,
                 "claimedAt": None,
@@ -418,6 +652,8 @@ def _claim_outstanding(
                 category=entry["category"],
                 dedup_key=entry["dedupKey"],
                 summary=entry["summary"],
+                severity=entry.get("severity"),
+                details=dict(entry.get("details") or {}),
             )
         )
     return claimed
@@ -484,6 +720,32 @@ def ensure_checkpoint(path: Path, bootstrap: dict[str, Any]) -> dict[str, Any]:
         state["checkpoint"] = bootstrap
         write_json(path, state)
         return bootstrap
+
+
+def advance_checkpoint_silently(path: Path, checkpoint: dict[str, Any]) -> None:
+    """Advance the diff baseline without enqueuing or claiming events.
+
+    Used while persisted notification settings are disabled: collections performed during that
+    period become the new baseline, while an older SMTP-failure outbox remains untouched for a
+    future retry if the operator re-enables notifications.
+    """
+    with cross_process_lock(path):
+        state = load_notify_state(path)
+        state["checkpoint"] = checkpoint
+        write_json(path, state)
+
+
+def commit_disabled_notification_state(
+    path: Path,
+    eol_state: dict[str, bool],
+    checkpoint: dict[str, Any],
+) -> None:
+    """Atomically advance every notification baseline while delivery is disabled."""
+    with cross_process_lock(path):
+        state = load_notify_state(path)
+        state["eolState"] = eol_state
+        state["checkpoint"] = checkpoint
+        write_json(path, state)
 
 
 def commit_events_with_checkpoint(
@@ -619,136 +881,164 @@ def derive_version_events(
     return events
 
 
-def _cve_product_summary(cve: dict[str, Any]) -> str:
-    parts = []
-    for affected in cve.get("affected", []) or []:
-        product = affected.get("product", "?")
-        branch = affected.get("branch", "")
-        from_v, to_v = affected.get("from"), affected.get("to")
-        if from_v and to_v:
-            parts.append(f"{product} {from_v} à {to_v}")
-        elif branch:
-            parts.append(f"{product} {branch}")
+def _default_detection_settings() -> NotificationSettings:
+    return validate_notification_settings(_default_notification_settings_payload())
+
+
+def _selected_affected_entries(
+    cve: dict[str, Any], settings: NotificationSettings
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for item in cve.get("affected", []) or []:
+        if not isinstance(item, dict):
+            continue
+        product = item.get("product")
+        filtered = dict(item)
+        if product == "forticlient":
+            models = [
+                str(model)
+                for model in (item.get("models") or [])
+                if str(model) in _FORTICLIENT_PLATFORM_KEYS
+                and settings.products["forticlient"][str(model)]
+            ]
+            if item.get("models") and not models:
+                continue
+            if not item.get("models") and not any(
+                settings.products["forticlient"].values()
+            ):
+                continue
+            filtered["models"] = models
+        elif product in _SETTINGS_PRODUCT_KEYS:
+            if not settings.products[product]:
+                continue
         else:
-            parts.append(product)
-    return ", ".join(parts) or "produit non précisé"
+            continue
+        signature = (
+            filtered.get("product"),
+            tuple(filtered.get("models") or []),
+            filtered.get("branch"),
+            filtered.get("from"),
+            filtered.get("to"),
+        )
+        if signature not in seen:
+            selected.append(filtered)
+            seen.add(signature)
+    return selected
+
+
+def _affected_product_labels(affected: list[dict[str, Any]]) -> list[str]:
+    labels: list[str] = []
+    for item in affected:
+        product = str(item.get("product") or "")
+        if product == "forticlient":
+            models = item.get("models") or []
+            item_labels = [
+                PRODUCT_DISPLAY_LABELS[f"forticlient:{model}"]
+                for model in models
+                if f"forticlient:{model}" in PRODUCT_DISPLAY_LABELS
+            ]
+            if not item_labels:
+                item_labels = ["FortiClient (plateforme non précisée)"]
+        else:
+            item_labels = [PRODUCT_DISPLAY_LABELS.get(product, product)]
+        for label in item_labels:
+            if label and label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _security_event(
+    cve: dict[str, Any],
+    affected: list[dict[str, Any]],
+    *,
+    dedup_key: str,
+    change: str,
+) -> NotificationEvent:
+    severity = str(cve.get("severity") or "unknown").lower()
+    labels = _affected_product_labels(affected)
+    details = {
+        "kind": "cve",
+        "id": cve["id"],
+        "severity": severity,
+        "cvssScore": cve.get("cvssScore"),
+        "title": str(cve.get("title") or "Résumé non disponible"),
+        "url": str(cve.get("url") or ""),
+        "affected": affected,
+        "productLabels": labels,
+        "change": change,
+    }
+    return NotificationEvent(
+        category=CATEGORY_CRITICAL if severity == "critical" else CATEGORY_DAILY,
+        dedup_key=dedup_key,
+        summary=f"{cve['id']} — {', '.join(labels)} ({severity})",
+        severity=severity,
+        details=details,
+    )
 
 
 def derive_new_cve_events(
     newly_added_cves: list[dict[str, Any]],
+    settings: NotificationSettings | None = None,
 ) -> list[NotificationEvent]:
+    settings = settings or _default_detection_settings()
     events = []
     for cve in newly_added_cves:
         severity = (cve.get("severity") or "unknown").lower()
-        category = CATEGORY_CRITICAL if severity == "critical" else CATEGORY_DAILY
+        if severity not in _MONITORED_SEVERITIES:
+            continue
+        affected = _selected_affected_entries(cve, settings)
+        if not affected:
+            continue
         events.append(
-            NotificationEvent(
-                category=category,
+            _security_event(
+                cve,
+                affected,
                 dedup_key=f"new-cve|psirt|{cve['id']}|{severity}",
-                summary=f"{cve['id']} — {_cve_product_summary(cve)} ({severity})",
+                change="new",
             )
         )
     return events
 
 
-def _affected_signature(
-    affected: list[dict[str, Any]] | None,
-) -> frozenset[tuple[str, str, tuple[str, ...], str, str]]:
-    """A hashable, fully-comparable snapshot of a CVE's affected scope -- None values normalized
-    to "" so entries can be sorted/set-diffed without ever comparing None to str (which raises).
-    """
-    return frozenset(
-        (
-            str(item.get("product") or ""),
-            str(item.get("branch") or ""),
-            tuple(sorted(str(model) for model in (item.get("models") or []))),
-            str(item.get("from") or ""),
-            str(item.get("to") or ""),
-        )
-        for item in (affected or [])
-    )
-
-
-def _cvss_changed_significantly(
-    before_score: float | None, after_score: float | None
-) -> bool:
-    if before_score is None or after_score is None:
-        return (
-            before_score != after_score
-        )  # a score appearing/disappearing is itself significant
-    return abs(after_score - before_score) >= CVSS_SIGNIFICANT_DELTA
-
-
 def derive_cve_modification_events(
     cves_before_by_id: dict[str, dict[str, Any]],
     cves_after_by_id: dict[str, dict[str, Any]],
+    settings: NotificationSettings | None = None,
 ) -> list[NotificationEvent]:
-    """Beyond a plain severity change, also flags: affected products/models/version-range
-    changes (scope extended or reduced -- this also covers a fix version newly appearing, since
-    that's simply the affected range's upper bound (`to`) being set for the first time), and a
-    significant CVSS score move (>= CVSS_SIGNIFICANT_DELTA). Purely technical/ordering changes
-    (title wording, updatedAt, a sub-CVSS_SIGNIFICANT_DELTA score wobble) are deliberately never
-    flagged on their own.
+    """Notify only a severity escalation that reaches High/Critical.
+
+    Re-publication, wording/CVSS/scope edits, and an unchanged High/Critical severity are silent.
+    This keeps the PSIRT diff authoritative without turning every advisory refresh into a new
+    security alert.
     """
+    settings = settings or _default_detection_settings()
     events = []
     for cve_id, after in cves_after_by_id.items():
         before = cves_before_by_id.get(cve_id)
-        if before is None or before == after:
-            continue  # brand new (handled by derive_new_cve_events) or genuinely unchanged
+        if before is None:
+            continue  # brand new (handled by derive_new_cve_events)
 
         before_severity = (before.get("severity") or "unknown").lower()
         after_severity = (after.get("severity") or "unknown").lower()
-        severity_changed = before_severity != after_severity
-
-        before_affected = _affected_signature(before.get("affected"))
-        after_affected = _affected_signature(after.get("affected"))
-        scope_changed = before_affected != after_affected
-
-        cvss_changed = _cvss_changed_significantly(
-            before.get("cvssScore"), after.get("cvssScore")
-        )
-
-        if not (severity_changed or scope_changed or cvss_changed):
+        if after_severity not in _MONITORED_SEVERITIES:
             continue
-
-        changes: list[str] = []
-        if severity_changed:
-            changes.append(f"sévérité {before_severity} → {after_severity}")
-        if cvss_changed:
-            before_cvss = before.get("cvssScore")
-            after_cvss = after.get("cvssScore")
-            changes.append(
-                f"CVSS {before_cvss if before_cvss is not None else '?'} → {after_cvss if after_cvss is not None else '?'}"
-            )
-        if scope_changed:
-            added = after_affected - before_affected
-            removed = before_affected - after_affected
-            if added and removed:
-                changes.append("périmètre modifié")
-            elif added:
-                changes.append("périmètre étendu")
-            else:
-                changes.append("périmètre réduit")
-
-        category = CATEGORY_CRITICAL if after_severity == "critical" else CATEGORY_DAILY
-        # Keyed to the new state (not a description of the diff) so a DIFFERENT later change to
-        # the same CVE still gets its own notification, while an identical already-notified
-        # state never resends just because this run happened to re-derive it.
-        dedup_key = "|".join(
-            [
-                "cve-modified",
-                "psirt",
-                cve_id,
-                after_severity,
-                str(after.get("cvssScore")),
-                str(sorted(after_affected)),
-            ]
-        )
+        if _SEVERITY_RANK.get(after_severity, 0) <= _SEVERITY_RANK.get(
+            before_severity, 0
+        ):
+            continue
+        affected = _selected_affected_entries(after, settings)
+        if not affected:
+            continue
         events.append(
-            NotificationEvent(
-                category=category,
-                dedup_key=dedup_key,
-                summary=f"{cve_id} : {', '.join(changes)} ({_cve_product_summary(after)})",
+            _security_event(
+                after,
+                affected,
+                dedup_key=(
+                    f"cve-severity|psirt|{cve_id}|"
+                    f"{before_severity}-to-{after_severity}"
+                ),
+                change=f"{before_severity}-to-{after_severity}",
             )
         )
     return events
@@ -865,19 +1155,194 @@ def _format_event_lines(events: list[NotificationEvent]) -> list[str]:
     return lines
 
 
+def _affected_version_line(item: dict[str, Any]) -> str:
+    labels = _affected_product_labels([item])
+    label = ", ".join(labels) or str(item.get("product") or "Produit")
+    from_version = item.get("from")
+    to_version = item.get("to")
+    branch = item.get("branch")
+    if from_version and to_version and from_version != to_version:
+        scope = f"{from_version} à {to_version}"
+    elif from_version:
+        scope = str(from_version)
+    elif branch:
+        scope = f"branche {branch}"
+    else:
+        scope = "versions non précisées"
+    return f"{label} : {scope}"
+
+
+def _compose_security_text(
+    security_events: list[NotificationEvent], *, app_url: str, run_timestamp: str
+) -> str:
+    severities = Counter(event.severity for event in security_events)
+    product_counts: Counter[str] = Counter()
+    for event in security_events:
+        product_counts.update(set(event.details.get("productLabels") or []))
+
+    lines = [
+        f"{len(security_events)} nouvelles vulnérabilités High / Critical détectées",
+        "",
+        f"Critical : {severities['critical']}",
+        f"High     : {severities['high']}",
+        "",
+    ]
+    lines.extend(f"{label} : {count}" for label, count in product_counts.items())
+    lines.append("")
+
+    for event in security_events:
+        details = event.details
+        lines.extend(
+            [
+                f"{(event.severity or '').upper()} — {details.get('id', '?')}",
+                f"CVSS : {details.get('cvssScore') if details.get('cvssScore') is not None else 'Non précisé'}",
+                "",
+                "Produits concernés",
+            ]
+        )
+        lines.extend(str(label) for label in details.get("productLabels") or [])
+        lines.extend(["", "Versions affectées"])
+        lines.extend(
+            _affected_version_line(item) for item in details.get("affected") or []
+        )
+        lines.extend(
+            [
+                "",
+                "Versions corrigées",
+                "Non précisées dans le flux CVRF — consulter l’advisory Fortinet.",
+                "",
+                "Résumé",
+                str(details.get("title") or "Résumé non disponible"),
+                "",
+                "Fortinet PSIRT",
+                f"→ {details.get('url') or app_url}",
+                "",
+            ]
+        )
+    lines.extend([f"Application : {app_url}", f"Collecte : {run_timestamp}"])
+    return "\n".join(lines)
+
+
+def _compose_security_html(
+    security_events: list[NotificationEvent],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[NotificationEvent] | None = None,
+) -> str:
+    severities = Counter(event.severity for event in security_events)
+    product_counts: Counter[str] = Counter()
+    for event in security_events:
+        product_counts.update(set(event.details.get("productLabels") or []))
+
+    product_rows = "".join(
+        f"<tr><td style='padding:3px 12px 3px 0'>{html.escape(label)}</td>"
+        f"<td style='padding:3px 0;font-weight:700'>{count}</td></tr>"
+        for label, count in product_counts.items()
+    )
+    sections: list[str] = []
+    for event in security_events:
+        details = event.details
+        severity = (event.severity or "high").upper()
+        color = "#b42318" if event.severity == "critical" else "#b54708"
+        products = "<br>".join(
+            html.escape(str(label)) for label in details.get("productLabels") or []
+        )
+        affected = "<br>".join(
+            html.escape(_affected_version_line(item))
+            for item in details.get("affected") or []
+        )
+        url = str(details.get("url") or app_url)
+        sections.append(
+            "<div style='border-top:1px solid #d0d5dd;padding:20px 0'>"
+            f"<h2 style='margin:0 0 10px;font-size:18px;color:{color}'>"
+            f"{html.escape(severity)} — {html.escape(str(details.get('id', '?')))}</h2>"
+            f"<p style='margin:0 0 14px'><strong>CVSS :</strong> "
+            f"{html.escape(str(details.get('cvssScore') if details.get('cvssScore') is not None else 'Non précisé'))}</p>"
+            "<p style='margin:0 0 4px'><strong>Produits concernés</strong></p>"
+            f"<p style='margin:0 0 14px'>{products}</p>"
+            "<p style='margin:0 0 4px'><strong>Versions affectées</strong></p>"
+            f"<p style='margin:0 0 14px'>{affected}</p>"
+            "<p style='margin:0 0 4px'><strong>Versions corrigées</strong></p>"
+            "<p style='margin:0 0 14px'>Non précisées dans le flux CVRF — consulter l’advisory Fortinet.</p>"
+            "<p style='margin:0 0 4px'><strong>Résumé</strong></p>"
+            f"<p style='margin:0 0 14px'>{html.escape(str(details.get('title') or 'Résumé non disponible'))}</p>"
+            f"<p style='margin:0'><a href='{html.escape(url, quote=True)}' "
+            "style='color:#175cd3'>Fortinet PSIRT → advisory</a></p></div>"
+        )
+
+    other_events = other_events or []
+    other_html = ""
+    if other_events:
+        shown = other_events[:MAX_EVENTS_PER_SECTION]
+        items = "".join(
+            f"<li style='margin-bottom:6px'>{html.escape(event.summary)}</li>"
+            for event in shown
+        )
+        if len(other_events) > len(shown):
+            items += (
+                f"<li>… et {len(other_events) - len(shown)} de plus "
+                "(liste tronquée).</li>"
+            )
+        other_html = (
+            "<div style='border-top:1px solid #d0d5dd;padding:18px 0'>"
+            "<h2 style='margin:0 0 10px;font-size:16px'>Autres événements</h2>"
+            f"<ul style='margin:0;padding-left:20px'>{items}</ul></div>"
+        )
+
+    return (
+        "<!doctype html><html><body style='margin:0;padding:0;background:#ffffff'>"
+        "<div style='max-width:680px;margin:0 auto;padding:20px;font-family:Arial,sans-serif;"
+        "font-size:14px;line-height:1.45;color:#101828'>"
+        f"<h1 style='margin:0 0 8px;font-size:22px'>{len(security_events)} nouvelles "
+        "vulnérabilités High / Critical détectées</h1>"
+        "<table role='presentation' style='border-collapse:collapse;margin:0 0 14px'>"
+        f"<tr><td style='padding:3px 16px 3px 0'>Critical</td><td style='font-weight:700'>{severities['critical']}</td></tr>"
+        f"<tr><td style='padding:3px 16px 3px 0'>High</td><td style='font-weight:700'>{severities['high']}</td></tr>"
+        "</table>"
+        f"<table role='presentation' style='border-collapse:collapse;margin:0 0 18px'>{product_rows}</table>"
+        f"{''.join(sections)}"
+        f"{other_html}"
+        f"<p style='color:#667085;font-size:12px'>Application : "
+        f"<a href='{html.escape(app_url, quote=True)}'>{html.escape(app_url)}</a><br>"
+        f"Collecte : {html.escape(run_timestamp)}</p></div></body></html>"
+    )
+
+
 def compose_email(
     events: list[NotificationEvent], *, app_url: str, run_timestamp: str
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str] | None:
     """Folds every event from a single run into one synthetic email (never one email per
     event, to avoid spamming) -- returns None if there's nothing to report.
     """
     if not events:
         return None
 
+    security = [event for event in events if event.details.get("kind") == "cve"]
     critical = [event for event in events if event.category == CATEGORY_CRITICAL]
     daily = [event for event in events if event.category == CATEGORY_DAILY]
     operations = [event for event in events if event.category == CATEGORY_OPERATIONS]
 
+    if security:
+        highest = "CRITICAL" if any(event.severity == "critical" for event in security) else "HIGH"
+        subject = (
+            f"[FortiUpgrade][{highest}] {len(security)} nouvelles vulnérabilités Fortinet"
+        )
+        text_body = _compose_security_text(
+            security, app_url=app_url, run_timestamp=run_timestamp
+        )
+        non_security = [event for event in events if event not in security]
+        if non_security:
+            text_body += "\n\nAutres événements :\n" + "\n".join(
+                _format_event_lines(non_security)
+            )
+        html_body = _compose_security_html(
+            security,
+            app_url=app_url,
+            run_timestamp=run_timestamp,
+            other_events=non_security,
+        )
+        return subject, text_body, html_body
     if critical:
         subject = f"[FortiOS Upgrade Intelligence] {len(critical)} nouvelle(s) CVE critique(s)"
     elif operations:
@@ -904,10 +1369,28 @@ def compose_email(
 
     lines.append(f"Application : {app_url}")
     lines.append(f"Collecte : {run_timestamp}")
-    return subject, "\n".join(lines)
+    text_body = "\n".join(lines)
+    html_body = (
+        "<!doctype html><html><body><pre style='font-family:Arial,sans-serif;white-space:pre-wrap'>"
+        f"{html.escape(text_body)}</pre></body></html>"
+    )
+    return subject, text_body, html_body
 
 
-def send_email(config: EmailConfig, subject: str, text_body: str) -> bool:
+@dataclass(frozen=True)
+class SmtpResult:
+    sent: bool
+    message: str
+
+
+def send_email_result(
+    config: EmailConfig,
+    subject: str,
+    text_body: str,
+    html_body: str | None = None,
+    *,
+    force: bool = False,
+) -> SmtpResult:
     """Never raises -- every failure mode (bad config, a malformed header, DNS, connection
     refused, STARTTLS, auth, timeout) is caught, logged without the password, and reported as a
     plain False so a broken mailbox can never break the actual data collection.
@@ -917,13 +1400,13 @@ def send_email(config: EmailConfig, subject: str, text_body: str) -> bool:
     (e.g. a fat-fingered FORTIOS_SMTP_FROM, or a "To" header injection attempt) -- building the
     message before the try block used to let exactly that kind of ValueError escape uncaught.
     """
-    if not config.enabled:
-        return False
+    if not config.enabled and not force:
+        return SmtpResult(False, "Notifications désactivées.")
     if not config.is_complete():
         sys.stderr.write(
             "Notification email ignorée : configuration SMTP incomplète ou invalide (host/port/from/to).\n"
         )
-        return False
+        return SmtpResult(False, "Configuration SMTP incomplète.")
 
     try:
         message = EmailMessage()
@@ -931,6 +1414,8 @@ def send_email(config: EmailConfig, subject: str, text_body: str) -> bool:
         message["From"] = config.smtp_from
         message["To"] = ", ".join(config.smtp_to)
         message.set_content(text_body)
+        if html_body:
+            message.add_alternative(html_body, subtype="html")
 
         with smtplib.SMTP(
             config.smtp_host, config.smtp_port, timeout=config.smtp_timeout
@@ -940,49 +1425,50 @@ def send_email(config: EmailConfig, subject: str, text_body: str) -> bool:
             if config.smtp_username:
                 client.login(config.smtp_username, config.smtp_password)
             client.send_message(message)
-        return True
-    except (smtplib.SMTPException, OSError, TimeoutError, ValueError) as error:
+        return SmtpResult(True, "Email envoyé.")
+    except smtplib.SMTPAuthenticationError as error:
         sys.stderr.write(
             f"Échec de l'envoi de l'email de notification : {sanitize_health_error(error)}\n"
         )
-        return False
-
-
-def send_test_email(config: EmailConfig) -> bool:
-    if not config.enabled:
-        print(
-            "FORTIOS_EMAIL_ENABLED=false : activez-le dans /etc/fortios-upgrade-intelligence.env avant de tester.",
-            file=sys.stderr,
+        return SmtpResult(False, "Authentification SMTP refusée.")
+    except (ConnectionError, TimeoutError, OSError) as error:
+        sys.stderr.write(
+            f"Échec de l'envoi de l'email de notification : {sanitize_health_error(error)}\n"
         )
-        return False
-    if not config.is_complete():
-        missing = [
-            name
-            for name, value in (
-                ("FORTIOS_SMTP_HOST", config.smtp_host),
-                ("FORTIOS_SMTP_FROM", config.smtp_from),
-                ("FORTIOS_SMTP_TO", config.smtp_to),
-            )
-            if not value
-        ]
-        print(
-            f"Configuration SMTP incomplète, variable(s) manquante(s) : {', '.join(missing)}.",
-            file=sys.stderr,
+        return SmtpResult(False, "Connexion SMTP impossible.")
+    except (smtplib.SMTPException, ValueError) as error:
+        sys.stderr.write(
+            f"Échec de l'envoi de l'email de notification : {sanitize_health_error(error)}\n"
         )
-        return False
+        return SmtpResult(False, "Envoi SMTP impossible.")
 
-    subject = "[FortiOS Upgrade Intelligence] Email de test"
+
+def send_email(
+    config: EmailConfig,
+    subject: str,
+    text_body: str,
+    html_body: str | None = None,
+) -> bool:
+    return send_email_result(config, subject, text_body, html_body).sent
+
+
+def send_test_email_result(config: EmailConfig) -> SmtpResult:
+    subject = "[FortiUpgrade] Email de test"
     body = (
-        "Ceci est un email de test envoyé manuellement via --test-email.\n"
+        "Ceci est un email de test envoyé depuis l’administration FortiUpgrade.\n"
         "Si vous le recevez, la configuration SMTP est fonctionnelle.\n\n"
         f"Application : {config.app_url}\n"
     )
-    sent = send_email(config, subject, body)
-    if sent:
+    result = send_email_result(config, subject, body, force=True)
+    if result.sent:
+        return SmtpResult(True, "Email de test envoyé.")
+    return result
+
+
+def send_test_email(config: EmailConfig) -> bool:
+    result = send_test_email_result(config)
+    if result.sent:
         print(f"Email de test envoyé à {', '.join(config.smtp_to)}.")
     else:
-        print(
-            "Échec de l'envoi de l'email de test (voir le message d'erreur ci-dessus).",
-            file=sys.stderr,
-        )
-    return sent
+        print(result.message, file=sys.stderr)
+    return result.sent

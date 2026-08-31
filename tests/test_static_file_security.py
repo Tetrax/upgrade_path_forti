@@ -33,6 +33,10 @@ class StaticFileTraversalTests(unittest.TestCase):
     def test_allowed_data_file(self):
         self.assertTrue(is_served("/data/fortios-data.generated.json"))
 
+    def test_notification_settings_are_never_served_as_a_static_data_file(self):
+        self.assertFalse(is_served("/data/notification-settings.json"))
+        self.assertFalse(is_served("/data/notification-settings.json.corrupt-123"))
+
     def test_allowed_nested_app_paths(self):
         self.assertTrue(is_served("/app/"))
         self.assertTrue(is_served("/app/alerte/"))

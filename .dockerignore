@@ -25,3 +25,4 @@ requirements-dev.txt
 deploy/
 tests/
 *.lock
+data/notification-settings.json*

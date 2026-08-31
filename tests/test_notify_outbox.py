@@ -678,7 +678,7 @@ class NotifyCheckpointMainIntegrationTests(unittest.TestCase):
 
             fake_cve = {
                 "id": "CVE-2026-00200", "advisoryId": "FG-IR-26-200", "title": "t",
-                "severity": "critical", "affected": [], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
+                "severity": "critical", "affected": [{"product": "fortigate-fortios", "branch": "7.4"}], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
             }
             original_collect = fw.collect_cve_catalog
             original_psirt_versions = fw.fetch_psirt_versions
@@ -717,7 +717,7 @@ class NotifyCheckpointMainIntegrationTests(unittest.TestCase):
 
             self.assertEqual(exit_code_2, 0)
             self.assertTrue(client.send_message.called, "the notification must still be found and sent, not lost")
-            sent_body = client.send_message.call_args[0][0].get_content()
+            sent_body = client.send_message.call_args[0][0].get_body(preferencelist=("plain",)).get_content()
             self.assertIn("CVE-2026-00200", sent_body)
 
             final_notify_state = notify.load_notify_state(history_path)
@@ -734,7 +734,7 @@ class NotifyCheckpointMainIntegrationTests(unittest.TestCase):
 
             fake_cve = {
                 "id": "CVE-2026-00201", "advisoryId": "FG-IR-26-201", "title": "t",
-                "severity": "critical", "affected": [], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
+                "severity": "critical", "affected": [{"product": "fortigate-fortios", "branch": "7.4"}], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
             }
             original_collect = fw.collect_cve_catalog
             original_psirt_versions = fw.fetch_psirt_versions

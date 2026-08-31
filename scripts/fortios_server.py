@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import certctl
+import fortios_notify
 from cert_admin import (
     DEFAULT_CREDENTIALS,
     MAX_PASSWORD_LENGTH,
@@ -410,6 +411,7 @@ ALLOWED_STATIC_DIR_DATA = DATA_DIR.resolve()
 DATA_PATH = DATA_DIR / "fortios-data.generated.json"
 SAMPLE_PATH = DATA_DIR / "fortios-data.sample.json"
 IMAGE_DIR = DATA_DIR / "advisory-images"
+NOTIFICATION_SETTINGS_PATH = DATA_DIR / "notification-settings.json"
 
 
 def referenced_image_filenames(description: str) -> set[str]:
@@ -517,6 +519,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 return
             if url_path == "/api/cert/status":
                 self.handle_cert_status()
+            elif url_path == "/api/cert/notifications":
+                self.handle_notification_settings_read()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
             return
@@ -574,6 +578,86 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             extra_headers={"Cache-Control": "no-store"},
         )
 
+    def require_admin_session(self, *, csrf: bool) -> AdminSession | None:
+        session = self.authenticated_cert_session()
+        if session is None:
+            self.write_json_response(
+                {"error": "Session administrateur requise."},
+                HTTPStatus.UNAUTHORIZED,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return None
+        if csrf and not hmac.compare_digest(
+            session.csrf_token, self.headers.get("X-CSRF-Token", "")
+        ):
+            self.write_json_response(
+                {"error": "Jeton CSRF invalide."},
+                HTTPStatus.FORBIDDEN,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return None
+        return session
+
+    def notification_settings_response(
+        self, settings: fortios_notify.NotificationSettings
+    ) -> dict[str, Any]:
+        config = fortios_notify.load_email_config(settings=settings)
+        return {
+            "settings": settings.to_payload(),
+            "smtp": fortios_notify.smtp_public_status(config),
+        }
+
+    def handle_notification_settings_read(self) -> None:
+        if self.require_admin_session(csrf=False) is None:
+            return
+        settings = fortios_notify.load_notification_settings(
+            NOTIFICATION_SETTINGS_PATH
+        )
+        self.write_json_response(
+            self.notification_settings_response(settings),
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_notification_settings_write(self) -> None:
+        if self.require_admin_session(csrf=True) is None:
+            return
+        try:
+            payload = self.read_json_body(max_bytes=64 * 1024)
+            settings = fortios_notify.save_notification_settings(
+                NOTIFICATION_SETTINGS_PATH, payload
+            )
+        except (TypeError, ValueError, OSError) as error:
+            self.write_json_response(
+                {"error": str(error)[:500]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            self.notification_settings_response(settings),
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_notification_test_email(self) -> None:
+        if self.require_admin_session(csrf=True) is None:
+            return
+        try:
+            self.read_json_body(max_bytes=1024)
+            settings = fortios_notify.load_notification_settings(
+                NOTIFICATION_SETTINGS_PATH
+            )
+            config = fortios_notify.load_email_config(settings=settings)
+            result = fortios_notify.send_test_email_result(config)
+        except (TypeError, ValueError, OSError):
+            result = fortios_notify.SmtpResult(
+                False, "Configuration SMTP incomplète."
+            )
+        self.write_json_response(
+            {"sent": result.sent, "message": result.message},
+            HTTPStatus.OK if result.sent else HTTPStatus.SERVICE_UNAVAILABLE,
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
     def translate_path(self, path: str) -> str:
         # Checking the raw request string against an allowed prefix before decoding/normalizing
         # is not enough: "/data/%2e%2e/scripts/fortios_server.py" starts with "/data/" as a
@@ -603,6 +687,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             relative = urllib.parse.unquote(
                 url_path[len("/data/") :] if url_path != "/data" else ""
             )
+            if Path(relative).name.startswith("notification-settings.json"):
+                return str(ROOT / "__not_served__")
             candidate = (
                 (DATA_DIR / relative).resolve() if relative else DATA_DIR.resolve()
             )
@@ -651,6 +737,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_cert_login()
             elif self.path == "/api/cert/logout":
                 self.handle_cert_logout()
+            elif self.path == "/api/cert/notifications":
+                self.handle_notification_settings_write()
+            elif self.path == "/api/cert/notifications/test":
+                self.handle_notification_test_email()
             elif self.path in ("/api/cert/validate", "/api/cert/install"):
                 self.handle_cert_upload(install=self.path.endswith("/install"))
             else:

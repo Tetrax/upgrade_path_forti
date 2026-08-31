@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Gestion des certificats · FortiOS Upgrade Intelligence</title>
+  <title>Administration · FortiUpgrade</title>
   <link rel="stylesheet" href="/app/shared.css">
   <link rel="stylesheet" href="cert.css">
   <script src="cert.js" defer></script>
@@ -14,8 +14,8 @@
       <a class="brand-block brand-link" href="/app/" aria-label="Retour à l'application">
         <span class="mark">F</span>
         <span>
-          <h1>Gestion des certificats</h1>
-          <span class="subtitle">Validation et activation TLS sécurisées</span>
+          <h1>Administration</h1>
+          <span class="subtitle">Certificats et notifications FortiUpgrade</span>
         </span>
       </a>
       <div class="toolbar">
@@ -56,88 +56,159 @@
     </section>
 
     <section id="admin-view" hidden>
-      <div class="context-grid">
-        <article class="context-card">
-          <span class="context-label">Nom TLS attendu</span>
-          <strong id="target-hostname">Non configuré</strong>
-        </article>
-        <article class="context-card">
-          <span class="context-label">Session</span>
-          <strong id="session-username">—</strong>
-        </article>
-        <article class="context-card">
-          <span class="context-label">Mode d’activation</span>
-          <strong id="activation-mode">Validation uniquement</strong>
-        </article>
-      </div>
+      <nav class="admin-tabs" aria-label="Sections d’administration">
+        <button class="admin-tab active" id="certificates-tab" type="button" aria-controls="certificates-section">Certificats</button>
+        <button class="admin-tab" id="notifications-tab" type="button" aria-controls="notifications-section">Notifications</button>
+      </nav>
 
-      <div class="cert-grid">
-        <section class="panel upload-panel">
-          <div class="panel-header">
-            <p class="eyebrow">Étape 1</p>
-            <h2 class="panel-title">Importer les fichiers</h2>
-            <p class="panel-copy">Bundle PFX/P12, ou certificat avec clé privée séparée. La chaîne intermédiaire est facultative.</p>
-          </div>
-          <div class="panel-body">
-            <form id="certificate-form">
-              <div class="upload-field required-upload">
-                <label for="certificate-file">Certificat ou bundle</label>
-                <input id="certificate-file" type="file" required accept=".pem,.crt,.cer,.cert,.der,.p7b,.p7c,.p12,.pfx,application/x-pkcs12,application/pkix-cert">
-                <span>PEM, CRT, CER, DER, PKCS#7, P12 ou PFX</span>
-              </div>
-              <div class="upload-field">
-                <label for="private-key-file">Clé privée séparée</label>
-                <input id="private-key-file" type="file" accept=".pem,.key,.pk8">
-                <span>Laisser vide pour un bundle PFX/P12</span>
-              </div>
-              <div class="upload-field">
-                <label for="chain-file">Chaîne séparée</label>
-                <input id="chain-file" type="file" accept=".pem,.crt,.cer,.p7b,.p7c">
-                <span>Intermédiaires puis autorité racine</span>
-              </div>
-              <div class="field">
-                <label for="certificate-password">Mot de passe du PFX ou de la clé</label>
-                <input id="certificate-password" type="password" autocomplete="off" placeholder="Laisser vide si aucun">
-              </div>
-              <button class="btn primary full-width" id="validate-button" type="submit">Valider le certificat</button>
-              <p class="form-message" id="upload-message" role="alert"></p>
-            </form>
-          </div>
-        </section>
+      <section id="certificates-section">
+        <div class="context-grid">
+          <article class="context-card">
+            <span class="context-label">Nom TLS attendu</span>
+            <strong id="target-hostname">Non configuré</strong>
+          </article>
+          <article class="context-card">
+            <span class="context-label">Session</span>
+            <strong id="session-username">—</strong>
+          </article>
+          <article class="context-card">
+            <span class="context-label">Mode d’activation</span>
+            <strong id="activation-mode">Validation uniquement</strong>
+          </article>
+        </div>
 
-        <section class="panel result-panel">
-          <div class="panel-header result-heading">
-            <div>
-              <p class="eyebrow">Étape 2</p>
-              <h2 class="panel-title">Contrôles cryptographiques</h2>
+        <div class="cert-grid">
+          <section class="panel upload-panel">
+            <div class="panel-header">
+              <p class="eyebrow">Étape 1</p>
+              <h2 class="panel-title">Importer les fichiers</h2>
+              <p class="panel-copy">Bundle PFX/P12, ou certificat avec clé privée séparée. La chaîne intermédiaire est facultative.</p>
             </div>
-            <span class="status-badge neutral" id="validation-badge">En attente</span>
-          </div>
-          <div class="panel-body">
-            <div class="empty-state" id="empty-result">
-              <span class="empty-icon" aria-hidden="true">◇</span>
-              <p>Importe un certificat puis lance la validation. Aucune activation n’a lieu à cette étape.</p>
+            <div class="panel-body">
+              <form id="certificate-form">
+                <div class="upload-field required-upload">
+                  <label for="certificate-file">Certificat ou bundle</label>
+                  <input id="certificate-file" type="file" required accept=".pem,.crt,.cer,.cert,.der,.p7b,.p7c,.p12,.pfx,application/x-pkcs12,application/pkix-cert">
+                  <span>PEM, CRT, CER, DER, PKCS#7, P12 ou PFX</span>
+                </div>
+                <div class="upload-field">
+                  <label for="private-key-file">Clé privée séparée</label>
+                  <input id="private-key-file" type="file" accept=".pem,.key,.pk8">
+                  <span>Laisser vide pour un bundle PFX/P12</span>
+                </div>
+                <div class="upload-field">
+                  <label for="chain-file">Chaîne séparée</label>
+                  <input id="chain-file" type="file" accept=".pem,.crt,.cer,.p7b,.p7c">
+                  <span>Intermédiaires puis autorité racine</span>
+                </div>
+                <div class="field">
+                  <label for="certificate-password">Mot de passe du PFX ou de la clé</label>
+                  <input id="certificate-password" type="password" autocomplete="off" placeholder="Laisser vide si aucun">
+                </div>
+                <button class="btn primary full-width" id="validate-button" type="submit">Valider le certificat</button>
+                <p class="form-message" id="upload-message" role="alert"></p>
+              </form>
             </div>
-            <dl class="summary-grid" id="certificate-summary" hidden>
-              <div><dt>Sujet</dt><dd id="summary-subject">—</dd></div>
-              <div><dt>Émetteur</dt><dd id="summary-issuer">—</dd></div>
-              <div><dt>Noms DNS (SAN)</dt><dd id="summary-dns">—</dd></div>
-              <div><dt>Valide à partir du</dt><dd id="summary-start">—</dd></div>
-              <div><dt>Valide jusqu’au</dt><dd id="summary-end">—</dd></div>
-              <div><dt>Chaîne</dt><dd id="summary-chain">—</dd></div>
-              <div class="wide"><dt>Empreinte SHA-256</dt><dd class="mono" id="summary-fingerprint">—</dd></div>
-            </dl>
-            <div class="activation-box" id="activation-box" hidden>
+          </section>
+
+          <section class="panel result-panel">
+            <div class="panel-header result-heading">
               <div>
-                <strong>Validation réussie</strong>
-                <p>L’activation réexécute tous les contrôles avant de remplacer atomiquement la paire active.</p>
+                <p class="eyebrow">Étape 2</p>
+                <h2 class="panel-title">Contrôles cryptographiques</h2>
               </div>
-              <button class="btn primary" id="install-button" type="button">Activer ce certificat</button>
+              <span class="status-badge neutral" id="validation-badge">En attente</span>
             </div>
-            <p class="form-message" id="install-message" role="alert"></p>
+            <div class="panel-body">
+              <div class="empty-state" id="empty-result">
+                <span class="empty-icon" aria-hidden="true">◇</span>
+                <p>Importe un certificat puis lance la validation. Aucune activation n’a lieu à cette étape.</p>
+              </div>
+              <dl class="summary-grid" id="certificate-summary" hidden>
+                <div><dt>Sujet</dt><dd id="summary-subject">—</dd></div>
+                <div><dt>Émetteur</dt><dd id="summary-issuer">—</dd></div>
+                <div><dt>Noms DNS (SAN)</dt><dd id="summary-dns">—</dd></div>
+                <div><dt>Valide à partir du</dt><dd id="summary-start">—</dd></div>
+                <div><dt>Valide jusqu’au</dt><dd id="summary-end">—</dd></div>
+                <div><dt>Chaîne</dt><dd id="summary-chain">—</dd></div>
+                <div class="wide"><dt>Empreinte SHA-256</dt><dd class="mono" id="summary-fingerprint">—</dd></div>
+              </dl>
+              <div class="activation-box" id="activation-box" hidden>
+                <div>
+                  <strong>Validation réussie</strong>
+                  <p>L’activation réexécute tous les contrôles avant de remplacer atomiquement la paire active.</p>
+                </div>
+                <button class="btn primary" id="install-button" type="button">Activer ce certificat</button>
+              </div>
+              <p class="form-message" id="install-message" role="alert"></p>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="notifications-section" hidden>
+        <div class="notifications-heading">
+          <div>
+            <p class="eyebrow">Alertes PSIRT</p>
+            <h2>Notifications de sécurité</h2>
+            <p>Configure les CVE High / Critical surveillées et leurs destinataires.</p>
           </div>
-        </section>
-      </div>
+        </div>
+
+        <form id="notifications-form" class="notifications-grid">
+          <section class="panel settings-panel">
+            <div class="panel-header result-heading">
+              <div>
+                <h3 class="panel-title">Notifications CVE</h3>
+                <p class="panel-copy">Maximum un email de sécurité par collecte.</p>
+              </div>
+              <label class="switch-control"><input id="notifications-enabled" type="checkbox"><span>ON</span></label>
+            </div>
+            <div class="panel-body">
+              <div class="field">
+                <label for="minimum-severity">Sévérité minimale</label>
+                <select id="minimum-severity"><option value="high">High</option></select>
+              </div>
+              <fieldset class="product-fieldset">
+                <legend>Produits surveillés</legend>
+                <label><input id="product-fortigate-fortios" type="checkbox"> FortiGate / FortiOS</label>
+                <label><input id="product-fortimanager" type="checkbox"> FortiManager</label>
+                <label><input id="product-fortianalyzer" type="checkbox"> FortiAnalyzer</label>
+                <label><input id="product-forticlient-ems" type="checkbox"> FortiClient EMS</label>
+                <label><input id="product-forticlient-windows" type="checkbox"> FortiClient Windows</label>
+                <label><input id="product-forticlient-macos" type="checkbox"> FortiClient macOS</label>
+                <label><input id="product-forticlient-linux" type="checkbox"> FortiClient Linux</label>
+              </fieldset>
+              <div class="recipient-block">
+                <div class="recipient-heading">
+                  <strong>Destinataires</strong>
+                  <button class="btn" id="add-recipient-button" type="button">+ Ajouter un destinataire</button>
+                </div>
+                <div id="recipient-list"></div>
+              </div>
+              <button class="btn primary" id="save-notifications-button" type="submit">Enregistrer</button>
+              <p class="form-message" id="notifications-message" role="alert"></p>
+            </div>
+          </section>
+
+          <aside class="panel smtp-panel">
+            <div class="panel-header">
+              <p class="eyebrow">Infrastructure</p>
+              <h3 class="panel-title">Configuration SMTP</h3>
+            </div>
+            <div class="panel-body">
+              <p class="smtp-status"><span class="status-dot neutral" id="smtp-status-dot" aria-hidden="true"></span><strong id="smtp-status-label">Chargement…</strong></p>
+              <dl class="smtp-details">
+                <div><dt>Serveur</dt><dd id="smtp-endpoint">—</dd></div>
+                <div><dt>Sécurité</dt><dd id="smtp-mode">—</dd></div>
+                <div><dt>Expéditeur</dt><dd id="smtp-from">—</dd></div>
+              </dl>
+              <button class="btn" id="test-email-button" type="button">Envoyer un email de test</button>
+              <p class="form-message" id="test-email-message" role="alert"></p>
+            </div>
+          </aside>
+        </form>
+      </section>
     </section>
   </main>
 </body>

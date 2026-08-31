@@ -7,6 +7,7 @@ Type=simple
 User=tetrax
 Group=tetrax
 WorkingDirectory=/home/tetrax/workspace/upgrade_path
+EnvironmentFile=-/etc/fortios-upgrade-intelligence.env
 ExecStart=/usr/bin/python3 scripts/fortios_server.py --host 127.0.0.1 --port 8000
 Restart=on-failure
 RestartSec=3

@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fortios_notify
 from fortios_watch import (
     DEFAULT_HEALTH_PATH,
+    DEFAULT_NOTIFICATION_SETTINGS_PATH,
     DEFAULT_NOTIFY_HISTORY_PATH,
     HEALTH_SOURCE_LABELS,
     HEALTH_STATUS_ERROR,
@@ -199,8 +200,11 @@ def _run_compatibility(*, root: Path, runner: Runner, python: str) -> int:
 
 def _notify_compatibility_transition(*, root: Path) -> None:
     """Advance the shared checkpoint when recovery only ran the compatibility importer."""
-    config = fortios_notify.load_email_config()
-    if not config.enabled:
+    settings_path = root / DEFAULT_NOTIFICATION_SETTINGS_PATH
+    config = fortios_notify.load_email_config(
+        settings_path=settings_path
+    )
+    if not config.enabled and not settings_path.exists():
         return
     health_after = read_health_state(root / DEFAULT_HEALTH_PATH).get("sources", {})
     history_path = root / DEFAULT_NOTIFY_HISTORY_PATH
@@ -224,6 +228,9 @@ def _notify_compatibility_transition(*, root: Path) -> None:
         new_health[SOURCE_COMPAT_MATRIX] = compatibility_after
     new_checkpoint = dict(checkpoint)
     new_checkpoint["health"] = new_health
+    if not config.enabled:
+        fortios_notify.advance_checkpoint_silently(history_path, new_checkpoint)
+        return
     claimant = f"recovery-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     pending = fortios_notify.commit_events_with_checkpoint(
         history_path,
@@ -236,8 +243,8 @@ def _notify_compatibility_transition(*, root: Path) -> None:
     )
     if not composed:
         return
-    subject, body = composed
-    if fortios_notify.send_email(config, subject, body):
+    subject, text_body, html_body = composed
+    if fortios_notify.send_email(config, subject, text_body, html_body):
         fortios_notify.finalize_sent_events(history_path, pending)
     else:
         fortios_notify.release_claim(history_path, claimant)

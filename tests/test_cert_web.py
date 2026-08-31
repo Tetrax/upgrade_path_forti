@@ -104,7 +104,8 @@ class CertificateWebTests(unittest.TestCase):
                 body = response.read().decode("utf-8")
 
             self.assertEqual(response.status, 200)
-            self.assertIn("Gestion des certificats", body)
+            self.assertIn("Administration", body)
+            self.assertIn("Certificats", body)
             self.assertIn('id="login-form"', body)
 
     def test_valid_login_creates_an_http_only_session_and_csrf_token(self) -> None:
