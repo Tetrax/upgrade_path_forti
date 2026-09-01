@@ -26,6 +26,7 @@ from typing import Any
 
 import certctl
 import fortios_notify
+from cert_helper_protocol import HelperError, install_via_helper
 from cert_admin import (
     DEFAULT_CREDENTIALS,
     MAX_PASSWORD_LENGTH,
@@ -397,6 +398,23 @@ def parse_compatibility_fields(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def activate_uploaded_certificate(
+    payload: dict[str, Any],
+    hostname: str,
+    output_dir: Path,
+    *,
+    helper_socket: Path | None,
+    credentials_revision: str,
+) -> dict[str, Any]:
+    if helper_socket is not None:
+        return install_via_helper(
+            helper_socket,
+            payload,
+            credentials_revision=credentials_revision,
+        )
+    return install_uploaded_certificate(payload, hostname, output_dir)
+
+
 ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_STATIC_DIR_APP = (ROOT / "app").resolve()
 ALLOWED_STATIC_DIR_CERT = (ROOT / "app" / "cert").resolve()
@@ -446,11 +464,15 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         timeout: int = 20,
         tls_active: bool = False,
         allow_insecure_localhost: bool = False,
+        cert_trusted_proxy_networks: tuple[
+            ipaddress.IPv4Network | ipaddress.IPv6Network, ...
+        ] = (),
         cert_admin_file: Path = DEFAULT_CREDENTIALS,
         cert_sessions: SessionStore | None = None,
         cert_hostname: str = "",
         cert_output_dir: Path = Path("certificates/active"),
         cert_direct_install: bool = False,
+        cert_helper_socket: Path | None = None,
         cert_login_limiter: LoginRateLimiter | None = None,
         cert_validation_tickets: ValidationTicketStore | None = None,
         **kwargs: Any,
@@ -458,19 +480,46 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.timeout = timeout
         self.tls_active = tls_active
         self.allow_insecure_localhost = allow_insecure_localhost
+        self.cert_trusted_proxy_networks = cert_trusted_proxy_networks
         self.cert_admin_file = cert_admin_file
         self.cert_sessions = cert_sessions or SessionStore()
         self.cert_hostname = cert_hostname
         self.cert_output_dir = cert_output_dir
         self.cert_direct_install = cert_direct_install
+        self.cert_helper_socket = cert_helper_socket
         self.cert_login_limiter = cert_login_limiter or LoginRateLimiter()
         self.cert_validation_tickets = (
             cert_validation_tickets or ValidationTicketStore()
         )
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
-    def certificate_ui_available(self) -> bool:
+    def request_from_trusted_proxy(self) -> bool:
+        try:
+            client = ipaddress.ip_address(self.client_address[0])
+        except ValueError:
+            return False
+        networks = getattr(self, "cert_trusted_proxy_networks", ())
+        return any(client in network for network in networks)
+
+    def request_is_secure(self) -> bool:
         if self.tls_active:
+            return True
+        return (
+            self.request_from_trusted_proxy()
+            and self.headers.get("X-Forwarded-Proto", "").strip().lower() == "https"
+        )
+
+    def cert_client_identity(self) -> str:
+        direct_client = self.client_address[0]
+        if not self.request_from_trusted_proxy():
+            return direct_client
+        try:
+            return str(ipaddress.ip_address(self.headers.get("X-Real-IP", "")))
+        except ValueError:
+            return direct_client
+
+    def certificate_ui_available(self) -> bool:
+        if self.request_is_secure():
             return True
         if not self.allow_insecure_localhost:
             return False
@@ -481,9 +530,11 @@ class FortiosHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self) -> None:
         url_path = urllib.parse.urlsplit(self.path).path
-        if self.tls_active:
+        if self.request_is_secure():
             self.send_header("Strict-Transport-Security", "max-age=31536000")
-        if url_path == "/cert" or url_path.startswith(("/cert/", "/api/cert/")):
+        if url_path in ("/cert", "/app/cert") or url_path.startswith(
+            ("/cert/", "/app/cert/", "/api/cert/")
+        ):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
@@ -502,7 +553,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         if not origin or not host:
             return False
         parsed = urllib.parse.urlsplit(origin)
-        expected_scheme = "https" if self.tls_active else "http"
+        expected_scheme = "https" if self.request_is_secure() else "http"
         return (
             parsed.scheme == expected_scheme
             and parsed.netloc == host
@@ -525,7 +576,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
             return
         if (
-            url_path == "/cert" or url_path.startswith("/cert/")
+            url_path in ("/cert", "/app/cert")
+            or url_path.startswith(("/cert/", "/app/cert/"))
         ) and not self.certificate_ui_available():
             self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
             return
@@ -573,7 +625,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 "csrfToken": session.csrf_token,
                 "hostname": self.cert_hostname,
                 "canInstall": self.cert_direct_install,
-                "tlsActive": self.tls_active,
+                "tlsActive": self.request_is_secure(),
             },
             extra_headers={"Cache-Control": "no-store"},
         )
@@ -761,7 +813,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
 
     def handle_cert_login(self) -> None:
-        client = self.client_address[0]
+        client = self.cert_client_identity()
         authenticated = False
         reserved = False
         try:
@@ -807,7 +859,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 "SameSite=Strict",
                 f"Max-Age={self.cert_sessions.ttl_seconds}",
             ]
-            if self.tls_active:
+            if self.request_is_secure():
                 attributes.append("Secure")
             self.write_json_response(
                 {"authenticated": True, "csrfToken": session.csrf_token},
@@ -889,14 +941,16 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                             extra_headers={"Cache-Control": "no-store"},
                         )
                         return
-                    summary = install_uploaded_certificate(
+                    summary = activate_uploaded_certificate(
                         payload,
                         self.cert_hostname,
                         self.cert_output_dir,
+                        helper_socket=self.cert_helper_socket,
+                        credentials_revision=current_session.credentials_revision,
                     )
                 response = {
                     "installed": True,
-                    "restartRequired": self.tls_active,
+                    "restartRequired": self.tls_active and self.cert_helper_socket is None,
                     **summary,
                 }
             else:
@@ -915,6 +969,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             )
         except (
             CredentialError,
+            HelperError,
             certctl.CertificateError,
             ValueError,
             OSError,
@@ -950,7 +1005,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             "SameSite=Strict",
             "Max-Age=0",
         ]
-        if self.tls_active:
+        if self.request_is_secure():
             attributes.append("Secure")
         self.write_json_response(
             {"authenticated": False},
@@ -1359,12 +1414,30 @@ def resolve_tls_pair(certificate: Path, private_key: Path) -> tuple[Path, Path]:
     return certificate, private_key
 
 
+def parse_trusted_proxy_networks(
+    value: str,
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for item in value.split(","):
+        candidate = item.strip()
+        if candidate:
+            networks.append(ipaddress.ip_network(candidate, strict=True))
+    return tuple(networks)
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     tls_active = bool(args.tls_cert)
     allow_insecure_localhost = (
         os.environ.get("FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST") == "1"
     )
+    try:
+        cert_trusted_proxy_networks = parse_trusted_proxy_networks(
+            os.environ.get("FORTIOS_CERT_TRUSTED_PROXY_CIDRS", "")
+        )
+    except ValueError as error:
+        print(f"FORTIOS_CERT_TRUSTED_PROXY_CIDRS invalide: {error}", file=sys.stderr)
+        return 78
     cert_admin_file = Path(
         os.environ.get("FORTIOS_CERT_ADMIN_FILE", str(DEFAULT_CREDENTIALS))
     )
@@ -1375,7 +1448,12 @@ def main(argv: list[str]) -> int:
     cert_output_dir = Path(
         os.environ.get("FORTIOS_CERT_OUTPUT_DIR", "/opt/fortios/certificates/active"),
     )
-    cert_direct_install = os.environ.get("FORTIOS_CERT_DIRECT_INSTALL") == "1"
+    cert_helper_socket_value = os.environ.get("FORTIOS_CERT_HELPER_SOCKET", "").strip()
+    cert_helper_socket = Path(cert_helper_socket_value) if cert_helper_socket_value else None
+    cert_direct_install = (
+        os.environ.get("FORTIOS_CERT_DIRECT_INSTALL") == "1"
+        or cert_helper_socket is not None
+    )
 
     def handler(*handler_args: Any, **handler_kwargs: Any) -> FortiosHandler:
         return FortiosHandler(
@@ -1383,11 +1461,13 @@ def main(argv: list[str]) -> int:
             timeout=args.timeout,
             tls_active=tls_active,
             allow_insecure_localhost=allow_insecure_localhost,
+            cert_trusted_proxy_networks=cert_trusted_proxy_networks,
             cert_admin_file=cert_admin_file,
             cert_sessions=cert_sessions,
             cert_hostname=cert_hostname,
             cert_output_dir=cert_output_dir,
             cert_direct_install=cert_direct_install,
+            cert_helper_socket=cert_helper_socket,
             cert_login_limiter=cert_login_limiter,
             cert_validation_tickets=cert_validation_tickets,
             **handler_kwargs,
