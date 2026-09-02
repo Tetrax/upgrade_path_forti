@@ -80,6 +80,7 @@ function showLogin() {
   savedSmtpSettings = null;
   currentEmailPreview = null;
   emailPreviewRequestGeneration += 1;
+  byId("email-preview-frame").removeAttribute("src");
   recipientList.replaceChildren();
   loginView.hidden = false;
   adminView.hidden = true;
@@ -153,12 +154,6 @@ function updatePreviewSendAvailability() {
   );
 }
 
-function resizeEmailPreviewFrame() {
-  const frame = byId("email-preview-frame");
-  const documentHeight = frame.contentDocument?.documentElement?.scrollHeight;
-  if (documentHeight) frame.style.height = `${Math.max(620, documentHeight)}px`;
-}
-
 async function renderEmailPreview() {
   const button = byId("preview-email-button");
   const appearance = buildEmailAppearancePayload();
@@ -177,13 +172,13 @@ async function renderEmailPreview() {
     currentEmailPreview = { ...preview, appearance };
     byId("email-preview-subject").textContent = preview.subject;
     byId("email-preview-text").textContent = preview.text;
-    byId("email-preview-frame").srcdoc = preview.html;
+    byId("email-preview-frame").src = preview.renderUrl;
     setMessage("email-preview-message", "Aperçu généré par le renderer réel.", true);
   } catch (error) {
     if (requestGeneration !== emailPreviewRequestGeneration) return;
     byId("email-preview-subject").textContent = "Aperçu indisponible";
     byId("email-preview-text").textContent = "";
-    byId("email-preview-frame").srcdoc = "";
+    byId("email-preview-frame").removeAttribute("src");
     setMessage("email-preview-message", error.message);
   } finally {
     if (requestGeneration === emailPreviewRequestGeneration) {
@@ -382,7 +377,6 @@ notificationsForm.addEventListener("submit", async (event) => {
 
 byId("smtp-security").addEventListener("change", updateInsecureConfirmation);
 byId("preview-email-button").addEventListener("click", () => void renderEmailPreview());
-byId("email-preview-frame").addEventListener("load", resizeEmailPreviewFrame);
 for (const button of document.querySelectorAll("[data-preview-scenario]")) {
   button.addEventListener("click", () => {
     selectedPreviewScenario = button.dataset.previewScenario;

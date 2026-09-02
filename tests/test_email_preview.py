@@ -105,6 +105,28 @@ class EmailPreviewCompositionTests(unittest.TestCase):
         self.assertTrue(preview["html"].startswith("<!doctype html>"))
         self.assertTrue(preview["text"].strip())
 
+    def test_preview_escapes_active_html_from_every_appearance_field(self) -> None:
+        appearance = notify.validate_email_appearance(
+            {
+                "displayName": "<script>alert(1)</script>",
+                "introduction": "<img src=x onerror=alert(2)>",
+                "signature": "<svg onload=alert(3)>",
+            }
+        )
+        preview = notify.compose_email_preview(
+            "single",
+            app_url="https://fortiupgrade.example/app/",
+            run_timestamp="2026-09-02T16:00:00Z",
+            appearance=appearance,
+        )
+
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", preview["html"])
+        self.assertIn("&lt;img src=x onerror=alert(2)&gt;", preview["html"])
+        self.assertIn("&lt;svg onload=alert(3)&gt;", preview["html"])
+        self.assertNotIn("<script>", preview["html"])
+        self.assertNotIn("<img src=x", preview["html"])
+        self.assertNotIn("<svg onload", preview["html"])
+
     def test_preview_send_readiness_does_not_require_notification_recipients(self) -> None:
         settings = notify.validate_smtp_settings(
             smtp_payload(
@@ -202,20 +224,183 @@ class EmailPreviewApiTests(unittest.TestCase):
                     )
                 self.assertEqual(rejected.exception.code, 401)
 
-                opener, _csrf_token = authenticated_opener(base_url)
+                opener, csrf_token = authenticated_opener(base_url)
+                with self.assertRaises(urllib.error.HTTPError) as missing_csrf:
+                    self.post(
+                        opener,
+                        base_url,
+                        "/api/cert/notifications/preview",
+                        payload,
+                    )
+                self.assertEqual(missing_csrf.exception.code, 403)
+
                 preview = self.post(
                     opener,
                     base_url,
                     "/api/cert/notifications/preview",
                     payload,
+                    csrf_token=csrf_token,
                 )
 
             self.assertEqual(preview["scenario"], "multi-product")
             self.assertIn("subject", preview)
-            self.assertIn("html", preview)
             self.assertIn("text", preview)
+            self.assertIn("renderUrl", preview)
+            self.assertNotIn("html", preview)
             self.assertNotIn("secret", json.dumps(preview).lower())
             self.assertNotIn("password", json.dumps(preview).lower())
+
+    def test_preview_returns_an_authenticated_document_with_an_isolated_csp(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data_dir = root / "data"
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_TEST_DATA_DIR": str(data_dir),
+            }
+            payload = {"scenario": "multi-product", "appearance": APPEARANCE}
+
+            with running_server(environment) as base_url:
+                opener, csrf_token = authenticated_opener(base_url)
+                preview = self.post(
+                    opener,
+                    base_url,
+                    "/api/cert/notifications/preview",
+                    payload,
+                    csrf_token=csrf_token,
+                )
+
+                self.assertNotIn("html", preview)
+                self.assertRegex(
+                    preview["renderUrl"],
+                    r"^/api/cert/notifications/preview/render/[A-Za-z0-9_-]{32,}$",
+                )
+                with opener.open(f"{base_url}{preview['renderUrl']}", timeout=5) as response:
+                    rendered_html = response.read().decode("utf-8")
+                    self.assertEqual(response.headers.get_content_type(), "text/html")
+                    self.assertEqual(response.headers["Cache-Control"], "no-store")
+                    self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+                    self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
+                    self.assertIsNone(response.headers["X-Frame-Options"])
+                    self.assertEqual(
+                        response.headers["Content-Security-Policy"],
+                        "default-src 'none'; script-src 'none'; "
+                        "style-src 'unsafe-inline'; img-src 'none'; "
+                        "frame-ancestors 'self'; base-uri 'none'; form-action 'none'",
+                    )
+
+            self.assertTrue(rendered_html.startswith("<!doctype html>"))
+            self.assertIn("CVE-2026-00001", rendered_html)
+            self.assertIn("max-width:680px", rendered_html)
+
+    def test_preview_document_is_bound_to_the_session_and_revoked_on_logout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_TEST_DATA_DIR": str(root / "data"),
+            }
+            payload = {"scenario": "single", "appearance": APPEARANCE}
+
+            with running_server(environment) as base_url:
+                owner, csrf_token = authenticated_opener(base_url)
+                preview = self.post(
+                    owner,
+                    base_url,
+                    "/api/cert/notifications/preview",
+                    payload,
+                    csrf_token=csrf_token,
+                )
+                render_url = f"{base_url}{preview['renderUrl']}"
+
+                with self.assertRaises(urllib.error.HTTPError) as anonymous:
+                    urllib.request.urlopen(render_url, timeout=5)
+                self.assertEqual(anonymous.exception.code, 401)
+
+                other_session, _other_csrf = authenticated_opener(base_url)
+                with self.assertRaises(urllib.error.HTTPError) as wrong_session:
+                    other_session.open(render_url, timeout=5)
+                self.assertEqual(wrong_session.exception.code, 404)
+
+                self.post(
+                    owner,
+                    base_url,
+                    "/api/cert/logout",
+                    {},
+                    csrf_token=csrf_token,
+                )
+                with self.assertRaises(urllib.error.HTTPError) as revoked:
+                    owner.open(render_url, timeout=5)
+                self.assertEqual(revoked.exception.code, 401)
+
+    def test_certificate_admin_keeps_its_strict_global_csp(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(Path(tmp) / "credentials.json"),
+                "FORTIOS_TEST_DATA_DIR": str(Path(tmp) / "data"),
+            }
+            with (
+                running_server(environment) as base_url,
+                urllib.request.urlopen(f"{base_url}/cert/", timeout=5) as response,
+            ):
+                csp = response.headers["Content-Security-Policy"]
+
+            self.assertEqual(
+                csp,
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "img-src 'self'; connect-src 'self'; base-uri 'none'; "
+                "frame-ancestors 'none'; form-action 'self'",
+            )
+            self.assertNotIn("'unsafe-inline'", csp)
+
+    def test_preview_generation_is_rate_limited_per_admin_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_TEST_DATA_DIR": str(root / "data"),
+            }
+            payload = {"scenario": "single", "appearance": APPEARANCE}
+
+            with running_server(environment) as base_url:
+                opener, csrf_token = authenticated_opener(base_url)
+                for _ in range(30):
+                    self.post(
+                        opener,
+                        base_url,
+                        "/api/cert/notifications/preview",
+                        payload,
+                        csrf_token=csrf_token,
+                    )
+                with self.assertRaises(urllib.error.HTTPError) as limited:
+                    self.post(
+                        opener,
+                        base_url,
+                        "/api/cert/notifications/preview",
+                        payload,
+                        csrf_token=csrf_token,
+                    )
+
+            self.assertEqual(limited.exception.code, 429)
 
     def test_send_preview_requires_csrf_and_preserves_all_notification_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, running_smtp_server() as smtp:
@@ -265,14 +450,21 @@ class EmailPreviewApiTests(unittest.TestCase):
                     allowInsecure=True,
                     username="",
                 ),
+                password="smtp-private-secret",
             )
             notification_path.write_text(
                 '{"malformed":"must remain byte-identical"}\n', encoding="utf-8"
             )
-            before = {
-                path.name: path.read_bytes()
-                for path in (catalog, history, notification_path)
-            }
+            smtp_settings_path = data_dir / "smtp-settings.json"
+            smtp_password_path = data_dir / "smtp-password"
+            protected_paths = (
+                catalog,
+                history,
+                notification_path,
+                smtp_settings_path,
+                smtp_password_path,
+            )
+            before = {path.name: path.read_bytes() for path in protected_paths}
             environment = {
                 "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
                 "FORTIOS_CERT_ADMIN_FILE": str(credentials),
@@ -286,7 +478,13 @@ class EmailPreviewApiTests(unittest.TestCase):
                     base_url,
                     "/api/cert/notifications/preview",
                     preview_request,
+                    csrf_token=csrf_token,
                 )
+                with opener.open(
+                    f"{base_url}{preview['renderUrl']}", timeout=5
+                ) as rendered_response:
+                    rendered_preview_html = rendered_response.read().decode("utf-8")
+                self.assertNotIn("smtp-private-secret", rendered_preview_html)
                 send_request = {
                     **preview_request,
                     "runTimestamp": preview["runTimestamp"],
@@ -327,9 +525,9 @@ class EmailPreviewApiTests(unittest.TestCase):
                 .get_content()
                 .replace("\r\n", "\n")
                 .strip(),
-                preview["html"].strip(),
+                rendered_preview_html.strip(),
             )
-            for path in (catalog, history, notification_path):
+            for path in protected_paths:
                 self.assertEqual(path.read_bytes(), before[path.name])
             self.assertNotIn("secret", json.dumps(sent).lower())
             self.assertNotIn("password", json.dumps(sent).lower())

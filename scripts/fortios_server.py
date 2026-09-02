@@ -38,6 +38,7 @@ from cert_helper_protocol import HelperError, install_via_helper
 from cert_web import (
     ActionRateLimiter,
     AdminSession,
+    EmailPreviewStore,
     LoginRateLimiter,
     SessionStore,
     ValidationTicketStore,
@@ -119,6 +120,11 @@ MAX_JSON_BODY_BYTES = 1 * 1024 * 1024
 MAX_IMAGE_UPLOAD_BODY_BYTES = 12 * 1024 * 1024
 MAX_CERT_UPLOAD_BODY_BYTES = 56 * 1024 * 1024
 REQUEST_SOCKET_TIMEOUT_SECONDS = 15
+EMAIL_PREVIEW_RENDER_PREFIX = "/api/cert/notifications/preview/render/"
+EMAIL_PREVIEW_CSP = (
+    "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; "
+    "img-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+)
 
 # Persisted user-controlled text is deliberately bounded well above the current UI/data sizes,
 # while preventing accidental multi-megabyte records from turning the JSON catalog into an
@@ -477,7 +483,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         cert_helper_socket: Path | None = None,
         cert_login_limiter: LoginRateLimiter | None = None,
         cert_test_email_limiter: ActionRateLimiter | None = None,
+        cert_preview_limiter: ActionRateLimiter | None = None,
         cert_validation_tickets: ValidationTicketStore | None = None,
+        email_previews: EmailPreviewStore | None = None,
         **kwargs: Any,
     ) -> None:
         self.timeout = timeout
@@ -494,9 +502,13 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.cert_test_email_limiter = (
             cert_test_email_limiter or ActionRateLimiter()
         )
+        self.cert_preview_limiter = cert_preview_limiter or ActionRateLimiter(
+            max_actions=30
+        )
         self.cert_validation_tickets = (
             cert_validation_tickets or ValidationTicketStore()
         )
+        self.email_previews = email_previews or EmailPreviewStore()
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def request_from_trusted_proxy(self) -> bool:
@@ -538,7 +550,12 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         url_path = urllib.parse.urlsplit(self.path).path
         if self.request_is_secure():
             self.send_header("Strict-Transport-Security", "max-age=31536000")
-        if url_path in ("/cert", "/app/cert") or url_path.startswith(
+        if url_path.startswith(EMAIL_PREVIEW_RENDER_PREFIX):
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Security-Policy", EMAIL_PREVIEW_CSP)
+        elif url_path in ("/cert", "/app/cert") or url_path.startswith(
             ("/cert/", "/app/cert/", "/api/cert/")
         ):
             self.send_header("Cache-Control", "no-store")
@@ -580,6 +597,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_notification_settings_read()
             elif url_path == "/api/cert/smtp":
                 self.handle_smtp_settings_read()
+            elif url_path.startswith(EMAIL_PREVIEW_RENDER_PREFIX):
+                self.handle_notification_email_preview_render(url_path)
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
             return
@@ -781,7 +800,22 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         )
 
     def handle_notification_email_preview(self) -> None:
-        if self.require_admin_session(csrf=False) is None:
+        if self.require_admin_session(csrf=True) is None:
+            return
+        session_id = self.cert_session_id()
+        if session_id is None:
+            self.write_json_response(
+                {"error": "Session administrateur requise."},
+                HTTPStatus.UNAUTHORIZED,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        if not self.cert_preview_limiter.try_record(session_id):
+            self.write_json_response(
+                {"error": "Limite de trente aperçus par minute atteinte."},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                extra_headers={"Cache-Control": "no-store"},
+            )
             return
         try:
             payload = self.read_json_body(max_bytes=16 * 1024)
@@ -798,7 +832,29 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 extra_headers={"Cache-Control": "no-store"},
             )
             return
+        html = preview.pop("html")
+        token = self.email_previews.issue(session_id, html)
+        preview["renderUrl"] = f"{EMAIL_PREVIEW_RENDER_PREFIX}{token}"
         self.write_json_response(preview, extra_headers={"Cache-Control": "no-store"})
+
+    def handle_notification_email_preview_render(self, url_path: str) -> None:
+        if self.require_admin_session(csrf=False) is None:
+            return
+        session_id = self.cert_session_id()
+        token = url_path.removeprefix(EMAIL_PREVIEW_RENDER_PREFIX)
+        if session_id is None or not token or "/" in token:
+            self.send_error(HTTPStatus.NOT_FOUND, "Aperçu introuvable")
+            return
+        html = self.email_previews.get(token, session_id)
+        if html is None:
+            self.send_error(HTTPStatus.NOT_FOUND, "Aperçu introuvable")
+            return
+        body = html.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def handle_notification_email_preview_send(self) -> None:
         if self.require_admin_session(csrf=True) is None:
@@ -1672,7 +1728,9 @@ def main(argv: list[str]) -> int:
     cert_sessions = SessionStore()
     cert_login_limiter = LoginRateLimiter()
     cert_test_email_limiter = ActionRateLimiter()
+    cert_preview_limiter = ActionRateLimiter(max_actions=30)
     cert_validation_tickets = ValidationTicketStore()
+    email_previews = EmailPreviewStore()
     cert_hostname = os.environ.get("FORTIOS_TLS_HOSTNAME", "").strip()
     cert_output_dir = Path(
         os.environ.get("FORTIOS_CERT_OUTPUT_DIR", "/opt/fortios/certificates/active"),
@@ -1699,7 +1757,9 @@ def main(argv: list[str]) -> int:
             cert_helper_socket=cert_helper_socket,
             cert_login_limiter=cert_login_limiter,
             cert_test_email_limiter=cert_test_email_limiter,
+            cert_preview_limiter=cert_preview_limiter,
             cert_validation_tickets=cert_validation_tickets,
+            email_previews=email_previews,
             **handler_kwargs,
         )
 
