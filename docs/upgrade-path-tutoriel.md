@@ -92,9 +92,12 @@ FORTIOS_DOCS_DIR=/opt/upgrade_path/docs
 FORTIOS_CERTS_DIR=/opt/upgrade_path/certificates
 ```
 
-Les paramètres SMTP sont optionnels et restent dans les variables de Stack, avec le password
-fourni uniquement par `FORTIOS_SMTP_PASSWORD_FILE`. L'activation, les produits surveillés et les
-destinataires se configurent ensuite dans **Administration > Notifications**.
+Les variables SMTP de Stack sont optionnelles et servent uniquement au bootstrap initial, avec le
+password fourni par `FORTIOS_SMTP_PASSWORD_FILE`. Après le premier démarrage, **Administration >
+Notifications** devient la console autoritative pour le serveur, le port, STARTTLS/TLS implicite,
+l'utilisateur, le secret, l'expéditeur, l'URL, le timeout, l'apparence, l'activation, les produits
+surveillés et les destinataires. Le secret est stocké séparément dans le volume `data/`, n'est jamais
+retourné au navigateur et reste inchangé lorsque le champ mot de passe est laissé vide.
 
 6. Cliquer **Deploy the stack**.
 

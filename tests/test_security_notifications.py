@@ -729,7 +729,9 @@ class NotificationAdminWebTests(unittest.TestCase):
 
                 test_request = urllib.request.Request(
                     f"{base_url}/api/cert/notifications/test",
-                    data=b"{}",
+                    data=json.dumps(
+                        {"recipient": "security@example.com"}
+                    ).encode(),
                     method="POST",
                     headers={
                         "Content-Type": "application/json",
@@ -746,7 +748,12 @@ class NotificationAdminWebTests(unittest.TestCase):
             self.assertNotIn("secret", response_text)
             self.assertEqual(current["settings"], settings_payload())
             self.assertEqual(current["smtp"]["state"], "operational")
-            self.assertEqual(test_result, {"sent": True, "message": "Email de test envoyé."})
+            self.assertTrue(test_result["sent"])
+            self.assertEqual(test_result["message"], "Email de test envoyé.")
+            self.assertIn("Message accepté par le serveur SMTP", test_result["checks"])
+            self.assertEqual(
+                test_result["summary"]["recipient"], "security@example.com"
+            )
             self.assertEqual(len(_SmtpHandler.messages), 1)
 
 

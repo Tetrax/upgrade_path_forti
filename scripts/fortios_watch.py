@@ -3027,6 +3027,7 @@ def main(argv: list[str]) -> int:
                     pending,
                     app_url=email_config.app_url,
                     run_timestamp=final_state["generatedAt"],
+                    appearance=email_config.email_appearance,
                 )
                 if composed:
                     subject, text_body, html_body = composed

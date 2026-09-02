@@ -308,10 +308,15 @@ Affiché dans `/app/` sous le bandeau de briefing : section repliable « État d
 
 Le moteur existant de `scripts/fortios_notify.py` est conservé : SMTP stdlib, déduplication, checkpoint, outbox persistante, retry et isolation complète des erreurs SMTP. Aucun daemon ni scheduler supplémentaire n'est nécessaire ; les notifications sont déclenchées par le diff de chaque collecte PSIRT existante.
 
-La configuration est séparée en deux parties :
+La configuration est administrée dans **Administration > Notifications** et séparée en trois fichiers persistants du volume `data/` :
 
-- **Infrastructure SMTP — Docker / Portainer / environnement** : `FORTIOS_SMTP_HOST`, `FORTIOS_SMTP_PORT`, `FORTIOS_SMTP_USERNAME`, `FORTIOS_SMTP_PASSWORD_FILE`, `FORTIOS_SMTP_STARTTLS`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_SMTP_FROM` et `FORTIOS_APP_URL`. Le password est lu uniquement depuis le fichier secret monté ; il n'est jamais stocké dans Git, dans le JSON applicatif ni retourné au navigateur.
-- **Préférences fonctionnelles — Administration > Notifications** : activation, produits surveillés et destinataires. Elles sont validées strictement puis écrites atomiquement dans `data/notification-settings.json` (volume `data/`, gitignored). Un fichier absent équivaut à des notifications désactivées ; les anciennes variables `FORTIOS_EMAIL_ENABLED` / `FORTIOS_SMTP_TO` restent uniquement un mécanisme de bootstrap compatible tant que le fichier n'a jamais été enregistré.
+- `notification-settings.json` : activation, produits surveillés et destinataires ;
+- `smtp-settings.json` (`0640`) : serveur, port, sécurité, utilisateur, expéditeur, URL applicative, timeout et apparence des emails, sans secret ;
+- `smtp-password` (`0600`) : mot de passe SMTP seul.
+
+Ces fichiers sont validés et remplacés sous verrou interprocessus. Lorsqu'une sauvegarde modifie à la fois les paramètres et le secret, une transaction privée conserve la paire précédente jusqu'au commit et la restaure automatiquement après une interruption, afin que le runtime ne charge jamais deux générations différentes. Le navigateur ne reçoit jamais le mot de passe ni son chemin, seulement `passwordConfigured`. Un champ mot de passe vide conserve le secret existant ; son remplacement et sa suppression sont des actions distinctes et explicites.
+
+Les variables `FORTIOS_SMTP_HOST`, `FORTIOS_SMTP_PORT`, `FORTIOS_SMTP_USERNAME`, `FORTIOS_SMTP_PASSWORD_FILE`, `FORTIOS_SMTP_STARTTLS`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_SMTP_FROM` et `FORTIOS_APP_URL` restent un **bootstrap initial**. Dès que `smtp-settings.json` existe, la configuration Web persistée devient autoritative. Au premier enregistrement Web, un secret bootstrap valide peut être migré vers `smtp-password` sans ressaisie. Rollback : conserver le volume `data/`; supprimer volontairement `smtp-settings.json` et `smtp-password` réactive le bootstrap par environnement au prochain démarrage.
 
 Format persistant :
 
@@ -379,7 +384,9 @@ Chaque collecte réserve («&nbsp;réclame&nbsp;») les entrées de l'outbox qui
 
 Un fichier `fortios-notify-history.json` corrompu, tronqué ou de structure invalide est traité comme un état vide (jamais une exception), et archivé aside (`fortios-notify-history.json.corrupt-<timestamp>`) pour diagnostic. **Procédure de récupération** en cas de doute sur son intégrité : supprimer ou déplacer le fichier — la prochaine collecte en régénère un vide automatiquement ; au pire, cela ne fait que renvoyer une notification déjà connue une fois de plus (jamais en perdre), puisque les événements eux-mêmes restent dérivés du catalogue et de l'état de santé, pas du fichier de dédoublonnage lui-même.
 
-L'interface privée `/cert/` expose les onglets **Certificats** et **Notifications** avec la même session administrateur, le même contrôle d'origine et le même jeton CSRF. Elle n'affiche que l'état SMTP, le serveur/port, STARTTLS et l'expéditeur — jamais le username, le password ni le chemin du secret. Le bouton **Envoyer un email de test** réutilise exactement le chemin SMTP de `fortios_notify.py` et retourne seulement un résultat nettoyé.
+L'interface privée `/cert/` expose les onglets **Certificats** et **Notifications** avec la même session administrateur, le même contrôle d'origine et le même jeton CSRF. La section **Configuration SMTP** prend en charge STARTTLS, TLS implicite et le mode clair uniquement après confirmation explicite. Elle permet aussi une introduction, un titre et une signature ; ces champs entourent le contenu de sécurité généré et ne peuvent pas retirer les CVE, produits, versions, avertissements ou liens obligatoires.
+
+Le bouton **Envoyer un email de test** exige un destinataire contrôlé, réutilise le moteur SMTP de `fortios_notify.py` et retourne des étapes nettoyées (connexion, TLS, authentification, acceptation). Cette opération n'écrit ni checkpoint, ni outbox, ni `sentKeys`, ni événement. Les routes SMTP sont protégées par la session administrateur et CSRF ; l'envoi de test est limité à trois tentatives par minute et par session.
 
 Tester aussi en CLI sans lancer de collecte ni toucher au catalogue, à la santé ou à l'outbox :
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 
 from playwright.sync_api import expect
 
@@ -358,3 +359,172 @@ def test_health_dot_is_red_when_compat_matrix_fails_even_if_daily_run_is_ok(app_
 
     app_page.click("#healthDetails summary")
     expect(app_page.locator("#healthTableContainer")).to_contain_text("PDF de compatibilité introuvable")
+
+
+def login_cert_admin(page, fortios_server) -> None:
+    page.goto(f"{fortios_server.base_url}/cert/")
+    page.fill("#username", fortios_server.admin_username)
+    page.fill("#password", fortios_server.admin_password)
+    page.click("#login-button")
+    expect(page.locator("#admin-view")).to_be_visible()
+
+
+def test_notifications_admin_exposes_grouped_smtp_and_email_appearance(page, fortios_server):
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    for heading in (
+        "Alertes CVE",
+        "Produits surveillés",
+        "Destinataires",
+        "Configuration SMTP",
+        "Apparence des emails",
+        "Test d’envoi",
+    ):
+        expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
+
+    expect(page.locator("#smtp-security option")).to_have_count(3)
+    assert page.locator("#smtp-security option").evaluate_all(
+        "options => options.map(option => option.value)",
+    ) == ["starttls", "tls", "none"]
+    expect(page.locator("#smtp-advanced-options")).not_to_have_attribute("open", "")
+    delete_password = page.locator("#delete-smtp-password-button")
+    expect(delete_password).to_have_count(1)
+    expect(delete_password).to_be_hidden()
+    expect(page.locator("#smtp-password")).to_have_attribute("autocomplete", "new-password")
+    expect(page.locator("#smtp-password")).to_have_value("")
+
+
+def test_smtp_admin_persists_replaces_and_deletes_secret_without_returning_it(
+    page, fortios_server
+):
+    first_secret = secrets.token_urlsafe(24)
+    second_secret = secrets.token_urlsafe(24)
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    page.fill("#smtp-host", "smtp.e2e.example")
+    page.fill("#smtp-port", "587")
+    page.select_option("#smtp-security", "starttls")
+    page.fill("#smtp-username", "smtp-e2e-user")
+    page.click("#replace-smtp-password-button")
+    page.fill("#smtp-password", first_secret)
+    page.fill("#smtp-from-address", "fortiupgrade-e2e@example.test")
+    page.fill("#smtp-app-url", "https://fortiupgrade.e2e.example/app/")
+    page.click("#smtp-advanced-options summary")
+    page.fill("#smtp-timeout", "12")
+    page.fill("#email-display-name", "FortiUpgrade E2E")
+    page.fill("#email-introduction", "Introduction E2E")
+    page.fill("#email-signature", "Signature E2E")
+
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/smtp")
+        and response.request.method == "POST"
+    ) as saved_response:
+        page.click("#save-smtp-button")
+    saved_payload = saved_response.value.json()
+    assert saved_payload["smtp"]["passwordConfigured"] is True
+    assert first_secret not in json.dumps(saved_payload)
+    expect(page.locator("#smtp-message")).to_have_text(
+        "Configuration email enregistrée."
+    )
+    expect(page.locator("#smtp-password-status")).to_have_text(
+        "Mot de passe configuré"
+    )
+    expect(page.locator("#smtp-password")).to_have_value("")
+    expect(page.locator("#delete-smtp-password-button")).to_be_visible()
+
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/smtp")
+        and response.request.method == "GET"
+    ) as loaded_response:
+        page.reload()
+    loaded_payload = loaded_response.value.json()
+    assert loaded_payload["smtp"]["passwordConfigured"] is True
+    assert first_secret not in json.dumps(loaded_payload)
+    expect(page.locator("#admin-view")).to_be_visible()
+    page.click("#notifications-tab")
+    expect(page.locator("#smtp-host")).to_have_value("smtp.e2e.example")
+    expect(page.locator("#email-display-name")).to_have_value("FortiUpgrade E2E")
+    expect(page.locator("#smtp-password")).to_have_value("")
+
+    page.fill("#smtp-host", "smtp-preserved.e2e.example")
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/smtp")
+        and response.request.method == "POST"
+    ) as preserved_response:
+        page.click("#save-smtp-button")
+    preserved_payload = preserved_response.value.json()
+    assert preserved_payload["smtp"]["passwordConfigured"] is True
+    assert first_secret not in json.dumps(preserved_payload)
+
+    page.click("#replace-smtp-password-button")
+    page.fill("#smtp-password", second_secret)
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/smtp")
+        and response.request.method == "POST"
+    ) as replaced_response:
+        page.click("#save-smtp-button")
+    replaced_payload = replaced_response.value.json()
+    assert replaced_payload["smtp"]["passwordConfigured"] is True
+    assert second_secret not in json.dumps(replaced_payload)
+    expect(page.locator("#smtp-password")).to_have_value("")
+
+    page.once("dialog", lambda dialog: dialog.accept())
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/smtp/password")
+        and response.request.method == "DELETE"
+    ) as deleted_response:
+        page.click("#delete-smtp-password-button")
+    deleted_payload = deleted_response.value.json()
+    assert deleted_payload["smtp"]["passwordConfigured"] is False
+    assert second_secret not in json.dumps(deleted_payload)
+    expect(page.locator("#smtp-message")).to_have_text(
+        "Mot de passe SMTP supprimé."
+    )
+    expect(page.locator("#smtp-password-status")).to_have_text("Non configuré")
+    expect(page.locator("#delete-smtp-password-button")).to_be_hidden()
+
+
+def test_smtp_admin_is_labelled_and_has_no_horizontal_overflow(page, fortios_server):
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    assert page.locator("#smtp-form input, #smtp-form select, #smtp-form textarea").evaluate_all(
+        "elements => elements.every(element => element.labels && element.labels.length > 0)"
+    )
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+    panel_widths = page.locator(".notifications-grid > .panel, .notifications-grid > form").evaluate_all(
+        "elements => elements.map(element => element.getBoundingClientRect().width)"
+    )
+    assert panel_widths[1] >= panel_widths[0] * 0.75
+
+    page.set_viewport_size({"width": 375, "height": 812})
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+    expect(page.locator("#smtp-host")).to_be_visible()
+    expect(page.locator("#replace-smtp-password-button")).to_be_visible()
+    expect(page.locator("#save-smtp-button")).to_be_visible()
+
+
+def test_smtp_test_button_uses_backend_operational_state(page, fortios_server):
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+    page.evaluate(
+        """() => renderSmtpSettings({smtp: {
+          host: 'smtp.example.com', port: 0, security: 'starttls',
+          allowInsecure: false, username: '', from: 'sender@example.com',
+          appUrl: 'https://fortiupgrade.example/app/', timeout: 10,
+          emailAppearance: {displayName: 'FortiUpgrade', introduction: '', signature: ''},
+          source: 'environment', state: 'incomplete', passwordConfigured: false
+        }})"""
+    )
+
+    expect(page.locator("#smtp-status-label")).to_have_text(
+        "Configuration incomplète"
+    )
+    expect(page.locator("#test-email-button")).to_be_disabled()

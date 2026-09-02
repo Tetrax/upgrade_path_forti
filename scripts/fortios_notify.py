@@ -22,8 +22,9 @@ import re
 import smtplib
 import ssl
 import sys
+import urllib.parse
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,8 @@ CLAIM_STALE_SECONDS = 600
 _EMAIL_ADDRESS_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 DEFAULT_NOTIFICATION_SETTINGS_PATH = Path("data/notification-settings.json")
+DEFAULT_SMTP_SETTINGS_PATH = Path("data/smtp-settings.json")
+SMTP_PASSWORD_FILENAME = "smtp-password"
 _SETTINGS_PRODUCT_KEYS = (
     "fortigate-fortios",
     "fortimanager",
@@ -275,6 +278,8 @@ class EmailConfig:
     app_url: str
     smtp_password_file: str = ""
     smtp_password_error: str = ""
+    smtp_security: str = ""
+    email_appearance: EmailAppearance | None = None
 
     def is_complete(self) -> bool:
         if not (self.smtp_host and self.smtp_from and self.smtp_to):
@@ -291,6 +296,46 @@ class EmailConfig:
             self.smtp_username and (not self.smtp_password or self.smtp_password_error)
         )
 
+
+@dataclass(frozen=True)
+class EmailAppearance:
+    display_name: str
+    introduction: str
+    signature: str
+
+    def to_payload(self) -> dict[str, str]:
+        return {
+            "displayName": self.display_name,
+            "introduction": self.introduction,
+            "signature": self.signature,
+        }
+
+
+@dataclass(frozen=True)
+class SmtpSettings:
+    host: str
+    port: int
+    security: str
+    allow_insecure: bool
+    username: str
+    sender: str
+    app_url: str
+    timeout: int
+    email_appearance: EmailAppearance
+    source: str = "saved"
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "host": self.host,
+            "port": self.port,
+            "security": self.security,
+            "allowInsecure": self.allow_insecure,
+            "username": self.username,
+            "from": self.sender,
+            "appUrl": self.app_url,
+            "timeout": self.timeout,
+            "emailAppearance": self.email_appearance.to_payload(),
+        }
 
 @dataclass
 class NotificationEvent:
@@ -331,33 +376,370 @@ def _env_secret(env: dict[str, str], key: str) -> tuple[str, str, str]:
     return value, secret_file, ""
 
 
+def smtp_password_path(settings_path: Path) -> Path:
+    return settings_path.with_name(SMTP_PASSWORD_FILENAME)
+
+
+def _atomic_write_private(path: Path, content: str, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_prefix = path.name if path.name.startswith(".") else f".{path.name}"
+    temporary = path.with_name(
+        f"{temporary_prefix}.tmp-{os.getpid()}-{os.urandom(6).hex()}"
+    )
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        path.chmod(mode)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
+def _default_email_appearance() -> EmailAppearance:
+    return EmailAppearance(
+        display_name="FortiUpgrade",
+        introduction="",
+        signature="",
+    )
+
+
+def validate_smtp_settings(payload: Any, *, source: str = "saved") -> SmtpSettings:
+    expected = {
+        "host",
+        "port",
+        "security",
+        "allowInsecure",
+        "username",
+        "from",
+        "appUrl",
+        "timeout",
+        "emailAppearance",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected:
+        raise ValueError("Configuration SMTP invalide.")
+    appearance = payload["emailAppearance"]
+    if not isinstance(appearance, dict) or set(appearance) != {
+        "displayName",
+        "introduction",
+        "signature",
+    }:
+        raise ValueError("Apparence des emails invalide.")
+    string_fields = ("host", "security", "username", "from", "appUrl")
+    appearance_fields = ("displayName", "introduction", "signature")
+    if any(not isinstance(payload[key], str) for key in string_fields) or any(
+        not isinstance(appearance[key], str) for key in appearance_fields
+    ):
+        raise TypeError("Les champs SMTP textuels doivent être des chaînes.")
+    if not isinstance(payload["port"], int) or isinstance(payload["port"], bool):
+        raise TypeError("Le port SMTP doit être un entier.")
+    if not isinstance(payload["timeout"], int) or isinstance(payload["timeout"], bool):
+        raise TypeError("Le timeout SMTP doit être un entier.")
+    if not isinstance(payload["allowInsecure"], bool):
+        raise TypeError("Le champ allowInsecure doit être un booléen.")
+    if payload["security"] not in {"starttls", "tls", "none"}:
+        raise ValueError("Mode de sécurité SMTP invalide.")
+    if payload["security"] == "none" and not payload["allowInsecure"]:
+        raise ValueError("Le SMTP sans chiffrement doit être explicitement autorisé.")
+    host = payload["host"].strip()
+    if (
+        not host
+        or len(host) > 253
+        or "://" in host
+        or any(character.isspace() for character in host)
+        or not re.fullmatch(r"[A-Za-z0-9.:-]+", host)
+    ):
+        raise ValueError("Serveur SMTP invalide.")
+    if not (0 < payload["port"] <= 65535):
+        raise ValueError("Port SMTP invalide.")
+    sender = payload["from"].strip()
+    if not _EMAIL_ADDRESS_RE.fullmatch(sender):
+        raise ValueError("Adresse expéditeur invalide.")
+    if not (0 < payload["timeout"] <= 120):
+        raise ValueError("Le timeout SMTP doit être compris entre 1 et 120 secondes.")
+    parsed_app_url = urllib.parse.urlsplit(payload["appUrl"].strip())
+    if (
+        parsed_app_url.scheme not in {"http", "https"}
+        or not parsed_app_url.netloc
+        or parsed_app_url.username is not None
+        or parsed_app_url.password is not None
+    ):
+        raise ValueError("URL FortiUpgrade invalide.")
+    if not appearance["displayName"].strip() or len(appearance["displayName"]) > 100:
+        raise ValueError("Nom affiché invalide.")
+    if len(appearance["introduction"]) > 2000 or len(appearance["signature"]) > 2000:
+        raise ValueError("Le contenu personnalisé des emails est trop long.")
+    username = payload["username"].strip()
+    if len(username) > 320 or any(character in username for character in ("\0", "\r", "\n")):
+        raise ValueError("Utilisateur SMTP invalide.")
+    return SmtpSettings(
+        host=host,
+        port=payload["port"],
+        security=payload["security"],
+        allow_insecure=payload["allowInsecure"],
+        username=username,
+        sender=sender,
+        app_url=payload["appUrl"].strip(),
+        timeout=payload["timeout"],
+        email_appearance=EmailAppearance(
+            display_name=appearance["displayName"].strip(),
+            introduction=appearance["introduction"].strip(),
+            signature=appearance["signature"].strip(),
+        ),
+        source=source,
+    )
+
+
+def _smtp_settings_from_env(env: dict[str, str]) -> SmtpSettings:
+    starttls_value = (env.get("FORTIOS_SMTP_STARTTLS") or "").strip().lower()
+    starttls = starttls_value not in {"0", "false", "no", "off"}
+    return SmtpSettings(
+        host=(env.get("FORTIOS_SMTP_HOST") or "").strip(),
+        port=_env_int(env, "FORTIOS_SMTP_PORT", 587),
+        security="starttls" if starttls else "none",
+        allow_insecure=not starttls,
+        username=(env.get("FORTIOS_SMTP_USERNAME") or "").strip(),
+        sender=(env.get("FORTIOS_SMTP_FROM") or "").strip(),
+        app_url=(
+            env.get("FORTIOS_APP_URL") or "https://valdev.me:3001/app/"
+        ).strip(),
+        timeout=_env_int(env, "FORTIOS_SMTP_TIMEOUT", 10),
+        email_appearance=_default_email_appearance(),
+        source="environment",
+    )
+
+
+def _load_smtp_settings_unlocked(
+    path: Path, environment: dict[str, str]
+) -> SmtpSettings:
+    if not path.exists():
+        return _smtp_settings_from_env(environment)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return validate_smtp_settings(payload)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return SmtpSettings(
+            host="",
+            port=587,
+            security="starttls",
+            allow_insecure=False,
+            username="",
+            sender="",
+            app_url="",
+            timeout=10,
+            email_appearance=_default_email_appearance(),
+            source="saved",
+        )
+
+
+def load_smtp_settings(
+    path: Path = DEFAULT_SMTP_SETTINGS_PATH,
+    *,
+    env: dict[str, str] | None = None,
+) -> SmtpSettings:
+    environment = dict(os.environ) if env is None else env
+    with cross_process_lock(path):
+        _recover_smtp_transaction_unlocked(path)
+        return _load_smtp_settings_unlocked(path, environment)
+
+
+def _smtp_transaction_paths(path: Path) -> tuple[Path, Path, Path]:
+    secret_path = smtp_password_path(path)
+    return (
+        path.with_name(f".{path.name}.transaction"),
+        path.with_name(f".{path.name}.transaction-backup"),
+        secret_path.with_name(f".{secret_path.name}.transaction-backup"),
+    )
+
+
+def _cleanup_smtp_transaction_unlocked(path: Path) -> None:
+    for transaction_path in _smtp_transaction_paths(path):
+        transaction_path.unlink(missing_ok=True)
+
+
+def _recover_smtp_transaction_unlocked(path: Path) -> None:
+    marker, settings_backup, secret_backup = _smtp_transaction_paths(path)
+    if not marker.exists():
+        settings_backup.unlink(missing_ok=True)
+        secret_backup.unlink(missing_ok=True)
+        return
+    try:
+        transaction = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise OSError("Transaction SMTP invalide; récupération impossible.") from error
+    if (
+        not isinstance(transaction, dict)
+        or set(transaction) != {"settingsExisted", "secretExisted"}
+        or not all(isinstance(value, bool) for value in transaction.values())
+    ):
+        raise OSError("Transaction SMTP invalide; récupération impossible.")
+
+    secret_path = smtp_password_path(path)
+    if transaction["settingsExisted"]:
+        if not settings_backup.is_file():
+            raise OSError("Sauvegarde SMTP manquante; récupération impossible.")
+        _atomic_write_private(
+            path, settings_backup.read_text(encoding="utf-8"), 0o640
+        )
+    else:
+        path.unlink(missing_ok=True)
+    if transaction["secretExisted"]:
+        if not secret_backup.is_file():
+            raise OSError("Sauvegarde du secret SMTP manquante; récupération impossible.")
+        _atomic_write_private(
+            secret_path, secret_backup.read_text(encoding="utf-8"), 0o600
+        )
+    else:
+        secret_path.unlink(missing_ok=True)
+    _cleanup_smtp_transaction_unlocked(path)
+
+
+def _begin_smtp_transaction_unlocked(path: Path) -> None:
+    marker, settings_backup, secret_backup = _smtp_transaction_paths(path)
+    _cleanup_smtp_transaction_unlocked(path)
+    settings_existed = path.is_file()
+    secret_path = smtp_password_path(path)
+    secret_existed = secret_path.is_file()
+    try:
+        if settings_existed:
+            _atomic_write_private(
+                settings_backup, path.read_text(encoding="utf-8"), 0o600
+            )
+        if secret_existed:
+            _atomic_write_private(
+                secret_backup, secret_path.read_text(encoding="utf-8"), 0o600
+            )
+        _atomic_write_private(
+            marker,
+            json.dumps(
+                {
+                    "settingsExisted": settings_existed,
+                    "secretExisted": secret_existed,
+                },
+                separators=(",", ":"),
+            )
+            + "\n",
+            0o600,
+        )
+    except BaseException:
+        _cleanup_smtp_transaction_unlocked(path)
+        raise
+
+
+def save_smtp_settings(
+    path: Path,
+    payload: Any,
+    *,
+    password: str | None = None,
+    env: dict[str, str] | None = None,
+) -> SmtpSettings:
+    settings = validate_smtp_settings(payload)
+    environment = dict(os.environ) if env is None else env
+    if password and (
+        len(password.encode("utf-8")) > 4096
+        or any(character in password for character in ("\0", "\r", "\n"))
+    ):
+        raise ValueError("Mot de passe SMTP invalide.")
+    with cross_process_lock(path):
+        _recover_smtp_transaction_unlocked(path)
+        password_to_save = password or ""
+        if password:
+            password_to_save = password
+        elif not path.exists() and not smtp_password_path(path).exists():
+            bootstrap_password, _bootstrap_file, bootstrap_error = _env_secret(
+                environment, "FORTIOS_SMTP_PASSWORD"
+            )
+            if bootstrap_password and not bootstrap_error:
+                password_to_save = bootstrap_password
+        serialized = json.dumps(
+            settings.to_payload(), indent=2, ensure_ascii=False
+        ) + "\n"
+        if password_to_save:
+            _begin_smtp_transaction_unlocked(path)
+            try:
+                _atomic_write_private(
+                    smtp_password_path(path), password_to_save, 0o600
+                )
+                _atomic_write_private(path, serialized, 0o640)
+            except BaseException:
+                _recover_smtp_transaction_unlocked(path)
+                raise
+            _cleanup_smtp_transaction_unlocked(path)
+        else:
+            _atomic_write_private(path, serialized, 0o640)
+    return settings
+
+
+def delete_smtp_password(path: Path) -> None:
+    with cross_process_lock(path):
+        _recover_smtp_transaction_unlocked(path)
+        smtp_password_path(path).unlink(missing_ok=True)
+
+
+def load_smtp_snapshot(
+    env: dict[str, str] | None = None,
+    *,
+    settings: NotificationSettings | None = None,
+    settings_path: Path = DEFAULT_NOTIFICATION_SETTINGS_PATH,
+    smtp_settings_path: Path | None = None,
+) -> tuple[SmtpSettings, EmailConfig]:
+    environment = dict(os.environ) if env is None else env
+    settings = settings or load_notification_settings(settings_path, env=environment)
+    smtp_path = smtp_settings_path or settings_path.with_name(
+        DEFAULT_SMTP_SETTINGS_PATH.name
+    )
+    with cross_process_lock(smtp_path):
+        _recover_smtp_transaction_unlocked(smtp_path)
+        smtp = _load_smtp_settings_unlocked(smtp_path, environment)
+        if smtp.source == "saved":
+            secret_path = smtp_password_path(smtp_path)
+            smtp_password, smtp_password_file, smtp_password_error = _env_secret(
+                {"FORTIOS_SMTP_PASSWORD_FILE": str(secret_path)},
+                "FORTIOS_SMTP_PASSWORD",
+            )
+        else:
+            smtp_password, smtp_password_file, smtp_password_error = _env_secret(
+                environment, "FORTIOS_SMTP_PASSWORD"
+            )
+        config = EmailConfig(
+        enabled=settings.enabled,
+        smtp_host=smtp.host,
+        smtp_port=smtp.port,
+        smtp_username=smtp.username,
+        smtp_password=smtp_password,
+        smtp_from=smtp.sender,
+        smtp_to=settings.recipients,
+        smtp_starttls=smtp.security == "starttls",
+        smtp_timeout=smtp.timeout,
+        app_url=smtp.app_url,
+        smtp_password_file=smtp_password_file,
+        smtp_password_error=smtp_password_error,
+        smtp_security=smtp.security,
+        email_appearance=smtp.email_appearance,
+    )
+    return smtp, config
+
+
 def load_email_config(
     env: dict[str, str] | None = None,
     *,
     settings: NotificationSettings | None = None,
     settings_path: Path = DEFAULT_NOTIFICATION_SETTINGS_PATH,
+    smtp_settings_path: Path | None = None,
 ) -> EmailConfig:
-    environment = dict(os.environ) if env is None else env
-    settings = settings or load_notification_settings(settings_path, env=environment)
-    smtp_password, smtp_password_file, smtp_password_error = _env_secret(
-        environment, "FORTIOS_SMTP_PASSWORD"
+    _smtp, config = load_smtp_snapshot(
+        env,
+        settings=settings,
+        settings_path=settings_path,
+        smtp_settings_path=smtp_settings_path,
     )
-    return EmailConfig(
-        enabled=settings.enabled,
-        smtp_host=(environment.get("FORTIOS_SMTP_HOST") or "").strip(),
-        smtp_port=_env_int(environment, "FORTIOS_SMTP_PORT", 587),
-        smtp_username=(environment.get("FORTIOS_SMTP_USERNAME") or "").strip(),
-        smtp_password=smtp_password,
-        smtp_from=(environment.get("FORTIOS_SMTP_FROM") or "").strip(),
-        smtp_to=settings.recipients,
-        smtp_starttls=_env_bool(environment, "FORTIOS_SMTP_STARTTLS", True),
-        smtp_timeout=_env_int(environment, "FORTIOS_SMTP_TIMEOUT", 10),
-        app_url=(
-            environment.get("FORTIOS_APP_URL") or "https://valdev.me:3001/app/"
-        ).strip(),
-        smtp_password_file=smtp_password_file,
-        smtp_password_error=smtp_password_error,
-    )
+    return config
 
 
 def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
@@ -367,6 +749,19 @@ def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
         "port": config.smtp_port,
         "starttls": config.smtp_starttls,
         "from": config.smtp_from,
+    }
+
+
+def smtp_public_settings(
+    settings: SmtpSettings, config: EmailConfig
+) -> dict[str, Any]:
+    return {
+        **settings.to_payload(),
+        "source": settings.source,
+        "state": "operational" if config.is_complete() else "incomplete",
+        "passwordConfigured": bool(
+            config.smtp_password and not config.smtp_password_error
+        ),
     }
 
 
@@ -1309,8 +1704,58 @@ def _compose_security_html(
     )
 
 
+def _apply_email_appearance(
+    text_body: str,
+    html_body: str,
+    appearance: EmailAppearance,
+) -> tuple[str, str]:
+    text_prefix = [appearance.display_name]
+    if appearance.introduction:
+        text_prefix.extend(("", appearance.introduction))
+    rendered_text = "\n".join(text_prefix) + "\n\n" + text_body
+    if appearance.signature:
+        rendered_text += f"\n\n{appearance.signature}"
+
+    html_header = (
+        "<div style='font-family:Arial,sans-serif;margin:0 auto;max-width:680px;"
+        "padding:20px 20px 0'>"
+        f"<p style='margin:0 0 8px;font-size:18px;font-weight:700'>"
+        f"{html.escape(appearance.display_name)}</p>"
+    )
+    if appearance.introduction:
+        html_header += (
+            f"<p style='margin:0'>{html.escape(appearance.introduction)}</p>"
+        )
+    html_header += "</div>"
+    html_footer = ""
+    if appearance.signature:
+        html_footer = (
+            "<div style='font-family:Arial,sans-serif;margin:0 auto;max-width:680px;"
+            "padding:0 20px 20px'>"
+            f"<p style='margin:0'>{html.escape(appearance.signature)}</p></div>"
+        )
+    body_position = html_body.find("<body")
+    body_open_end = html_body.find(">", body_position)
+    if body_position >= 0 and body_open_end >= 0:
+        rendered_html = (
+            html_body[: body_open_end + 1]
+            + html_header
+            + html_body[body_open_end + 1 :]
+        )
+        rendered_html = rendered_html.replace(
+            "</body>", html_footer + "</body>", 1
+        )
+    else:
+        rendered_html = html_header + html_body + html_footer
+    return rendered_text, rendered_html
+
+
 def compose_email(
-    events: list[NotificationEvent], *, app_url: str, run_timestamp: str
+    events: list[NotificationEvent],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    appearance: EmailAppearance | None = None,
 ) -> tuple[str, str, str] | None:
     """Folds every event from a single run into one synthetic email (never one email per
     event, to avoid spamming) -- returns None if there's nothing to report.
@@ -1342,6 +1787,10 @@ def compose_email(
             run_timestamp=run_timestamp,
             other_events=non_security,
         )
+        if appearance is not None:
+            text_body, html_body = _apply_email_appearance(
+                text_body, html_body, appearance
+            )
         return subject, text_body, html_body
     if critical:
         subject = f"[FortiOS Upgrade Intelligence] {len(critical)} nouvelle(s) CVE critique(s)"
@@ -1374,6 +1823,10 @@ def compose_email(
         "<!doctype html><html><body><pre style='font-family:Arial,sans-serif;white-space:pre-wrap'>"
         f"{html.escape(text_body)}</pre></body></html>"
     )
+    if appearance is not None:
+        text_body, html_body = _apply_email_appearance(
+            text_body, html_body, appearance
+        )
     return subject, text_body, html_body
 
 
@@ -1381,6 +1834,7 @@ def compose_email(
 class SmtpResult:
     sent: bool
     message: str
+    checks: tuple[str, ...] = ()
 
 
 def send_email_result(
@@ -1408,6 +1862,11 @@ def send_email_result(
         )
         return SmtpResult(False, "Configuration SMTP incomplète.")
 
+    checks: list[str] = []
+    stage = "message"
+    security = config.smtp_security or (
+        "starttls" if config.smtp_starttls else "none"
+    )
     try:
         message = EmailMessage()
         message["Subject"] = subject
@@ -1417,30 +1876,71 @@ def send_email_result(
         if html_body:
             message.add_alternative(html_body, subtype="html")
 
-        with smtplib.SMTP(
-            config.smtp_host, config.smtp_port, timeout=config.smtp_timeout
-        ) as client:
-            if config.smtp_starttls:
+        stage = "connection"
+        if security == "tls":
+            smtp_client = smtplib.SMTP_SSL(
+                config.smtp_host,
+                config.smtp_port,
+                timeout=config.smtp_timeout,
+                context=ssl.create_default_context(),
+            )
+        else:
+            smtp_client = smtplib.SMTP(
+                config.smtp_host, config.smtp_port, timeout=config.smtp_timeout
+            )
+        checks.extend(("Résolution DNS", "Connexion TCP"))
+        with smtp_client as client:
+            if security == "tls":
+                checks.append("TLS implicite")
+            elif security == "starttls":
+                stage = "starttls"
                 client.starttls(context=ssl.create_default_context())
+                checks.append("STARTTLS")
+            else:
+                checks.append("Sans chiffrement explicitement autorisé")
             if config.smtp_username:
+                stage = "authentication"
                 client.login(config.smtp_username, config.smtp_password)
+                checks.append("Authentification")
+            else:
+                checks.append("Authentification non requise")
+            stage = "delivery"
             client.send_message(message)
-        return SmtpResult(True, "Email envoyé.")
-    except smtplib.SMTPAuthenticationError as error:
+            checks.extend(
+                (
+                    "Expéditeur et destinataire acceptés",
+                    "Message accepté par le serveur SMTP",
+                )
+            )
+        return SmtpResult(True, "Email envoyé.", tuple(checks))
+    except (
+        smtplib.SMTPException,
+        ConnectionError,
+        TimeoutError,
+        OSError,
+        ValueError,
+    ) as error:
         sys.stderr.write(
-            f"Échec de l'envoi de l'email de notification : {sanitize_health_error(error)}\n"
+            "Échec de l'envoi de l'email de notification : "
+            f"étape={stage}, type={type(error).__name__}.\n"
         )
-        return SmtpResult(False, "Authentification SMTP refusée.")
-    except (ConnectionError, TimeoutError, OSError) as error:
-        sys.stderr.write(
-            f"Échec de l'envoi de l'email de notification : {sanitize_health_error(error)}\n"
-        )
-        return SmtpResult(False, "Connexion SMTP impossible.")
-    except (smtplib.SMTPException, ValueError) as error:
-        sys.stderr.write(
-            f"Échec de l'envoi de l'email de notification : {sanitize_health_error(error)}\n"
-        )
-        return SmtpResult(False, "Envoi SMTP impossible.")
+        if isinstance(error, smtplib.SMTPAuthenticationError):
+            message = "Authentification SMTP refusée."
+        elif isinstance(error, smtplib.SMTPSenderRefused):
+            message = "Expéditeur refusé par le serveur SMTP."
+        elif isinstance(error, smtplib.SMTPRecipientsRefused):
+            message = "Destinataire refusé par le serveur SMTP."
+        elif stage == "starttls":
+            message = "Négociation STARTTLS impossible."
+        elif isinstance(error, ssl.SSLError):
+            message = "Certificat TLS SMTP invalide."
+        elif isinstance(error, TimeoutError):
+            message = "Connexion SMTP expirée."
+        elif stage == "connection":
+            message = "Connexion SMTP impossible."
+        else:
+            message = "Envoi SMTP impossible."
+        return SmtpResult(False, message, tuple(checks))
 
 
 def send_email(
@@ -1452,16 +1952,59 @@ def send_email(
     return send_email_result(config, subject, text_body, html_body).sent
 
 
-def send_test_email_result(config: EmailConfig) -> SmtpResult:
-    subject = "[FortiUpgrade] Email de test"
-    body = (
-        "Ceci est un email de test envoyé depuis l’administration FortiUpgrade.\n"
-        "Si vous le recevez, la configuration SMTP est fonctionnelle.\n\n"
-        f"Application : {config.app_url}\n"
+def send_test_email_result(
+    config: EmailConfig,
+    *,
+    recipient: str | None = None,
+    appearance: EmailAppearance | None = None,
+) -> SmtpResult:
+    if recipient is not None:
+        normalized_recipient = recipient.strip()
+        if not _EMAIL_ADDRESS_RE.fullmatch(normalized_recipient):
+            return SmtpResult(False, "Destinataire de test invalide.")
+        config = replace(config, smtp_to=(normalized_recipient,))
+    appearance = appearance or _default_email_appearance()
+    subject = "[FortiUpgrade][TEST] Validation SMTP"
+    text_parts = [appearance.display_name]
+    if appearance.introduction:
+        text_parts.extend(("", appearance.introduction))
+    text_parts.extend(
+        (
+            "",
+            "Ceci est un email de test envoyé depuis l’administration FortiUpgrade.",
+            "Il ne correspond à aucune alerte de sécurité.",
+            "",
+            f"Application : {config.app_url}",
+        )
     )
-    result = send_email_result(config, subject, body, force=True)
+    if appearance.signature:
+        text_parts.extend(("", appearance.signature))
+    body = "\n".join(text_parts) + "\n"
+    html_parts = [
+        "<!doctype html><html><body>",
+        f"<h1>{html.escape(appearance.display_name)}</h1>",
+    ]
+    if appearance.introduction:
+        html_parts.append(f"<p>{html.escape(appearance.introduction)}</p>")
+    html_parts.extend(
+        (
+            "<p><strong>Email de test FortiUpgrade.</strong><br>",
+            "Il ne correspond à aucune alerte de sécurité.</p>",
+            f"<p>Application : {html.escape(config.app_url)}</p>",
+        )
+    )
+    if appearance.signature:
+        html_parts.append(f"<p>{html.escape(appearance.signature)}</p>")
+    html_parts.append("</body></html>")
+    result = send_email_result(
+        config,
+        subject,
+        body,
+        "".join(html_parts),
+        force=True,
+    )
     if result.sent:
-        return SmtpResult(True, "Email de test envoyé.")
+        return SmtpResult(True, "Email de test envoyé.", result.checks)
     return result
 
 

@@ -155,11 +155,12 @@
           </div>
         </div>
 
-        <form id="notifications-form" class="notifications-grid">
-          <section class="panel settings-panel">
+        <div class="notifications-grid">
+          <form id="notifications-form" class="panel settings-panel">
             <div class="panel-header result-heading">
               <div>
-                <h3 class="panel-title">Notifications CVE</h3>
+                <p class="eyebrow">Préférences</p>
+                <h3 class="panel-title">Alertes CVE</h3>
                 <p class="panel-copy">Maximum un email de sécurité par collecte.</p>
               </div>
               <label class="switch-control"><input id="notifications-enabled" type="checkbox"><span>ON</span></label>
@@ -169,45 +170,159 @@
                 <label for="minimum-severity">Sévérité minimale</label>
                 <select id="minimum-severity"><option value="high">High</option></select>
               </div>
-              <fieldset class="product-fieldset">
-                <legend>Produits surveillés</legend>
-                <label><input id="product-fortigate-fortios" type="checkbox"> FortiGate / FortiOS</label>
-                <label><input id="product-fortimanager" type="checkbox"> FortiManager</label>
-                <label><input id="product-fortianalyzer" type="checkbox"> FortiAnalyzer</label>
-                <label><input id="product-forticlient-ems" type="checkbox"> FortiClient EMS</label>
-                <label><input id="product-forticlient-windows" type="checkbox"> FortiClient Windows</label>
-                <label><input id="product-forticlient-macos" type="checkbox"> FortiClient macOS</label>
-                <label><input id="product-forticlient-linux" type="checkbox"> FortiClient Linux</label>
-              </fieldset>
-              <div class="recipient-block">
+              <section class="form-section" aria-labelledby="products-heading">
+                <h3 id="products-heading">Produits surveillés</h3>
+                <fieldset class="product-fieldset">
+                  <legend class="sr-only">Sélection des produits surveillés</legend>
+                  <label><input id="product-fortigate-fortios" type="checkbox"> FortiGate / FortiOS</label>
+                  <label><input id="product-fortimanager" type="checkbox"> FortiManager</label>
+                  <label><input id="product-fortianalyzer" type="checkbox"> FortiAnalyzer</label>
+                  <label><input id="product-forticlient-ems" type="checkbox"> FortiClient EMS</label>
+                  <label><input id="product-forticlient-windows" type="checkbox"> FortiClient Windows</label>
+                  <label><input id="product-forticlient-macos" type="checkbox"> FortiClient macOS</label>
+                  <label><input id="product-forticlient-linux" type="checkbox"> FortiClient Linux</label>
+                </fieldset>
+              </section>
+              <section class="form-section recipient-block" aria-labelledby="recipients-heading">
                 <div class="recipient-heading">
-                  <strong>Destinataires</strong>
+                  <h3 id="recipients-heading">Destinataires</h3>
                   <button class="btn" id="add-recipient-button" type="button">+ Ajouter un destinataire</button>
                 </div>
                 <div id="recipient-list"></div>
-              </div>
-              <button class="btn primary" id="save-notifications-button" type="submit">Enregistrer</button>
+              </section>
+              <button class="btn primary" id="save-notifications-button" type="submit">Enregistrer les alertes</button>
               <p class="form-message" id="notifications-message" role="alert"></p>
             </div>
-          </section>
+          </form>
 
-          <aside class="panel smtp-panel">
-            <div class="panel-header">
-              <p class="eyebrow">Infrastructure</p>
-              <h3 class="panel-title">Configuration SMTP</h3>
+          <form id="smtp-form" class="email-settings-stack">
+            <section class="panel smtp-panel">
+              <div class="panel-header result-heading">
+                <div>
+                  <p class="eyebrow">Infrastructure email</p>
+                  <h3 class="panel-title">Configuration SMTP</h3>
+                </div>
+                <p class="smtp-status"><span class="status-dot neutral" id="smtp-status-dot" aria-hidden="true"></span><strong id="smtp-status-label">Chargement…</strong></p>
+              </div>
+              <div class="panel-body">
+                <div class="compact-field-grid">
+                  <div class="field field-wide">
+                    <label for="smtp-host">Serveur SMTP</label>
+                    <input id="smtp-host" required maxlength="253" placeholder="smtp.example.tld" autocomplete="off">
+                  </div>
+                  <div class="field">
+                    <label for="smtp-port">Port</label>
+                    <input id="smtp-port" type="number" required min="1" max="65535" inputmode="numeric">
+                  </div>
+                  <div class="field">
+                    <label for="smtp-security">Sécurité</label>
+                    <select id="smtp-security" required>
+                      <option value="starttls">STARTTLS</option>
+                      <option value="tls">TLS implicite</option>
+                      <option value="none">Sans chiffrement</option>
+                    </select>
+                  </div>
+                  <label class="insecure-confirmation field-wide" id="smtp-insecure-confirmation" hidden>
+                    <input id="smtp-allow-insecure" type="checkbox">
+                    J’autorise explicitement une connexion SMTP sans chiffrement.
+                  </label>
+                  <div class="field field-wide">
+                    <label for="smtp-username">Utilisateur</label>
+                    <input id="smtp-username" maxlength="320" autocomplete="username">
+                  </div>
+                </div>
+                <div class="secret-control">
+                  <div>
+                    <strong>Mot de passe</strong>
+                    <p id="smtp-password-status">Non configuré</p>
+                  </div>
+                  <div class="secret-actions">
+                    <button class="btn" id="replace-smtp-password-button" type="button">Définir le mot de passe</button>
+                    <button class="btn recipient-remove" id="delete-smtp-password-button" type="button" hidden>Supprimer le mot de passe</button>
+                  </div>
+                </div>
+                <div class="field" id="smtp-password-field" hidden>
+                  <label for="smtp-password">Nouveau mot de passe SMTP</label>
+                  <input id="smtp-password" type="password" autocomplete="new-password" maxlength="4096">
+                  <span class="field-help">Laisser vide conserve le secret actuel.</span>
+                </div>
+                <div class="field">
+                  <label for="smtp-from-address">Expéditeur</label>
+                  <input id="smtp-from-address" type="email" required maxlength="254" placeholder="fortiupgrade@example.tld">
+                </div>
+                <div class="field">
+                  <label for="smtp-app-url">URL FortiUpgrade</label>
+                  <input id="smtp-app-url" type="url" required maxlength="2048" placeholder="https://fortiupgrade.example.tld/app/">
+                </div>
+                <details id="smtp-advanced-options" class="advanced-options">
+                  <summary>Options avancées</summary>
+                  <div class="field">
+                    <label for="smtp-timeout">Timeout (secondes)</label>
+                    <input id="smtp-timeout" type="number" required min="1" max="120" inputmode="numeric">
+                  </div>
+                </details>
+              </div>
+            </section>
+
+            <section class="panel appearance-panel">
+              <div class="panel-header">
+                <p class="eyebrow">Personnalisation encadrée</p>
+                <h3 class="panel-title">Apparence des emails</h3>
+                <p class="panel-copy">Le détail des CVE, produits, versions et liens reste généré automatiquement.</p>
+              </div>
+              <div class="panel-body">
+                <div class="field">
+                  <label for="email-display-name">Nom affiché / titre</label>
+                  <input id="email-display-name" required maxlength="100">
+                </div>
+                <div class="field">
+                  <label for="email-introduction">Introduction</label>
+                  <textarea id="email-introduction" maxlength="2000" rows="3"></textarea>
+                </div>
+                <div class="field">
+                  <label for="email-signature">Signature / pied de mail</label>
+                  <textarea id="email-signature" maxlength="2000" rows="3"></textarea>
+                </div>
+                <button class="btn" id="preview-email-button" type="button">Actualiser l’aperçu</button>
+                <article class="email-preview" id="email-preview" aria-label="Aperçu email">
+                  <strong id="email-preview-title">FortiUpgrade</strong>
+                  <p id="email-preview-introduction"></p>
+                  <div class="preview-security-content">
+                    <span class="status-badge failure">Critical</span>
+                    <strong>CVE-2026-00000 · FortiOS</strong>
+                    <span>Versions affectées · Résumé · Lien PSIRT</span>
+                  </div>
+                  <p id="email-preview-signature"></p>
+                </article>
+                <button class="btn primary" id="save-smtp-button" type="submit">Enregistrer la configuration email</button>
+                <p class="form-message" id="smtp-message" role="alert"></p>
+              </div>
+            </section>
+          </form>
+        </div>
+
+        <section class="panel test-email-panel" aria-labelledby="test-email-heading">
+          <div class="panel-header">
+            <p class="eyebrow">Validation contrôlée</p>
+            <h3 class="panel-title" id="test-email-heading">Test d’envoi</h3>
+            <p class="panel-copy">Le test utilise la dernière configuration enregistrée et ne crée aucun événement CVE.</p>
+          </div>
+          <div class="panel-body test-email-layout">
+            <div class="field">
+              <label for="test-email-recipient">Destinataire de test</label>
+              <input id="test-email-recipient" type="email" required maxlength="254" placeholder="security@example.com">
             </div>
-            <div class="panel-body">
-              <p class="smtp-status"><span class="status-dot neutral" id="smtp-status-dot" aria-hidden="true"></span><strong id="smtp-status-label">Chargement…</strong></p>
-              <dl class="smtp-details">
-                <div><dt>Serveur</dt><dd id="smtp-endpoint">—</dd></div>
-                <div><dt>Sécurité</dt><dd id="smtp-mode">—</dd></div>
-                <div><dt>Expéditeur</dt><dd id="smtp-from">—</dd></div>
-              </dl>
-              <button class="btn" id="test-email-button" type="button">Envoyer un email de test</button>
-              <p class="form-message" id="test-email-message" role="alert"></p>
-            </div>
-          </aside>
-        </form>
+            <dl class="smtp-details test-summary" aria-label="Résumé du test SMTP">
+              <div><dt>SMTP</dt><dd id="test-smtp-endpoint">Non configuré</dd></div>
+              <div><dt>Sécurité</dt><dd id="test-smtp-security">—</dd></div>
+              <div><dt>Expéditeur</dt><dd id="test-smtp-from">Non configuré</dd></div>
+              <div><dt>Destinataire</dt><dd id="test-smtp-recipient">—</dd></div>
+            </dl>
+            <button class="btn primary" id="test-email-button" type="button">Envoyer un email de test</button>
+            <ul class="smtp-checks" id="smtp-test-checks" aria-live="polite"></ul>
+            <p class="form-message" id="test-email-message" role="alert"></p>
+          </div>
+        </section>
       </section>
     </section>
   </main>
