@@ -26,7 +26,6 @@ from typing import Any
 
 import certctl
 import fortios_notify
-from cert_helper_protocol import HelperError, install_via_helper
 from cert_admin import (
     DEFAULT_CREDENTIALS,
     MAX_PASSWORD_LENGTH,
@@ -35,6 +34,7 @@ from cert_admin import (
     credential_lock,
     credentials_revision,
 )
+from cert_helper_protocol import HelperError, install_via_helper
 from cert_web import (
     AdminSession,
     LoginRateLimiter,

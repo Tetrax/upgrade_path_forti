@@ -112,7 +112,7 @@ class CertificateInstallProcessor:
         summary = install_uploaded_certificate(payload, self.hostname, self.output_dir)
         try:
             self.reload_callback()
-        except Exception as activation_error:
+        except Exception:
             owner = certctl.configured_runtime_owner()
             runtime_gid = owner[1] if owner is not None else None
             with certctl.certificate_directory_lock(
@@ -133,7 +133,7 @@ class CertificateInstallProcessor:
                 raise RuntimeError(
                     "Échec du rechargement Nginx et du rechargement après rollback."
                 ) from rollback_error
-            raise activation_error
+            raise
         return summary
 
     def process(self, message: dict[str, Any], *, peer_uid: int, peer_gid: int) -> dict[str, Any]:

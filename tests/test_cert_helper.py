@@ -211,9 +211,11 @@ class CertificateHelperServiceTests(unittest.TestCase):
             ["/usr/sbin/nginx", "-t"],
             stderr=b"sensitive host path",
         )
-        with mock.patch.object(helper.subprocess, "run", side_effect=failure):
-            with self.assertRaises(helper.CertificateReloadError) as raised:
-                helper.NginxReloader()()
+        with (
+            mock.patch.object(helper.subprocess, "run", side_effect=failure),
+            self.assertRaises(helper.CertificateReloadError) as raised,
+        ):
+            helper.NginxReloader()()
 
         self.assertIn("rechargement Nginx", str(raised.exception))
         self.assertNotIn("sensitive host path", str(raised.exception))
