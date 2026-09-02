@@ -410,6 +410,29 @@ def _default_email_appearance() -> EmailAppearance:
     )
 
 
+def validate_email_appearance(payload: Any) -> EmailAppearance:
+    if not isinstance(payload, dict) or set(payload) != {
+        "displayName",
+        "introduction",
+        "signature",
+    }:
+        raise ValueError("Apparence des emails invalide.")
+    if any(
+        not isinstance(payload[key], str)
+        for key in ("displayName", "introduction", "signature")
+    ):
+        raise TypeError("Les champs d'apparence doivent être des chaînes.")
+    if not payload["displayName"].strip() or len(payload["displayName"]) > 100:
+        raise ValueError("Nom affiché invalide.")
+    if len(payload["introduction"]) > 2000 or len(payload["signature"]) > 2000:
+        raise ValueError("Le contenu personnalisé des emails est trop long.")
+    return EmailAppearance(
+        display_name=payload["displayName"].strip(),
+        introduction=payload["introduction"].strip(),
+        signature=payload["signature"].strip(),
+    )
+
+
 def validate_smtp_settings(payload: Any, *, source: str = "saved") -> SmtpSettings:
     expected = {
         "host",
@@ -424,18 +447,9 @@ def validate_smtp_settings(payload: Any, *, source: str = "saved") -> SmtpSettin
     }
     if not isinstance(payload, dict) or set(payload) != expected:
         raise ValueError("Configuration SMTP invalide.")
-    appearance = payload["emailAppearance"]
-    if not isinstance(appearance, dict) or set(appearance) != {
-        "displayName",
-        "introduction",
-        "signature",
-    }:
-        raise ValueError("Apparence des emails invalide.")
+    appearance = validate_email_appearance(payload["emailAppearance"])
     string_fields = ("host", "security", "username", "from", "appUrl")
-    appearance_fields = ("displayName", "introduction", "signature")
-    if any(not isinstance(payload[key], str) for key in string_fields) or any(
-        not isinstance(appearance[key], str) for key in appearance_fields
-    ):
+    if any(not isinstance(payload[key], str) for key in string_fields):
         raise TypeError("Les champs SMTP textuels doivent être des chaînes.")
     if not isinstance(payload["port"], int) or isinstance(payload["port"], bool):
         raise TypeError("Le port SMTP doit être un entier.")
@@ -471,10 +485,6 @@ def validate_smtp_settings(payload: Any, *, source: str = "saved") -> SmtpSettin
         or parsed_app_url.password is not None
     ):
         raise ValueError("URL FortiUpgrade invalide.")
-    if not appearance["displayName"].strip() or len(appearance["displayName"]) > 100:
-        raise ValueError("Nom affiché invalide.")
-    if len(appearance["introduction"]) > 2000 or len(appearance["signature"]) > 2000:
-        raise ValueError("Le contenu personnalisé des emails est trop long.")
     username = payload["username"].strip()
     if len(username) > 320 or any(character in username for character in ("\0", "\r", "\n")):
         raise ValueError("Utilisateur SMTP invalide.")
@@ -487,11 +497,7 @@ def validate_smtp_settings(payload: Any, *, source: str = "saved") -> SmtpSettin
         sender=sender,
         app_url=payload["appUrl"].strip(),
         timeout=payload["timeout"],
-        email_appearance=EmailAppearance(
-            display_name=appearance["displayName"].strip(),
-            introduction=appearance["introduction"].strip(),
-            signature=appearance["signature"].strip(),
-        ),
+        email_appearance=appearance,
         source=source,
     )
 
@@ -726,6 +732,25 @@ def load_smtp_snapshot(
     return smtp, config
 
 
+def load_smtp_preview_snapshot(
+    env: dict[str, str] | None = None,
+    *,
+    smtp_settings_path: Path = DEFAULT_SMTP_SETTINGS_PATH,
+) -> tuple[SmtpSettings, EmailConfig]:
+    """Load SMTP transport without reading or repairing functional notification state."""
+    preview_settings = NotificationSettings(
+        enabled=False,
+        minimum_severity="high",
+        products={},
+        recipients=(),
+    )
+    return load_smtp_snapshot(
+        env,
+        settings=preview_settings,
+        smtp_settings_path=smtp_settings_path,
+    )
+
+
 def load_email_config(
     env: dict[str, str] | None = None,
     *,
@@ -755,10 +780,12 @@ def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
 def smtp_public_settings(
     settings: SmtpSettings, config: EmailConfig
 ) -> dict[str, Any]:
+    preview_config = replace(config, smtp_to=("preview@example.invalid",))
     return {
         **settings.to_payload(),
         "source": settings.source,
         "state": "operational" if config.is_complete() else "incomplete",
+        "previewSendReady": preview_config.is_complete(),
         "passwordConfigured": bool(
             config.smtp_password and not config.smtp_password_error
         ),
@@ -1830,6 +1857,101 @@ def compose_email(
     return subject, text_body, html_body
 
 
+EMAIL_PREVIEW_SCENARIOS = frozenset({"single", "multiple", "multi-product"})
+
+
+def build_email_preview_events(scenario: str) -> list[NotificationEvent]:
+    """Build explicit, synthetic CVE fixtures in memory for the admin preview only."""
+    if not isinstance(scenario, str) or scenario not in EMAIL_PREVIEW_SCENARIOS:
+        raise ValueError("Scénario d'aperçu invalide.")
+
+    fortios_branches = [
+        {"product": "fortigate-fortios", "branch": "7.0"},
+        {"product": "fortigate-fortios", "branch": "7.2"},
+    ]
+    cve_one_affected = list(fortios_branches)
+    if scenario == "multi-product":
+        cve_one_affected.append({"product": "fortimanager", "branch": "7.4"})
+
+    cves: list[dict[str, Any]] = [
+        {
+            "id": "CVE-2026-00001",
+            "severity": "critical",
+            "cvssScore": 9.8,
+            "title": "Exemple fictif de vulnérabilité critique Fortinet.",
+            "url": "https://www.fortiguard.com/psirt/CVE-2026-00001",
+            "affected": cve_one_affected,
+        }
+    ]
+    if scenario != "single":
+        cves.extend(
+            [
+                {
+                    "id": "CVE-2026-00002",
+                    "severity": "high",
+                    "cvssScore": 8.1,
+                    "title": "Exemple fictif de vulnérabilité High Fortinet.",
+                    "url": "https://www.fortiguard.com/psirt/CVE-2026-00002",
+                    "affected": [
+                        (
+                            {
+                                "product": "forticlient",
+                                "models": ["windows"],
+                                "branch": "7.4",
+                            }
+                            if scenario == "multi-product"
+                            else {"product": "fortigate-fortios", "branch": "7.4"}
+                        )
+                    ],
+                },
+                {
+                    "id": "CVE-2026-00003",
+                    "severity": "high",
+                    "cvssScore": 7.5,
+                    "title": "Exemple fictif de vulnérabilité High multi-branche.",
+                    "url": "https://www.fortiguard.com/psirt/CVE-2026-00003",
+                    "affected": (
+                        [
+                            {"product": "fortianalyzer", "branch": "7.2"},
+                            {"product": "fortigate-fortios", "branch": "7.6"},
+                        ]
+                        if scenario == "multi-product"
+                        else [{"product": "fortigate-fortios", "branch": "7.6"}]
+                    ),
+                },
+            ]
+        )
+    return derive_new_cve_events(cves)
+
+
+def compose_email_preview(
+    scenario: str,
+    *,
+    app_url: str,
+    run_timestamp: str,
+    appearance: EmailAppearance,
+) -> dict[str, str]:
+    """Render a synthetic scenario exclusively through the production email composer."""
+    if not _is_valid_notify_timestamp(run_timestamp):
+        raise ValueError("Horodatage d'aperçu invalide.")
+    composed = compose_email(
+        build_email_preview_events(scenario),
+        app_url=app_url,
+        run_timestamp=run_timestamp,
+        appearance=appearance,
+    )
+    if composed is None:  # Defensive invariant: every supported scenario contains events.
+        raise ValueError("Le scénario d'aperçu ne contient aucun événement.")
+    subject, text_body, html_body = composed
+    return {
+        "scenario": scenario,
+        "runTimestamp": run_timestamp,
+        "subject": subject,
+        "text": text_body,
+        "html": html_body,
+    }
+
+
 @dataclass(frozen=True)
 class SmtpResult:
     sent: bool
@@ -1952,6 +2074,33 @@ def send_email(
     return send_email_result(config, subject, text_body, html_body).sent
 
 
+def _config_for_test_recipient(config: EmailConfig, recipient: str) -> EmailConfig | None:
+    if not isinstance(recipient, str):
+        return None
+    normalized_recipient = recipient.strip()
+    if not _EMAIL_ADDRESS_RE.fullmatch(normalized_recipient):
+        return None
+    return replace(config, smtp_to=(normalized_recipient,))
+
+
+def send_email_preview_result(
+    config: EmailConfig,
+    preview: dict[str, str],
+    *,
+    recipient: str,
+) -> SmtpResult:
+    preview_config = _config_for_test_recipient(config, recipient)
+    if preview_config is None:
+        return SmtpResult(False, "Destinataire de test invalide.")
+    return send_email_result(
+        preview_config,
+        preview["subject"],
+        preview["text"],
+        preview["html"],
+        force=True,
+    )
+
+
 def send_test_email_result(
     config: EmailConfig,
     *,
@@ -1959,10 +2108,10 @@ def send_test_email_result(
     appearance: EmailAppearance | None = None,
 ) -> SmtpResult:
     if recipient is not None:
-        normalized_recipient = recipient.strip()
-        if not _EMAIL_ADDRESS_RE.fullmatch(normalized_recipient):
+        recipient_config = _config_for_test_recipient(config, recipient)
+        if recipient_config is None:
             return SmtpResult(False, "Destinataire de test invalide.")
-        config = replace(config, smtp_to=(normalized_recipient,))
+        config = recipient_config
     appearance = appearance or _default_email_appearance()
     subject = "[FortiUpgrade][TEST] Validation SMTP"
     text_parts = [appearance.display_name]

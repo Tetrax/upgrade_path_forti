@@ -767,6 +767,92 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             extra_headers={"Cache-Control": "no-store"},
         )
 
+    @staticmethod
+    def compose_notification_email_preview(
+        payload: dict[str, Any], *, app_url: str, run_timestamp: str
+    ) -> dict[str, str]:
+        if set(payload) != {"scenario", "appearance"}:
+            raise ValueError("Paramètres d'aperçu invalides.")
+        return fortios_notify.compose_email_preview(
+            payload["scenario"],
+            app_url=app_url or "/app/",
+            run_timestamp=run_timestamp,
+            appearance=fortios_notify.validate_email_appearance(payload["appearance"]),
+        )
+
+    def handle_notification_email_preview(self) -> None:
+        if self.require_admin_session(csrf=False) is None:
+            return
+        try:
+            payload = self.read_json_body(max_bytes=16 * 1024)
+            smtp_settings = fortios_notify.load_smtp_settings(SMTP_SETTINGS_PATH)
+            preview = self.compose_notification_email_preview(
+                payload,
+                app_url=smtp_settings.app_url,
+                run_timestamp=utc_now(),
+            )
+        except (TypeError, ValueError, OSError) as error:
+            self.write_json_response(
+                {"error": str(error)[:500]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(preview, extra_headers={"Cache-Control": "no-store"})
+
+    def handle_notification_email_preview_send(self) -> None:
+        if self.require_admin_session(csrf=True) is None:
+            return
+        session_id = self.cert_session_id()
+        if session_id is None or not self.cert_test_email_limiter.try_record(session_id):
+            self.write_json_response(
+                {"error": "Limite de trois emails de test par minute atteinte."},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        try:
+            payload = self.read_json_body(max_bytes=16 * 1024)
+            if set(payload) != {"scenario", "appearance", "runTimestamp", "recipient"}:
+                raise ValueError("Paramètres d'envoi de l'aperçu invalides.")
+            recipient = payload["recipient"]
+            if not isinstance(recipient, str):
+                raise TypeError("Destinataire de test invalide.")
+            _smtp_settings, config = fortios_notify.load_smtp_preview_snapshot(
+                smtp_settings_path=SMTP_SETTINGS_PATH,
+            )
+            preview = self.compose_notification_email_preview(
+                {"scenario": payload["scenario"], "appearance": payload["appearance"]},
+                app_url=config.app_url,
+                run_timestamp=payload["runTimestamp"],
+            )
+            result = fortios_notify.send_email_preview_result(
+                config,
+                preview,
+                recipient=recipient,
+            )
+        except (TypeError, ValueError, OSError) as error:
+            self.write_json_response(
+                {"error": str(error)[:500]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            {
+                "sent": result.sent,
+                "message": "Aperçu email envoyé." if result.sent else result.message,
+                "checks": list(result.checks),
+                "summary": {
+                    "recipient": recipient.strip(),
+                    "subject": preview["subject"],
+                    "scenario": preview["scenario"],
+                },
+            },
+            HTTPStatus.OK if result.sent else HTTPStatus.SERVICE_UNAVAILABLE,
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
     def handle_notification_test_email(self) -> None:
         if self.require_admin_session(csrf=True) is None:
             return
@@ -929,6 +1015,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_smtp_settings_write()
             elif self.path == "/api/cert/notifications/test":
                 self.handle_notification_test_email()
+            elif self.path == "/api/cert/notifications/preview":
+                self.handle_notification_email_preview()
+            elif self.path == "/api/cert/notifications/send-preview":
+                self.handle_notification_email_preview_send()
             elif self.path in ("/api/cert/validate", "/api/cert/install"):
                 self.handle_cert_upload(install=self.path.endswith("/install"))
             else:

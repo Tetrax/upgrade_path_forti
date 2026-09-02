@@ -395,6 +395,112 @@ def test_notifications_admin_exposes_grouped_smtp_and_email_appearance(page, for
     expect(page.locator("#smtp-password")).to_have_value("")
 
 
+def test_email_preview_scenarios_display_the_backend_subject_html_and_text(page, fortios_server):
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    scenario_buttons = page.locator("[data-preview-scenario]")
+    expect(scenario_buttons).to_have_count(3)
+    expect(page.locator("#send-preview-email-button")).to_have_text(
+        "Envoyer cet aperçu par email"
+    )
+
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/notifications/preview")
+    ) as preview_response:
+        page.click('[data-preview-scenario="multi-product"]')
+    preview = preview_response.value.json()
+
+    expect(page.locator("#email-preview-subject")).to_have_text(preview["subject"])
+    expect(page.locator("#email-preview-text")).to_have_text(preview["text"])
+    assert page.locator("#email-preview-frame").get_attribute("srcdoc") == preview["html"]
+    for expected in (
+        "Critical : 1",
+        "High     : 2",
+        "FortiGate / FortiOS : 2",
+        "FortiManager : 1",
+        "FortiAnalyzer : 1",
+        "FortiClient Windows : 1",
+    ):
+        expect(page.locator("#email-preview-text")).to_contain_text(expected)
+    expect(page.locator("#email-preview-text")).to_contain_text(
+        "CRITICAL — CVE-2026-00001"
+    )
+
+
+def test_email_preview_refresh_applies_live_appearance_and_stays_mobile_safe(page, fortios_server):
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+    page.fill("#email-display-name", "FortiUpgrade Mobile SOC")
+    page.fill("#email-introduction", "Introduction live.")
+    page.fill("#email-signature", "Signature live.")
+
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/notifications/preview")
+    ) as preview_response:
+        page.click("#preview-email-button")
+    preview = preview_response.value.json()
+
+    expect(page.locator("#email-preview-text")).to_contain_text(
+        "FortiUpgrade Mobile SOC"
+    )
+    assert "Introduction live." in preview["html"]
+    assert "Signature live." in preview["html"]
+
+    page.set_viewport_size({"width": 375, "height": 812})
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
+    assert page.locator("#email-preview-frame").evaluate(
+        "element => element.getBoundingClientRect().width <= element.parentElement.getBoundingClientRect().width"
+    )
+
+
+def test_email_preview_ignores_stale_responses_after_rapid_scenario_changes(
+    page, fortios_server
+):
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+    expect(page.locator("#email-preview-message")).to_have_text(
+        "Aperçu généré par le renderer réel."
+    )
+    page.evaluate(
+        """
+        originalFetch => {
+          window.__previewOriginalFetch = window.fetch.bind(window);
+          window.fetch = async (url, options) => {
+            if (String(url).endsWith('/api/cert/notifications/preview')) {
+              const scenario = JSON.parse(options.body).scenario;
+              if (scenario === 'multiple') {
+                await new Promise(resolve => setTimeout(resolve, 250));
+              }
+            }
+            return window.__previewOriginalFetch(url, options);
+          };
+        }
+        """,
+        None,
+    )
+
+    page.evaluate(
+        """
+        () => {
+          document.querySelector('[data-preview-scenario="multiple"]').click();
+          document.querySelector('[data-preview-scenario="multi-product"]').click();
+        }
+        """
+    )
+    page.wait_for_timeout(500)
+
+    expect(page.locator('[data-preview-scenario="multi-product"]')).to_have_attribute(
+        "aria-pressed", "true"
+    )
+    expect(page.locator("#email-preview-text")).to_contain_text("FortiManager : 1")
+    expect(page.locator("#email-preview-text")).to_contain_text(
+        "FortiClient Windows : 1"
+    )
+
+
 def test_smtp_admin_persists_replaces_and_deletes_secret_without_returning_it(
     page, fortios_server
 ):

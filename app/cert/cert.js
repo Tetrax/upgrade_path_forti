@@ -5,6 +5,9 @@ let canInstall = false;
 let validationSucceeded = false;
 let validationToken = "";
 let savedSmtpSettings = null;
+let selectedPreviewScenario = "single";
+let currentEmailPreview = null;
+let emailPreviewRequestGeneration = 0;
 const MAX_CERTIFICATE_BYTES = 16 * 1024 * 1024;
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024 * 1024;
 const MAX_CHAIN_BYTES = 16 * 1024 * 1024;
@@ -75,6 +78,8 @@ function showLogin() {
   notificationsForm.reset();
   smtpForm.reset();
   savedSmtpSettings = null;
+  currentEmailPreview = null;
+  emailPreviewRequestGeneration += 1;
   recipientList.replaceChildren();
   loginView.hidden = false;
   adminView.hidden = true;
@@ -134,10 +139,58 @@ function updateInsecureConfirmation() {
   if (!insecure) byId("smtp-allow-insecure").checked = false;
 }
 
-function renderEmailPreview() {
-  byId("email-preview-title").textContent = byId("email-display-name").value.trim() || "FortiUpgrade";
-  byId("email-preview-introduction").textContent = byId("email-introduction").value.trim();
-  byId("email-preview-signature").textContent = byId("email-signature").value.trim();
+function buildEmailAppearancePayload() {
+  return {
+    displayName: byId("email-display-name").value.trim(),
+    introduction: byId("email-introduction").value.trim(),
+    signature: byId("email-signature").value.trim(),
+  };
+}
+
+function updatePreviewSendAvailability() {
+  byId("send-preview-email-button").disabled = !(
+    savedSmtpSettings?.previewSendReady && currentEmailPreview
+  );
+}
+
+function resizeEmailPreviewFrame() {
+  const frame = byId("email-preview-frame");
+  const documentHeight = frame.contentDocument?.documentElement?.scrollHeight;
+  if (documentHeight) frame.style.height = `${Math.max(620, documentHeight)}px`;
+}
+
+async function renderEmailPreview() {
+  const button = byId("preview-email-button");
+  const appearance = buildEmailAppearancePayload();
+  const requestGeneration = ++emailPreviewRequestGeneration;
+  button.disabled = true;
+  currentEmailPreview = null;
+  updatePreviewSendAvailability();
+  setMessage("email-preview-message", "Génération de l’aperçu…");
+  try {
+    const preview = await apiRequest("notifications/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scenario: selectedPreviewScenario, appearance }),
+    });
+    if (requestGeneration !== emailPreviewRequestGeneration) return;
+    currentEmailPreview = { ...preview, appearance };
+    byId("email-preview-subject").textContent = preview.subject;
+    byId("email-preview-text").textContent = preview.text;
+    byId("email-preview-frame").srcdoc = preview.html;
+    setMessage("email-preview-message", "Aperçu généré par le renderer réel.", true);
+  } catch (error) {
+    if (requestGeneration !== emailPreviewRequestGeneration) return;
+    byId("email-preview-subject").textContent = "Aperçu indisponible";
+    byId("email-preview-text").textContent = "";
+    byId("email-preview-frame").srcdoc = "";
+    setMessage("email-preview-message", error.message);
+  } finally {
+    if (requestGeneration === emailPreviewRequestGeneration) {
+      button.disabled = false;
+      updatePreviewSendAvailability();
+    }
+  }
 }
 
 function renderTestSummary() {
@@ -175,8 +228,9 @@ function renderSmtpSettings(payload) {
   byId("smtp-status-label").textContent = operational ? "Opérationnelle" : "Configuration incomplète";
   byId("smtp-status-dot").className = `status-dot ${operational ? "success" : "failure"}`;
   byId("test-email-button").disabled = !operational;
+  updatePreviewSendAvailability();
   updateInsecureConfirmation();
-  renderEmailPreview();
+  void renderEmailPreview();
   renderTestSummary();
 }
 
@@ -224,11 +278,7 @@ function buildSmtpSettingsPayload() {
     from: byId("smtp-from-address").value.trim(),
     appUrl: byId("smtp-app-url").value.trim(),
     timeout: Number(byId("smtp-timeout").value),
-    emailAppearance: {
-      displayName: byId("email-display-name").value.trim(),
-      introduction: byId("email-introduction").value.trim(),
-      signature: byId("email-signature").value.trim(),
-    },
+    emailAppearance: buildEmailAppearancePayload(),
   };
 }
 
@@ -331,7 +381,53 @@ notificationsForm.addEventListener("submit", async (event) => {
 });
 
 byId("smtp-security").addEventListener("change", updateInsecureConfirmation);
-byId("preview-email-button").addEventListener("click", renderEmailPreview);
+byId("preview-email-button").addEventListener("click", () => void renderEmailPreview());
+byId("email-preview-frame").addEventListener("load", resizeEmailPreviewFrame);
+for (const button of document.querySelectorAll("[data-preview-scenario]")) {
+  button.addEventListener("click", () => {
+    selectedPreviewScenario = button.dataset.previewScenario;
+    for (const candidate of document.querySelectorAll("[data-preview-scenario]")) {
+      const selected = candidate === button;
+      candidate.classList.toggle("active", selected);
+      candidate.setAttribute("aria-pressed", String(selected));
+    }
+    void renderEmailPreview();
+  });
+}
+byId("preview-email-recipient").addEventListener("input", (event) => {
+  event.currentTarget.setCustomValidity("");
+});
+byId("send-preview-email-button").addEventListener("click", async () => {
+  const button = byId("send-preview-email-button");
+  const recipient = byId("preview-email-recipient");
+  recipient.setCustomValidity(recipient.value.trim() ? "" : "Indique un destinataire de test.");
+  if (!recipient.reportValidity() || !currentEmailPreview) return;
+  button.disabled = true;
+  byId("email-preview-send-checks").replaceChildren();
+  setMessage("email-preview-message", "Envoi de l’aperçu en cours…");
+  try {
+    const result = await apiRequest("notifications/send-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scenario: currentEmailPreview.scenario,
+        appearance: currentEmailPreview.appearance,
+        runTimestamp: currentEmailPreview.runTimestamp,
+        recipient: recipient.value.trim(),
+      }),
+    });
+    for (const check of result.checks || []) {
+      const item = document.createElement("li");
+      item.textContent = `✓ ${check}`;
+      byId("email-preview-send-checks").append(item);
+    }
+    setMessage("email-preview-message", result.message, true);
+  } catch (error) {
+    setMessage("email-preview-message", error.message);
+  } finally {
+    updatePreviewSendAvailability();
+  }
+});
 byId("test-email-recipient").addEventListener("input", renderTestSummary);
 
 byId("replace-smtp-password-button").addEventListener("click", () => {

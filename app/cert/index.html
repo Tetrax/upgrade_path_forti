@@ -283,17 +283,36 @@
                   <label for="email-signature">Signature / pied de mail</label>
                   <textarea id="email-signature" maxlength="2000" rows="3"></textarea>
                 </div>
-                <button class="btn" id="preview-email-button" type="button">Actualiser l’aperçu</button>
-                <article class="email-preview" id="email-preview" aria-label="Aperçu email">
-                  <strong id="email-preview-title">FortiUpgrade</strong>
-                  <p id="email-preview-introduction"></p>
-                  <div class="preview-security-content">
-                    <span class="status-badge failure">Critical</span>
-                    <strong>CVE-2026-00000 · FortiOS</strong>
-                    <span>Versions affectées · Résumé · Lien PSIRT</span>
+                <fieldset class="preview-scenario-fieldset">
+                  <legend>Scénario d’aperçu</legend>
+                  <div class="preview-scenario-group" role="group" aria-label="Scénario d’aperçu email">
+                    <button class="btn preview-scenario active" type="button" data-preview-scenario="single" aria-pressed="true">1 CVE</button>
+                    <button class="btn preview-scenario" type="button" data-preview-scenario="multiple" aria-pressed="false">Plusieurs CVE</button>
+                    <button class="btn preview-scenario" type="button" data-preview-scenario="multi-product" aria-pressed="false">Multi-produits</button>
                   </div>
-                  <p id="email-preview-signature"></p>
-                </article>
+                </fieldset>
+                <div class="field">
+                  <label for="preview-email-recipient">Destinataire de l’aperçu</label>
+                  <input id="preview-email-recipient" type="email" maxlength="254" placeholder="security@example.com">
+                  <span class="field-help">Utilise la configuration SMTP enregistrée, même lorsque les Notifications sont désactivées.</span>
+                </div>
+                <div class="preview-actions">
+                  <button class="btn" id="preview-email-button" type="button">Actualiser l’aperçu</button>
+                  <button class="btn primary" id="send-preview-email-button" type="button" disabled>Envoyer cet aperçu par email</button>
+                </div>
+                <p class="form-message" id="email-preview-message" role="alert"></p>
+                <ul class="smtp-checks" id="email-preview-send-checks" aria-live="polite"></ul>
+                <p class="email-preview-subject">
+                  <span>Sujet</span>
+                  <strong id="email-preview-subject">Chargement de l’aperçu…</strong>
+                </p>
+                <div class="email-preview" id="email-preview" aria-label="Aperçu HTML réel de l’email">
+                  <iframe id="email-preview-frame" title="Rendu HTML réel de l’email" sandbox="allow-same-origin"></iframe>
+                </div>
+                <details class="email-preview-text-details">
+                  <summary>Contenu texte alternatif</summary>
+                  <pre id="email-preview-text"></pre>
+                </details>
                 <button class="btn primary" id="save-smtp-button" type="submit">Enregistrer la configuration email</button>
                 <p class="form-message" id="smtp-message" role="alert"></p>
               </div>
