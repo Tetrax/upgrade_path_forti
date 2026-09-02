@@ -151,11 +151,19 @@
 .advanced-options { margin: 4px 0 18px; border: 1px solid var(--line); border-radius: 7px; }
 .advanced-options summary { padding: 11px 13px; color: var(--ink); font-weight: 700; cursor: pointer; }
 .advanced-options .field { margin: 0; padding: 0 13px 13px; }
-.email-preview { display: grid; gap: 10px; margin: 14px 0 18px; padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfe; }
-.email-preview > p { margin: 0; color: var(--muted); white-space: pre-wrap; }
-.preview-security-content { display: grid; gap: 7px; padding: 12px; border-left: 3px solid var(--danger); background: #fff; }
-.preview-security-content .status-badge { justify-self: start; }
-.preview-security-content span:last-child { color: var(--muted); font-size: 12px; }
+.preview-scenario-fieldset { margin: 0 0 15px; padding: 0; border: 0; }
+.preview-scenario-fieldset legend { margin-bottom: 8px; color: var(--ink); font-weight: 700; }
+.preview-scenario-group, .preview-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.preview-scenario { min-height: 38px; }
+.preview-scenario.active { border-color: var(--info); background: var(--soft-blue); color: var(--brand-dark); }
+.preview-actions { margin-bottom: 4px; }
+.email-preview-subject { display: grid; gap: 5px; margin: 8px 0 12px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfe; overflow-wrap: anywhere; }
+.email-preview-subject span { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.email-preview { width: 100%; max-width: 724px; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #fff; }
+.email-preview iframe { display: block; width: 100%; min-height: 620px; border: 0; background: #fff; }
+.email-preview-text-details { width: 100%; max-width: 724px; margin: 0 0 18px; border: 1px solid var(--line); border-radius: 7px; }
+.email-preview-text-details summary { padding: 11px 13px; color: var(--ink); font-weight: 700; cursor: pointer; }
+.email-preview-text-details pre { margin: 0; padding: 0 13px 13px; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .test-email-panel { margin-top: 16px; }
 .test-email-layout { display: grid; grid-template-columns: minmax(260px, .7fr) minmax(0, 1.3fr); gap: 0 20px; align-items: start; }
 .test-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
