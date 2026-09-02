@@ -6,6 +6,7 @@ chance to percent-decode and normalize it — "/data/%2e%2e/scripts/fortios_serv
 checks where the request actually resolves on disk instead.
 """
 
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -26,6 +27,26 @@ def is_served(path: str) -> bool:
 
 
 class StaticFileTraversalTests(unittest.TestCase):
+    def test_data_directory_itself_is_never_served(self):
+        for path in ("/data", "/data/", "/data/.", "/data/%2e"):
+            with self.subTest(path=path):
+                self.assertFalse(is_served(path))
+
+    def test_smtp_private_temporary_files_are_ignored_by_git(self):
+        repository = Path(__file__).resolve().parents[1]
+        for relative in (
+            "data/.smtp-password.tmp-123",
+            "data/.smtp-password.transaction-backup",
+            "data/.smtp-settings.json.transaction",
+        ):
+            with self.subTest(relative=relative):
+                result = subprocess.run(
+                    ["git", "check-ignore", "--no-index", "--quiet", relative],
+                    cwd=repository,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0)
+
     def test_allowed_app_file(self):
         self.assertTrue(is_served("/app/index.html"))
         self.assertEqual(translate("/app/index.html"), str(fs.ROOT / "app" / "index.html"))
@@ -36,6 +57,29 @@ class StaticFileTraversalTests(unittest.TestCase):
     def test_notification_settings_are_never_served_as_a_static_data_file(self):
         self.assertFalse(is_served("/data/notification-settings.json"))
         self.assertFalse(is_served("/data/notification-settings.json.corrupt-123"))
+
+    def test_notification_history_is_never_served_as_static_data(self):
+        for name in (
+            "fortios-notify-history.json",
+            "fortios-notify-history.json.lock",
+            "fortios-notify-history.json.corrupt-123",
+            ".fortios-notify-history.json.tmp-123",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(is_served(f"/data/{name}"))
+
+    def test_smtp_settings_and_secrets_are_never_served_as_static_data(self):
+        for name in (
+            "smtp-settings.json",
+            "smtp-settings.json.lock",
+            "smtp-settings.json.corrupt-123",
+            ".smtp-settings.json.tmp-123",
+            "smtp-password",
+            "smtp-password.corrupt-123",
+            ".smtp-password.tmp-123",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(is_served(f"/data/{name}"))
 
     def test_allowed_nested_app_paths(self):
         self.assertTrue(is_served("/app/"))

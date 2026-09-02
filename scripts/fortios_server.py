@@ -36,6 +36,7 @@ from cert_admin import (
 )
 from cert_helper_protocol import HelperError, install_via_helper
 from cert_web import (
+    ActionRateLimiter,
     AdminSession,
     LoginRateLimiter,
     SessionStore,
@@ -430,6 +431,7 @@ DATA_PATH = DATA_DIR / "fortios-data.generated.json"
 SAMPLE_PATH = DATA_DIR / "fortios-data.sample.json"
 IMAGE_DIR = DATA_DIR / "advisory-images"
 NOTIFICATION_SETTINGS_PATH = DATA_DIR / "notification-settings.json"
+SMTP_SETTINGS_PATH = DATA_DIR / "smtp-settings.json"
 
 
 def referenced_image_filenames(description: str) -> set[str]:
@@ -474,6 +476,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         cert_direct_install: bool = False,
         cert_helper_socket: Path | None = None,
         cert_login_limiter: LoginRateLimiter | None = None,
+        cert_test_email_limiter: ActionRateLimiter | None = None,
         cert_validation_tickets: ValidationTicketStore | None = None,
         **kwargs: Any,
     ) -> None:
@@ -488,6 +491,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.cert_direct_install = cert_direct_install
         self.cert_helper_socket = cert_helper_socket
         self.cert_login_limiter = cert_login_limiter or LoginRateLimiter()
+        self.cert_test_email_limiter = (
+            cert_test_email_limiter or ActionRateLimiter()
+        )
         self.cert_validation_tickets = (
             cert_validation_tickets or ValidationTicketStore()
         )
@@ -572,6 +578,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_cert_status()
             elif url_path == "/api/cert/notifications":
                 self.handle_notification_settings_read()
+            elif url_path == "/api/cert/smtp":
+                self.handle_smtp_settings_read()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
             return
@@ -653,7 +661,11 @@ class FortiosHandler(SimpleHTTPRequestHandler):
     def notification_settings_response(
         self, settings: fortios_notify.NotificationSettings
     ) -> dict[str, Any]:
-        config = fortios_notify.load_email_config(settings=settings)
+        config = fortios_notify.load_email_config(
+            settings=settings,
+            settings_path=NOTIFICATION_SETTINGS_PATH,
+            smtp_settings_path=SMTP_SETTINGS_PATH,
+        )
         return {
             "settings": settings.to_payload(),
             "smtp": fortios_notify.smtp_public_status(config),
@@ -690,22 +702,133 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             extra_headers={"Cache-Control": "no-store"},
         )
 
-    def handle_notification_test_email(self) -> None:
+    def smtp_settings_response(self) -> dict[str, Any]:
+        notification_settings = fortios_notify.load_notification_settings(
+            NOTIFICATION_SETTINGS_PATH
+        )
+        smtp_settings, config = fortios_notify.load_smtp_snapshot(
+            settings=notification_settings,
+            settings_path=NOTIFICATION_SETTINGS_PATH,
+            smtp_settings_path=SMTP_SETTINGS_PATH,
+        )
+        return {
+            "smtp": fortios_notify.smtp_public_settings(smtp_settings, config)
+        }
+
+    def handle_smtp_settings_read(self) -> None:
+        if self.require_admin_session(csrf=False) is None:
+            return
+        self.write_json_response(
+            self.smtp_settings_response(),
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_smtp_settings_write(self) -> None:
         if self.require_admin_session(csrf=True) is None:
             return
         try:
-            self.read_json_body(max_bytes=1024)
+            payload = self.read_json_body(max_bytes=64 * 1024)
+            password = payload.pop("password", None)
+            if password is not None and not isinstance(password, str):
+                raise TypeError("Le mot de passe SMTP doit être une chaîne.")
+            fortios_notify.save_smtp_settings(
+                SMTP_SETTINGS_PATH,
+                payload,
+                password=password,
+            )
+            response = self.smtp_settings_response()
+        except (TypeError, ValueError, OSError) as error:
+            self.write_json_response(
+                {"error": str(error)[:500]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            response,
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_smtp_password_delete(self) -> None:
+        if self.require_admin_session(csrf=True) is None:
+            return
+        try:
+            fortios_notify.delete_smtp_password(SMTP_SETTINGS_PATH)
+            response = self.smtp_settings_response()
+        except OSError as error:
+            self.write_json_response(
+                {"error": str(error)[:500]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            response,
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_notification_test_email(self) -> None:
+        if self.require_admin_session(csrf=True) is None:
+            return
+        session_id = self.cert_session_id()
+        if session_id is None or not self.cert_test_email_limiter.try_record(session_id):
+            self.write_json_response(
+                {"error": "Limite de trois emails de test par minute atteinte."},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        try:
+            payload = self.read_json_body(max_bytes=4096)
+            if not isinstance(payload, dict) or set(payload) != {"recipient"}:
+                raise ValueError("Destinataire de test requis.")
+            recipient = payload["recipient"]
+            if not isinstance(recipient, str):
+                raise TypeError("Destinataire de test invalide.")
             settings = fortios_notify.load_notification_settings(
                 NOTIFICATION_SETTINGS_PATH
             )
-            config = fortios_notify.load_email_config(settings=settings)
-            result = fortios_notify.send_test_email_result(config)
-        except (TypeError, ValueError, OSError):
+            smtp_settings, config = fortios_notify.load_smtp_snapshot(
+                settings=settings,
+                settings_path=NOTIFICATION_SETTINGS_PATH,
+                smtp_settings_path=SMTP_SETTINGS_PATH,
+            )
+            result = fortios_notify.send_test_email_result(
+                config,
+                recipient=recipient,
+                appearance=smtp_settings.email_appearance,
+            )
+        except (TypeError, ValueError, OSError) as error:
+            self.write_json_response(
+                {"error": str(error)[:500]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        security_labels = {
+            "starttls": "STARTTLS",
+            "tls": "TLS implicite",
+            "none": "Sans chiffrement explicitement autorisé",
+        }
+        summary = {
+            "smtp": f"{config.smtp_host}:{config.smtp_port}",
+            "security": security_labels.get(
+                config.smtp_security, "Configuration inconnue"
+            ),
+            "from": config.smtp_from,
+            "recipient": recipient.strip(),
+        }
+        if not result.sent and result.message == "Destinataire de test invalide.":
             result = fortios_notify.SmtpResult(
-                False, "Configuration SMTP incomplète."
+                False, "Destinataire de test invalide."
             )
         self.write_json_response(
-            {"sent": result.sent, "message": result.message},
+            {
+                "sent": result.sent,
+                "message": result.message,
+                "checks": list(result.checks),
+                "summary": summary,
+            },
             HTTPStatus.OK if result.sent else HTTPStatus.SERVICE_UNAVAILABLE,
             extra_headers={"Cache-Control": "no-store"},
         )
@@ -739,12 +862,23 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             relative = urllib.parse.unquote(
                 url_path[len("/data/") :] if url_path != "/data" else ""
             )
-            if Path(relative).name.startswith("notification-settings.json"):
+            name = Path(relative).name
+            private_prefixes = (
+                "notification-settings.json",
+                ".notification-settings.json",
+                "fortios-notify-history.json",
+                ".fortios-notify-history.json",
+                "smtp-settings.json",
+                ".smtp-settings.json",
+                "smtp-password",
+                ".smtp-password",
+            )
+            if name.startswith(private_prefixes):
                 return str(ROOT / "__not_served__")
             candidate = (
                 (DATA_DIR / relative).resolve() if relative else DATA_DIR.resolve()
             )
-            if candidate == ALLOWED_STATIC_DIR_DATA or candidate.is_relative_to(
+            if candidate != ALLOWED_STATIC_DIR_DATA and candidate.is_relative_to(
                 ALLOWED_STATIC_DIR_DATA
             ):
                 return str(candidate)
@@ -791,6 +925,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_cert_logout()
             elif self.path == "/api/cert/notifications":
                 self.handle_notification_settings_write()
+            elif self.path == "/api/cert/smtp":
+                self.handle_smtp_settings_write()
             elif self.path == "/api/cert/notifications/test":
                 self.handle_notification_test_email()
             elif self.path in ("/api/cert/validate", "/api/cert/install"):
@@ -1034,7 +1170,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         if not self.is_safe_origin():
             self.send_error(HTTPStatus.FORBIDDEN, "Origin invalide")
             return
-        if self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(
+        if self.path == "/api/cert/smtp/password":
+            self.handle_smtp_password_delete()
+        elif self.path.startswith(ADVISORIES_PREFIX) and len(self.path) > len(
             ADVISORIES_PREFIX
         ):
             self.handle_delete_advisory(self.path[len(ADVISORIES_PREFIX) :])
@@ -1443,6 +1581,7 @@ def main(argv: list[str]) -> int:
     )
     cert_sessions = SessionStore()
     cert_login_limiter = LoginRateLimiter()
+    cert_test_email_limiter = ActionRateLimiter()
     cert_validation_tickets = ValidationTicketStore()
     cert_hostname = os.environ.get("FORTIOS_TLS_HOSTNAME", "").strip()
     cert_output_dir = Path(
@@ -1469,6 +1608,7 @@ def main(argv: list[str]) -> int:
             cert_direct_install=cert_direct_install,
             cert_helper_socket=cert_helper_socket,
             cert_login_limiter=cert_login_limiter,
+            cert_test_email_limiter=cert_test_email_limiter,
             cert_validation_tickets=cert_validation_tickets,
             **handler_kwargs,
         )

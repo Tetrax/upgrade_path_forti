@@ -189,6 +189,46 @@ class LoginRateLimiter:
             self._failures.pop(client, None)
 
 
+class ActionRateLimiter:
+    """Bound a sensitive authenticated action per session and time window."""
+
+    def __init__(
+        self,
+        max_actions: int = 3,
+        window_seconds: int = 60,
+        maximum_sessions: int = 1024,
+    ) -> None:
+        if min(max_actions, window_seconds, maximum_sessions) <= 0:
+            raise ValueError("Les limites d'action doivent être strictement positives.")
+        self.max_actions = max_actions
+        self.window_seconds = window_seconds
+        self.maximum_sessions = maximum_sessions
+        self._actions: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def try_record(self, session_id: str) -> bool:
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+        with self._lock:
+            for key in list(self._actions):
+                recent = [value for value in self._actions[key] if value > cutoff]
+                if recent:
+                    self._actions[key] = recent
+                else:
+                    self._actions.pop(key, None)
+            if session_id not in self._actions and len(self._actions) >= self.maximum_sessions:
+                oldest = min(
+                    self._actions,
+                    key=lambda key: self._actions[key][-1],
+                )
+                self._actions.pop(oldest, None)
+            recent = self._actions.setdefault(session_id, [])
+            if len(recent) >= self.max_actions:
+                return False
+            recent.append(now)
+            return True
+
+
 @dataclass(frozen=True)
 class ValidationTicket:
     session_id: str

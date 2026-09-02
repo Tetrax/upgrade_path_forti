@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import shutil
 import socket
 import subprocess
@@ -24,9 +25,13 @@ from pathlib import Path
 
 import pytest
 
+from scripts import cert_admin
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 SERVER_STARTUP_TIMEOUT_SECONDS = 15
+
+E2E_ADMIN_USERNAME = "admin"
 
 
 def _free_port() -> int:
@@ -58,6 +63,8 @@ class FortiosTestServer:
     data_dir: Path
     mock_response_path: Path
     process: subprocess.Popen
+    admin_username: str
+    admin_password: str
 
     def set_mock_path_response(self, hops: list[str]) -> None:
         """Next official-path request(s) will simulate a successful Fortinet fetch returning
@@ -78,12 +85,19 @@ class FortiosTestServer:
 
 @pytest.fixture
 def fortios_server(tmp_path: Path):
+    admin_password = secrets.token_urlsafe(24)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     shutil.copy(FIXTURES_DIR / "catalog.json", data_dir / "fortios-data.generated.json")
 
     mock_response_path = tmp_path / "mock_response.json"
     mock_response_path.write_text(json.dumps({}))  # no hops configured yet -> "no path" until set
+
+    credentials_path = tmp_path / "admin" / "credentials.json"
+    cert_admin.write_credentials(
+        credentials_path,
+        cert_admin.credential_payload(E2E_ADMIN_USERNAME, admin_password),
+    )
 
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -92,6 +106,8 @@ def fortios_server(tmp_path: Path):
     env["FORTIOS_TEST_DATA_DIR"] = str(data_dir)
     env["FORTIOS_E2E_MOCK_NETWORK"] = "1"
     env["FORTIOS_E2E_MOCK_RESPONSE_FILE"] = str(mock_response_path)
+    env["FORTIOS_CERT_ADMIN_FILE"] = str(credentials_path)
+    env["FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST"] = "1"
     # A real SMTP config leaking from the host environment into a test run would be surprising
     # and is never needed by anything in this suite.
     for key in list(env):
@@ -109,7 +125,12 @@ def fortios_server(tmp_path: Path):
     try:
         _wait_until_ready(base_url, process, SERVER_STARTUP_TIMEOUT_SECONDS)
         yield FortiosTestServer(
-            base_url=base_url, data_dir=data_dir, mock_response_path=mock_response_path, process=process,
+            base_url=base_url,
+            data_dir=data_dir,
+            mock_response_path=mock_response_path,
+            process=process,
+            admin_username=E2E_ADMIN_USERNAME,
+            admin_password=admin_password,
         )
     finally:
         process.terminate()

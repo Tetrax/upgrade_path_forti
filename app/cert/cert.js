@@ -4,6 +4,7 @@ let csrfToken = "";
 let canInstall = false;
 let validationSucceeded = false;
 let validationToken = "";
+let savedSmtpSettings = null;
 const MAX_CERTIFICATE_BYTES = 16 * 1024 * 1024;
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024 * 1024;
 const MAX_CHAIN_BYTES = 16 * 1024 * 1024;
@@ -20,6 +21,7 @@ const installButton = byId("install-button");
 const activationBox = byId("activation-box");
 const validationBadge = byId("validation-badge");
 const notificationsForm = byId("notifications-form");
+const smtpForm = byId("smtp-form");
 const recipientList = byId("recipient-list");
 const PRODUCT_CHECKBOXES = {
   "fortigate-fortios": "product-fortigate-fortios",
@@ -71,6 +73,8 @@ function showLogin() {
   canInstall = false;
   certificateForm.reset();
   notificationsForm.reset();
+  smtpForm.reset();
+  savedSmtpSettings = null;
   recipientList.replaceChildren();
   loginView.hidden = false;
   adminView.hidden = true;
@@ -117,14 +121,63 @@ function addRecipient(value = "") {
   recipientList.append(row);
 }
 
-function renderSmtpStatus(smtp) {
+function smtpSecurityLabel(security) {
+  if (security === "tls") return "TLS implicite";
+  if (security === "none") return "Sans chiffrement (autorisé)";
+  return "STARTTLS";
+}
+
+function updateInsecureConfirmation() {
+  const insecure = byId("smtp-security").value === "none";
+  byId("smtp-insecure-confirmation").hidden = !insecure;
+  byId("smtp-allow-insecure").required = insecure;
+  if (!insecure) byId("smtp-allow-insecure").checked = false;
+}
+
+function renderEmailPreview() {
+  byId("email-preview-title").textContent = byId("email-display-name").value.trim() || "FortiUpgrade";
+  byId("email-preview-introduction").textContent = byId("email-introduction").value.trim();
+  byId("email-preview-signature").textContent = byId("email-signature").value.trim();
+}
+
+function renderTestSummary() {
+  const smtp = savedSmtpSettings;
+  byId("test-smtp-endpoint").textContent = smtp?.host ? `${smtp.host}:${smtp.port}` : "Non configuré";
+  byId("test-smtp-security").textContent = smtp ? smtpSecurityLabel(smtp.security) : "—";
+  byId("test-smtp-from").textContent = smtp?.from || "Non configuré";
+  byId("test-smtp-recipient").textContent = byId("test-email-recipient").value.trim() || "—";
+}
+
+function renderSmtpSettings(payload) {
+  const smtp = payload.smtp;
+  savedSmtpSettings = smtp;
+  byId("smtp-host").value = smtp.host || "";
+  byId("smtp-port").value = String(smtp.port || 587);
+  byId("smtp-security").value = smtp.security || "starttls";
+  byId("smtp-allow-insecure").checked = Boolean(smtp.allowInsecure);
+  byId("smtp-username").value = smtp.username || "";
+  byId("smtp-from-address").value = smtp.from || "";
+  byId("smtp-app-url").value = smtp.appUrl || "";
+  byId("smtp-timeout").value = String(smtp.timeout || 10);
+  byId("email-display-name").value = smtp.emailAppearance?.displayName || "FortiUpgrade";
+  byId("email-introduction").value = smtp.emailAppearance?.introduction || "";
+  byId("email-signature").value = smtp.emailAppearance?.signature || "";
+  byId("smtp-password").value = "";
+  byId("smtp-password-field").hidden = true;
+  byId("smtp-password-status").textContent = smtp.passwordConfigured
+    ? "Mot de passe configuré"
+    : "Non configuré";
+  byId("replace-smtp-password-button").textContent = smtp.passwordConfigured
+    ? "Remplacer le mot de passe"
+    : "Définir le mot de passe";
+  byId("delete-smtp-password-button").hidden = !smtp.passwordConfigured;
   const operational = smtp.state === "operational";
   byId("smtp-status-label").textContent = operational ? "Opérationnelle" : "Configuration incomplète";
   byId("smtp-status-dot").className = `status-dot ${operational ? "success" : "failure"}`;
-  byId("smtp-endpoint").textContent = smtp.host ? `${smtp.host}:${smtp.port}` : "Non configuré";
-  byId("smtp-mode").textContent = smtp.starttls ? "STARTTLS" : "Sans STARTTLS";
-  byId("smtp-from").textContent = smtp.from || "Non configuré";
   byId("test-email-button").disabled = !operational;
+  updateInsecureConfirmation();
+  renderEmailPreview();
+  renderTestSummary();
 }
 
 function renderNotificationSettings(payload) {
@@ -140,7 +193,6 @@ function renderNotificationSettings(payload) {
   recipientList.replaceChildren();
   for (const recipient of settings.recipients) addRecipient(recipient);
   if (!settings.recipients.length) addRecipient();
-  renderSmtpStatus(payload.smtp);
 }
 
 async function loadNotificationSettings() {
@@ -150,6 +202,34 @@ async function loadNotificationSettings() {
   } catch (error) {
     setMessage("notifications-message", error.message);
   }
+}
+
+async function loadSmtpSettings() {
+  try {
+    renderSmtpSettings(await apiRequest("smtp"));
+    setMessage("smtp-message", "");
+  } catch (error) {
+    setMessage("smtp-message", error.message);
+  }
+}
+
+function buildSmtpSettingsPayload() {
+  return {
+    host: byId("smtp-host").value.trim(),
+    port: Number(byId("smtp-port").value),
+    security: byId("smtp-security").value,
+    allowInsecure: byId("smtp-allow-insecure").checked,
+    username: byId("smtp-username").value.trim(),
+    password: byId("smtp-password").value,
+    from: byId("smtp-from-address").value.trim(),
+    appUrl: byId("smtp-app-url").value.trim(),
+    timeout: Number(byId("smtp-timeout").value),
+    emailAppearance: {
+      displayName: byId("email-display-name").value.trim(),
+      introduction: byId("email-introduction").value.trim(),
+      signature: byId("email-signature").value.trim(),
+    },
+  };
 }
 
 function buildNotificationSettingsPayload() {
@@ -176,7 +256,7 @@ async function refreshSession() {
   try {
     const status = await apiRequest("status");
     showAdmin(status);
-    await loadNotificationSettings();
+    await Promise.all([loadNotificationSettings(), loadSmtpSettings()]);
   } catch (_error) {
     showLogin();
   }
@@ -250,16 +330,75 @@ notificationsForm.addEventListener("submit", async (event) => {
   }
 });
 
+byId("smtp-security").addEventListener("change", updateInsecureConfirmation);
+byId("preview-email-button").addEventListener("click", renderEmailPreview);
+byId("test-email-recipient").addEventListener("input", renderTestSummary);
+
+byId("replace-smtp-password-button").addEventListener("click", () => {
+  const field = byId("smtp-password-field");
+  field.hidden = !field.hidden;
+  if (field.hidden) {
+    byId("smtp-password").value = "";
+  } else {
+    byId("smtp-password").focus();
+  }
+});
+
+byId("delete-smtp-password-button").addEventListener("click", async () => {
+  if (!window.confirm("Supprimer le mot de passe SMTP enregistré ?")) return;
+  const button = byId("delete-smtp-password-button");
+  button.disabled = true;
+  setMessage("smtp-message", "Suppression du mot de passe…");
+  try {
+    const result = await apiRequest("smtp/password", { method: "DELETE" });
+    renderSmtpSettings(result);
+    setMessage("smtp-message", "Mot de passe SMTP supprimé.", true);
+  } catch (error) {
+    setMessage("smtp-message", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+smtpForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("save-smtp-button");
+  button.disabled = true;
+  setMessage("smtp-message", "Enregistrement…");
+  try {
+    const result = await apiRequest("smtp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildSmtpSettingsPayload()),
+    });
+    renderSmtpSettings(result);
+    setMessage("smtp-message", "Configuration email enregistrée.", true);
+  } catch (error) {
+    byId("smtp-password").value = "";
+    setMessage("smtp-message", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 byId("test-email-button").addEventListener("click", async () => {
   const button = byId("test-email-button");
+  const recipientInput = byId("test-email-recipient");
+  if (!recipientInput.reportValidity()) return;
   button.disabled = true;
+  byId("smtp-test-checks").replaceChildren();
   setMessage("test-email-message", "Envoi en cours…");
   try {
     const result = await apiRequest("notifications/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: "{}",
+      body: JSON.stringify({ recipient: recipientInput.value.trim() }),
     });
+    for (const check of result.checks || []) {
+      const item = document.createElement("li");
+      item.textContent = `✓ ${check}`;
+      byId("smtp-test-checks").append(item);
+    }
     setMessage("test-email-message", result.message, true);
   } catch (error) {
     setMessage("test-email-message", error.message);
