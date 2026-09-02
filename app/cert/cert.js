@@ -19,6 +19,19 @@ const certificateForm = byId("certificate-form");
 const installButton = byId("install-button");
 const activationBox = byId("activation-box");
 const validationBadge = byId("validation-badge");
+const notificationsForm = byId("notifications-form");
+const recipientList = byId("recipient-list");
+const PRODUCT_CHECKBOXES = {
+  "fortigate-fortios": "product-fortigate-fortios",
+  fortimanager: "product-fortimanager",
+  fortianalyzer: "product-fortianalyzer",
+  "forticlient-ems": "product-forticlient-ems",
+};
+const FORTICLIENT_CHECKBOXES = {
+  windows: "product-forticlient-windows",
+  macos: "product-forticlient-macos",
+  linux: "product-forticlient-linux",
+};
 
 function setMessage(id, message, success = false) {
   const element = byId(id);
@@ -57,6 +70,8 @@ function showLogin() {
   validationToken = "";
   canInstall = false;
   certificateForm.reset();
+  notificationsForm.reset();
+  recipientList.replaceChildren();
   loginView.hidden = false;
   adminView.hidden = true;
   logoutButton.hidden = true;
@@ -74,10 +89,94 @@ function showAdmin(status) {
   installButton.disabled = !canInstall;
 }
 
+function showAdminSection(section) {
+  const notificationsActive = section === "notifications";
+  byId("certificates-section").hidden = notificationsActive;
+  byId("notifications-section").hidden = !notificationsActive;
+  byId("certificates-tab").classList.toggle("active", !notificationsActive);
+  byId("notifications-tab").classList.toggle("active", notificationsActive);
+}
+
+function addRecipient(value = "") {
+  const row = document.createElement("div");
+  row.className = "recipient-row";
+  const input = document.createElement("input");
+  input.type = "email";
+  input.required = true;
+  input.maxLength = 254;
+  input.autocomplete = "email";
+  input.placeholder = "security@example.com";
+  input.value = value;
+  input.setAttribute("aria-label", "Adresse email destinataire");
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "btn recipient-remove";
+  remove.textContent = "Supprimer";
+  remove.addEventListener("click", () => row.remove());
+  row.append(input, remove);
+  recipientList.append(row);
+}
+
+function renderSmtpStatus(smtp) {
+  const operational = smtp.state === "operational";
+  byId("smtp-status-label").textContent = operational ? "Opérationnelle" : "Configuration incomplète";
+  byId("smtp-status-dot").className = `status-dot ${operational ? "success" : "failure"}`;
+  byId("smtp-endpoint").textContent = smtp.host ? `${smtp.host}:${smtp.port}` : "Non configuré";
+  byId("smtp-mode").textContent = smtp.starttls ? "STARTTLS" : "Sans STARTTLS";
+  byId("smtp-from").textContent = smtp.from || "Non configuré";
+  byId("test-email-button").disabled = !operational;
+}
+
+function renderNotificationSettings(payload) {
+  const settings = payload.settings;
+  byId("notifications-enabled").checked = settings.enabled;
+  byId("minimum-severity").value = settings.minimumSeverity;
+  for (const [product, checkboxId] of Object.entries(PRODUCT_CHECKBOXES)) {
+    byId(checkboxId).checked = settings.products[product];
+  }
+  for (const [platform, checkboxId] of Object.entries(FORTICLIENT_CHECKBOXES)) {
+    byId(checkboxId).checked = settings.products.forticlient[platform];
+  }
+  recipientList.replaceChildren();
+  for (const recipient of settings.recipients) addRecipient(recipient);
+  if (!settings.recipients.length) addRecipient();
+  renderSmtpStatus(payload.smtp);
+}
+
+async function loadNotificationSettings() {
+  try {
+    renderNotificationSettings(await apiRequest("notifications"));
+    setMessage("notifications-message", "");
+  } catch (error) {
+    setMessage("notifications-message", error.message);
+  }
+}
+
+function buildNotificationSettingsPayload() {
+  const recipients = [...recipientList.querySelectorAll("input[type=email]")]
+    .map((input) => input.value.trim())
+    .filter(Boolean);
+  const products = {};
+  for (const [product, checkboxId] of Object.entries(PRODUCT_CHECKBOXES)) {
+    products[product] = byId(checkboxId).checked;
+  }
+  products.forticlient = {};
+  for (const [platform, checkboxId] of Object.entries(FORTICLIENT_CHECKBOXES)) {
+    products.forticlient[platform] = byId(checkboxId).checked;
+  }
+  return {
+    enabled: byId("notifications-enabled").checked,
+    minimumSeverity: byId("minimum-severity").value,
+    products,
+    recipients,
+  };
+}
+
 async function refreshSession() {
   try {
     const status = await apiRequest("status");
     showAdmin(status);
+    await loadNotificationSettings();
   } catch (_error) {
     showLogin();
   }
@@ -125,6 +224,48 @@ logoutButton.addEventListener("click", async () => {
   }
   certificateForm.reset();
   showLogin();
+});
+
+byId("certificates-tab").addEventListener("click", () => showAdminSection("certificates"));
+byId("notifications-tab").addEventListener("click", () => showAdminSection("notifications"));
+byId("add-recipient-button").addEventListener("click", () => addRecipient());
+
+notificationsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("save-notifications-button");
+  button.disabled = true;
+  setMessage("notifications-message", "Enregistrement…");
+  try {
+    const result = await apiRequest("notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(buildNotificationSettingsPayload()),
+    });
+    renderNotificationSettings(result);
+    setMessage("notifications-message", "Configuration enregistrée.", true);
+  } catch (error) {
+    setMessage("notifications-message", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+byId("test-email-button").addEventListener("click", async () => {
+  const button = byId("test-email-button");
+  button.disabled = true;
+  setMessage("test-email-message", "Envoi en cours…");
+  try {
+    const result = await apiRequest("notifications/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    setMessage("test-email-message", result.message, true);
+  } catch (error) {
+    setMessage("test-email-message", error.message);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 function fileToBase64(file) {

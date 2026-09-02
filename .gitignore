@@ -4,6 +4,7 @@ __pycache__/
 data/advisory-images/
 data/fortios-health.json
 data/fortios-notify-history.json
+data/notification-settings.json*
 data/*.lock
 .venv-compat/
 .venv-test/

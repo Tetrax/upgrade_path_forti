@@ -441,6 +441,51 @@ class CompatibilityNotificationTests(unittest.TestCase):
         self.assertEqual(checkpoint_record["consecutiveFailures"], 2)
         self.assertTrue(notify_state["sentKeys"])
 
+    def test_disabled_settings_advance_compatibility_checkpoint_without_sending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            health_path = root / refresh.DEFAULT_HEALTH_PATH
+            history_path = root / refresh.DEFAULT_NOTIFY_HISTORY_PATH
+            settings_path = root / refresh.DEFAULT_NOTIFICATION_SETTINGS_PATH
+            before = {"status": "error", "consecutiveFailures": 1}
+            after = {"status": "error", "consecutiveFailures": 2}
+            _write_health(health_path, {refresh.SOURCE_COMPAT_MATRIX: after})
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            history_path.write_text(
+                json.dumps(
+                    {
+                        "sentKeys": {},
+                        "outbox": [],
+                        "eolState": {},
+                        "checkpoint": {
+                            "versionsByProduct": {},
+                            "cvesById": {},
+                            "health": {refresh.SOURCE_COMPAT_MATRIX: before},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings_path.write_text("{}", encoding="utf-8")
+            config = MagicMock(enabled=False)
+
+            with (
+                patch.object(
+                    refresh.fortios_notify, "load_email_config", return_value=config
+                ),
+                patch.object(refresh.fortios_notify, "send_email") as send,
+            ):
+                refresh._notify_compatibility_transition(root=root)
+
+            notify_state = refresh.fortios_notify.load_notify_state(history_path)
+
+        send.assert_not_called()
+        checkpoint_record = notify_state["checkpoint"]["health"][
+            refresh.SOURCE_COMPAT_MATRIX
+        ]
+        self.assertEqual(checkpoint_record["consecutiveFailures"], 2)
+        self.assertEqual(notify_state["outbox"], [])
+
 
 class SystemdDeploymentTests(unittest.TestCase):
     ROOT = Path(__file__).resolve().parents[1]

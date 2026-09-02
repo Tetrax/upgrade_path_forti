@@ -306,41 +306,82 @@ Affiché dans `/app/` sous le bandeau de briefing : section repliable « État d
 
 ## Notifications email
 
-Désactivées par défaut, activables par variables d'environnement ou fichier secret (aucune dépendance ajoutée — `smtplib`/`email.message.EmailMessage` de la stdlib). Copier `deploy/fortios-upgrade-intelligence.env.example` vers `/etc/fortios-upgrade-intelligence.env` (hors du dépôt, jamais de vrai secret dans Git), le remplir, puis relancer `deploy/install.sh` — l'unité `fortios-catalog-refresh.service` charge ce fichier via `EnvironmentFile=-...` (le `-` le rend optionnel : absent = pas d'email, sans erreur).
+Le moteur existant de `scripts/fortios_notify.py` est conservé : SMTP stdlib, déduplication, checkpoint, outbox persistante, retry et isolation complète des erreurs SMTP. Aucun daemon ni scheduler supplémentaire n'est nécessaire ; les notifications sont déclenchées par le diff de chaque collecte PSIRT existante.
 
-Variables : `FORTIOS_EMAIL_ENABLED` (`false` par défaut), `FORTIOS_SMTP_HOST/PORT/USERNAME/PASSWORD/FROM/TO` (plusieurs destinataires séparés par des virgules), `FORTIOS_SMTP_PASSWORD_FILE` (prioritaire sur `PASSWORD`), `FORTIOS_SMTP_STARTTLS` (`true` par défaut), `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_APP_URL`.
+La configuration est séparée en deux parties :
 
-Un seul email synthétique par collecte (jamais un email par événement), avec un objet reflétant la catégorie la plus grave présente :
+- **Infrastructure SMTP — Docker / Portainer / environnement** : `FORTIOS_SMTP_HOST`, `FORTIOS_SMTP_PORT`, `FORTIOS_SMTP_USERNAME`, `FORTIOS_SMTP_PASSWORD_FILE`, `FORTIOS_SMTP_STARTTLS`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_SMTP_FROM` et `FORTIOS_APP_URL`. Le password est lu uniquement depuis le fichier secret monté ; il n'est jamais stocké dans Git, dans le JSON applicatif ni retourné au navigateur.
+- **Préférences fonctionnelles — Administration > Notifications** : activation, produits surveillés et destinataires. Elles sont validées strictement puis écrites atomiquement dans `data/notification-settings.json` (volume `data/`, gitignored). Un fichier absent équivaut à des notifications désactivées ; les anciennes variables `FORTIOS_EMAIL_ENABLED` / `FORTIOS_SMTP_TO` restent uniquement un mécanisme de bootstrap compatible tant que le fichier n'a jamais été enregistré.
 
-- **CRITICAL** : nouvelle CVE critique, ou CVE existante dont la sévérité passe à critique.
-- **DAILY** : nouvelles versions FortiOS/FortiAnalyzer/FortiManager (FortiClient/EMS exclus, trop bruyant), modification significative d'une CVE existante (voir ci-dessous), branche passant en fin de support.
-- **OPERATIONS** : une source en échec depuis ≥ 2 exécutions consécutives, ou son retour à la normale.
+Format persistant :
 
-Une CVE déjà connue déclenche un événement dès qu'un changement significatif est détecté, pas seulement un changement de sévérité : extension ou réduction du périmètre affecté (produits/modèles/plage de versions — l'apparition d'une version corrigée, `to` passant de `null` à une valeur, est simplement un cas particulier d'extension de plage), ou variation du score CVSS ≥ 1.0 point. Un changement purement technique (reformulation du titre, `updatedAt`, un score CVSS qui bouge de 0.1) ne déclenche jamais d'email à lui seul. Plusieurs changements simultanés sur la même CVE sont regroupés dans un seul événement, pas un par champ modifié.
+```json
+{
+  "enabled": true,
+  "minimumSeverity": "high",
+  "products": {
+    "fortigate-fortios": true,
+    "fortimanager": true,
+    "fortianalyzer": true,
+    "forticlient-ems": true,
+    "forticlient": {
+      "windows": true,
+      "macos": true,
+      "linux": true
+    }
+  },
+  "recipients": ["security@example.com"]
+}
+```
+
+Les identifiants reprennent directement le catalogue applicatif : FortiClient reste le produit canonique `forticlient`, avec les modèles existants `windows`, `macos` et `linux`. Il n'existe pas de seconde taxonomie produit.
+
+### Règle CVE High / Critical
+
+Un événement de sécurité est produit uniquement pour :
+
+- une nouvelle CVE **High** ou **Critical** touchant au moins un produit sélectionné ;
+- une CVE existante qui franchit `Medium/Low/Unknown → High`, `Medium/Low/Unknown → Critical` ou `High → Critical`.
+
+Une CVE Medium/Low, une High inchangée, une simple republication PSIRT, une modification de texte/CVSS/périmètre sans escalade de sévérité, ou un produit non sélectionné ne génère aucun email. Une CVE qui touche plusieurs produits sélectionnés reste une seule entrée avec tous les produits concernés.
+
+Un run produit au maximum un email synthétique. L'objet reprend la sévérité la plus forte du lot (`[FortiUpgrade][CRITICAL] …` ou `[FortiUpgrade][HIGH] …`) ; le corps contient un résumé Critical/High et par produit, puis une section par CVE. Le message est multipart `text/plain` + HTML compact compatible avec les clients email limités.
+
+Les catégories historiques restent actives lorsque les notifications sont activées :
+
+- **DAILY** : nouvelles versions FortiOS/FortiAnalyzer/FortiManager et branche passant en fin de support ;
+- **OPERATIONS** : source en échec depuis ≥ 2 exécutions consécutives ou retour à la normale ;
+- **CRITICAL** : CVE Critical, avec la nouvelle logique High/Critical détaillée ci-dessus.
 
 Une branche FortiOS franchissant sa date de fin de support déclenche un événement même si aucune donnée du catalogue n'a changé ce jour-là (`fortios_watch.py`/`endoflife.date` renvoient la même date de fin de support avant et après — seule l'avancée du calendrier fait la différence) : l'état « cette branche est-elle en fin de support » est donc suivi séparément d'une collecte à l'autre (`eolState` dans `data/fortios-notify-history.json`), pas dérivé d'une comparaison avant/après catalogue. Une branche vue pour la première fois initialise silencieusement cet état sans envoyer d'email, pour ne pas spammer toutes les fins de support déjà passées lors de la toute première activation ; ensuite, l'événement part exactement une fois au moment du franchissement, y compris après plusieurs jours sans collecte.
 
-Chaque événement a une clé de déduplication stable (`type|source|resource_id|new_value`, ex: `new-cve|psirt|CVE-2026-12345|critical`) — un même événement n'est donc jamais renvoyé deux fois. Les événements sont toujours calculés par différence entre l'état avant/après la collecte en cours, jamais par re-scan du catalogue entier : ni la première activation, ni un `--cve-backfill` historique, ne déclenchent d'email pour des données déjà existantes.
+Chaque événement a une clé de déduplication stable (`type|source|resource_id|new_value`, par exemple `new-cve|psirt|CVE-2026-12345|critical` ou `cve-severity|psirt|CVE-2026-12345|high-to-critical`). Les événements sont toujours calculés par différence entre le checkpoint de notification et la collecte courante, jamais par re-scan du catalogue entier : ni la première activation, ni un `--cve-backfill` historique, ne déclenchent d'email pour des données déjà existantes.
 
-**Outbox persistante (`data/fortios-notify-history.json`, gitignored)** — un échec SMTP (réseau, STARTTLS, authentification) est journalisé sans jamais faire échouer la collecte ni afficher le mot de passe, et ne fait plus perdre l'événement : celui-ci est écrit dans une file d'attente persistante *avant* toute tentative d'envoi, et n'en est retiré qu'après un envoi réussi. Une collecte suivante — même sans aucun changement neuf dans le catalogue — reprend automatiquement tout ce qui est resté en attente et retente l'envoi avec les événements de ce nouveau run. Le fichier tient trois choses sous le même verrou interprocessus (`cross_process_lock`) :
+**Outbox persistante (`data/fortios-notify-history.json`, gitignored)** — un échec SMTP (réseau, STARTTLS, authentification) est journalisé sans jamais faire échouer la collecte ni afficher le mot de passe, et ne fait plus perdre l'événement : celui-ci est écrit dans une file d'attente persistante *avant* toute tentative d'envoi, et n'en est retiré qu'après un envoi réussi. Une collecte suivante — même sans aucun changement neuf dans le catalogue — reprend automatiquement tout ce qui est resté en attente et retente l'envoi avec les événements de ce nouveau run. Le fichier tient quatre choses sous le même verrou interprocessus (`cross_process_lock`) :
+
+Désactiver les notifications suspend les envois sans supprimer l'outbox ; les événements déjà en attente après un échec SMTP seront donc retentés à la prochaine réactivation. Les nouvelles collectes effectuées pendant la désactivation ne créent pas d'événement en attente.
 
 ```json
 {
   "sentKeys": {"new-cve|psirt|CVE-2026-12345|critical": "2026-07-17T07:23:36Z"},
-  "outbox": [{"category": "CRITICAL", "dedupKey": "...", "summary": "...", "queuedAt": "...", "claimedBy": null, "claimedAt": null}],
-  "eolState": {"7.6": true}
+  "outbox": [{"category": "CRITICAL", "dedupKey": "...", "summary": "...", "severity": "critical", "details": {"kind": "cve"}, "queuedAt": "...", "claimedBy": null, "claimedAt": null}],
+  "eolState": {"7.6": true},
+  "checkpoint": {"versionsByProduct": {}, "cvesById": {}, "health": {}}
 }
 ```
 
 - `sentKeys` : historique de déduplication (purge après 180 jours), comme avant.
 - `outbox` : file d'attente des événements pas encore envoyés avec succès.
 - `eolState` : dernier état connu « branche en fin de support ou non » par branche (voir ci-dessus).
+- `checkpoint` : dernier catalogue/état de santé pris comme base du diff de notification.
 
 Chaque collecte réserve («&nbsp;réclame&nbsp;») les entrées de l'outbox qui ne sont pas déjà tenues par une autre exécution encore en cours (`claimedBy`/`claimedAt`, expire après 10&nbsp;minutes — largement au-delà du pire timeout SMTP réaliste — pour qu'une exécution plantée ne bloque pas indéfiniment les tentatives suivantes) : deux collectes qui se chevauchent ne peuvent donc jamais envoyer le même événement en double, la seconde ne réclamant rien de ce que la première tient déjà. Sur un succès d'envoi, les événements réclamés sont retirés de l'outbox et leur clé passe dans `sentKeys` ; sur un échec, la réclamation est simplement relâchée pour la prochaine collecte.
 
 Un fichier `fortios-notify-history.json` corrompu, tronqué ou de structure invalide est traité comme un état vide (jamais une exception), et archivé aside (`fortios-notify-history.json.corrupt-<timestamp>`) pour diagnostic. **Procédure de récupération** en cas de doute sur son intégrité : supprimer ou déplacer le fichier — la prochaine collecte en régénère un vide automatiquement ; au pire, cela ne fait que renvoyer une notification déjà connue une fois de plus (jamais en perdre), puisque les événements eux-mêmes restent dérivés du catalogue et de l'état de santé, pas du fichier de dédoublonnage lui-même.
 
-Tester la configuration sans lancer de collecte ni toucher aux données :
+L'interface privée `/cert/` expose les onglets **Certificats** et **Notifications** avec la même session administrateur, le même contrôle d'origine et le même jeton CSRF. Elle n'affiche que l'état SMTP, le serveur/port, STARTTLS et l'expéditeur — jamais le username, le password ni le chemin du secret. Le bouton **Envoyer un email de test** réutilise exactement le chemin SMTP de `fortios_notify.py` et retourne seulement un résultat nettoyé.
+
+Tester aussi en CLI sans lancer de collecte ni toucher au catalogue, à la santé ou à l'outbox :
 
 ```bash
 python3 scripts/fortios_watch.py --test-email
@@ -507,18 +548,23 @@ bouton d'import Portainer attend l'archive Docker `.tar` produite par
    FORTIOS_HTTP_BIND_ADDRESS=0.0.0.0
    FORTIOS_HTTP_PORT=8000
    FORTIOS_RUN_ON_START=0
-   FORTIOS_EMAIL_ENABLED=false
+   FORTIOS_SMTP_HOST=smtp.example.com
+   FORTIOS_SMTP_PORT=587
+   FORTIOS_SMTP_USERNAME=fortiupgrade@example.com
+   FORTIOS_SMTP_PASSWORD_FILE=/run/secrets/fortios-smtp-password
+   FORTIOS_SMTP_STARTTLS=true
+   FORTIOS_SMTP_TIMEOUT=10
+   FORTIOS_SMTP_FROM=fortiupgrade@example.com
+   FORTIOS_APP_URL=https://upgrade-path.example.internal/app/
    ```
 
-   Ajouter les variables `FORTIOS_SMTP_*` uniquement si les notifications email
-   doivent être activées ; ne jamais les placer dans l'image ou dans Git. Les
-   Stacks fournies ne transmettent volontairement pas `FORTIOS_SMTP_PASSWORD` :
-   utiliser `FORTIOS_SMTP_PASSWORD_FILE` pointant vers un secret monté en lecture
-   seule, afin que le mot de passe ne soit pas visible dans l'inspection du
-   conteneur.
+   Ce sont des valeurs d'exemple sans secret réel. Ne jamais créer de variable
+   `FORTIOS_SMTP_PASSWORD` dans Portainer : utiliser uniquement
+   `FORTIOS_SMTP_PASSWORD_FILE`, pointant vers un fichier monté en lecture seule.
 
-   Exemple à ajouter au service `scheduler` pour un fichier hôte déjà créé en
-   mode `0600` :
+   Monter le même fichier secret dans `web` (test depuis l'interface) et
+   `scheduler` (envoi après collecte). Exemple pour un fichier hôte déjà créé en
+   mode `0600`, à ajouter sous chacun des deux services :
 
    ```yaml
    volumes:
@@ -526,6 +572,8 @@ bouton d'import Portainer attend l'archive Docker `.tar` produite par
    environment:
      FORTIOS_SMTP_PASSWORD_FILE: /run/secrets/fortios-smtp-password
    ```
+   Les destinataires, l'activation et les produits ne sont pas des variables de
+   Stack : les enregistrer ensuite dans **Administration > Notifications**.
 5. Cliquer **Deploy the stack**.
 
 La Stack crée deux conteneurs, `web` et `scheduler`, et trois volumes nommés

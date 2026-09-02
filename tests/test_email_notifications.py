@@ -194,7 +194,7 @@ class EventGroupingAndComposeTests(unittest.TestCase):
             notify.NotificationEvent(category="DAILY", dedup_key="new-version|fortios|fortios|7.6.8", summary="Nouvelle version FortiOS 7.6.8"),
             notify.NotificationEvent(category="OPERATIONS", dedup_key="source-failure|forticlient|consecutive|2", summary="Collecte FortiClient en échec depuis 2 exécutions"),
         ]
-        subject, body = notify.compose_email(events, app_url="https://valdev.me:3001/app/", run_timestamp="2026-07-16T07:15:00Z")
+        subject, body, html_body = notify.compose_email(events, app_url="https://valdev.me:3001/app/", run_timestamp="2026-07-16T07:15:00Z")
         self.assertIn("2 nouvelle(s) CVE critique(s)", subject)
         self.assertIn("CVE-2026-00001", body)
         self.assertIn("CVE-2026-00002", body)
@@ -202,13 +202,14 @@ class EventGroupingAndComposeTests(unittest.TestCase):
         self.assertIn("Collecte FortiClient en échec", body)
         self.assertIn("https://valdev.me:3001/app/", body)
         self.assertIn("2026-07-16T07:15:00Z", body)
+        self.assertIn("CVE-2026-00001", html_body)
 
     def test_long_event_list_is_truncated_with_a_clear_note(self):
         events = [
             notify.NotificationEvent(category="DAILY", dedup_key=f"new-version|fortios|fortios|7.{i}.0", summary=f"Nouvelle version FortiOS 7.{i}.0")
             for i in range(30)
         ]
-        _, body = notify.compose_email(events, app_url="https://x", run_timestamp="2026-07-16T07:15:00Z")
+        _, body, _ = notify.compose_email(events, app_url="https://x", run_timestamp="2026-07-16T07:15:00Z")
         self.assertIn("tronquée", body)
         self.assertIn("et 10 de plus", body)
 
@@ -247,121 +248,28 @@ class CveEventDerivationTests(unittest.TestCase):
         events = notify.derive_new_cve_events([cve])
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].category, "CRITICAL")
-        self.assertIn("7.4.0", events[0].summary)
+        self.assertEqual(events[0].severity, "critical")
 
-    def test_new_non_critical_cve_is_daily_category(self):
+    def test_new_medium_cve_is_silent(self):
         cve = {"id": "CVE-2026-00002", "severity": "medium", "affected": []}
-        events = notify.derive_new_cve_events([cve])
-        self.assertEqual(events[0].category, "DAILY")
+        self.assertEqual(notify.derive_new_cve_events([cve]), [])
 
     def test_severity_change_to_critical_is_flagged(self):
-        before = {"CVE-2026-00003": {"id": "CVE-2026-00003", "severity": "medium", "affected": []}}
-        after = {"CVE-2026-00003": {"id": "CVE-2026-00003", "severity": "critical", "affected": []}}
+        affected = [{"product": "fortigate-fortios", "branch": "7.4"}]
+        before = {"CVE-2026-00003": {"id": "CVE-2026-00003", "severity": "medium", "affected": affected}}
+        after = {"CVE-2026-00003": {"id": "CVE-2026-00003", "severity": "critical", "affected": affected}}
         events = notify.derive_cve_modification_events(before, after)
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].category, "CRITICAL")
 
-    def test_unchanged_severity_is_not_flagged(self):
-        before = {"CVE-2026-00004": {"id": "CVE-2026-00004", "severity": "medium", "cvssScore": 5.0, "affected": []}}
-        after = {"CVE-2026-00004": {"id": "CVE-2026-00004", "severity": "medium", "cvssScore": 5.1, "affected": []}}
-        # cvssScore changed but severity did not -- not significant enough to notify.
-        self.assertEqual(notify.derive_cve_modification_events(before, after), [])
-
-    def test_affected_scope_extension_is_flagged(self):
-        before = {"CVE-2026-00005": {
-            "id": "CVE-2026-00005", "severity": "medium",
-            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
+    def test_unchanged_high_is_not_flagged_for_scope_or_cvss_edits(self):
+        before = {"CVE-2026-00004": {
+            "id": "CVE-2026-00004", "severity": "high", "cvssScore": 7.1,
+            "affected": [{"product": "fortigate-fortios", "branch": "7.4"}],
         }}
-        after = {"CVE-2026-00005": {
-            "id": "CVE-2026-00005", "severity": "medium",
-            "affected": [
-                {"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"},
-                {"product": "fortianalyzer", "branch": "7.2", "from": "7.2.0", "to": "7.2.3"},
-            ],
-        }}
-        events = notify.derive_cve_modification_events(before, after)
-        self.assertEqual(len(events), 1)
-        self.assertIn("périmètre étendu", events[0].summary)
-
-    def test_affected_scope_reduction_is_flagged(self):
-        before = {"CVE-2026-00006": {
-            "id": "CVE-2026-00006", "severity": "medium",
-            "affected": [
-                {"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"},
-                {"product": "fortianalyzer", "branch": "7.2", "from": "7.2.0", "to": "7.2.3"},
-            ],
-        }}
-        after = {"CVE-2026-00006": {
-            "id": "CVE-2026-00006", "severity": "medium",
-            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
-        }}
-        events = notify.derive_cve_modification_events(before, after)
-        self.assertEqual(len(events), 1)
-        self.assertIn("périmètre réduit", events[0].summary)
-
-    def test_version_range_change_is_flagged_as_scope_change(self):
-        before = {"CVE-2026-00007": {
-            "id": "CVE-2026-00007", "severity": "medium",
-            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
-        }}
-        after = {"CVE-2026-00007": {
-            "id": "CVE-2026-00007", "severity": "medium",
-            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.8"}],
-        }}
-        events = notify.derive_cve_modification_events(before, after)
-        self.assertEqual(len(events), 1)
-
-    def test_fixed_version_becoming_known_is_flagged(self):
-        """A `to` bound appearing for the first time (open-ended -> a fix is now identified) is
-        itself a version-range change and must notify, even with severity/CVSS unchanged."""
-        before = {"CVE-2026-00008": {
-            "id": "CVE-2026-00008", "severity": "high", "cvssScore": 7.0,
-            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": None}],
-        }}
-        after = {"CVE-2026-00008": {
-            "id": "CVE-2026-00008", "severity": "high", "cvssScore": 7.0,
-            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.9"}],
-        }}
-        events = notify.derive_cve_modification_events(before, after)
-        self.assertEqual(len(events), 1)
-
-    def test_significant_cvss_change_is_flagged(self):
-        before = {"CVE-2026-00009": {"id": "CVE-2026-00009", "severity": "medium", "cvssScore": 5.0, "affected": []}}
-        after = {"CVE-2026-00009": {"id": "CVE-2026-00009", "severity": "medium", "cvssScore": 6.5, "affected": []}}
-        events = notify.derive_cve_modification_events(before, after)
-        self.assertEqual(len(events), 1)
-        self.assertIn("CVSS 5.0 → 6.5", events[0].summary)
-
-    def test_small_cvss_change_alone_is_not_flagged(self):
-        before = {"CVE-2026-00010": {"id": "CVE-2026-00010", "severity": "medium", "cvssScore": 5.0, "affected": []}}
-        after = {"CVE-2026-00010": {"id": "CVE-2026-00010", "severity": "medium", "cvssScore": 5.9, "affected": []}}
-        self.assertEqual(notify.derive_cve_modification_events(before, after), [])
-
-    def test_multiple_simultaneous_changes_produce_a_single_combined_event(self):
-        before = {"CVE-2026-00011": {
-            "id": "CVE-2026-00011", "severity": "medium", "cvssScore": 5.0,
-            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
-        }}
-        after = {"CVE-2026-00011": {
-            "id": "CVE-2026-00011", "severity": "critical", "cvssScore": 9.0,
-            "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.8"}],
-        }}
-        events = notify.derive_cve_modification_events(before, after)
-        self.assertEqual(len(events), 1, "one combined notification, not one per changed field")
-        self.assertEqual(events[0].category, "CRITICAL")
-        self.assertIn("sévérité medium → critical", events[0].summary)
-        self.assertIn("CVSS 5.0 → 9.0", events[0].summary)
-
-    def test_purely_technical_or_ordering_change_is_not_flagged(self):
-        """Only title/description wording or updatedAt changed -- severity, CVSS, and affected
-        scope are all identical, so this must never generate a notification."""
-        before = {"CVE-2026-00012": {
-            "id": "CVE-2026-00012", "severity": "medium", "cvssScore": 5.0, "title": "Old title",
-            "updatedAt": "2026-07-01", "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
-        }}
-        after = {"CVE-2026-00012": {
-            "id": "CVE-2026-00012", "severity": "medium", "cvssScore": 5.0, "title": "Reworded title",
-            "updatedAt": "2026-07-16", "affected": [{"product": "fortigate-fortios", "branch": "7.4", "from": "7.4.0", "to": "7.4.5"}],
+        after = {"CVE-2026-00004": {
+            "id": "CVE-2026-00004", "severity": "high", "cvssScore": 8.4,
+            "affected": [{"product": "fortigate-fortios", "branch": "7.6"}],
         }}
         self.assertEqual(notify.derive_cve_modification_events(before, after), [])
 
@@ -369,9 +277,10 @@ class CveEventDerivationTests(unittest.TestCase):
         """Two DIFFERENT changes to the same CVE (e.g. weeks apart) must each get their own,
         distinct dedup key -- otherwise the second, genuinely new change would be silently
         swallowed by the history left behind by the first."""
-        state_a = {"id": "CVE-2026-00013", "severity": "medium", "cvssScore": 5.0, "affected": []}
-        state_b = {"id": "CVE-2026-00013", "severity": "high", "cvssScore": 5.0, "affected": []}
-        state_c = {"id": "CVE-2026-00013", "severity": "critical", "cvssScore": 5.0, "affected": []}
+        affected = [{"product": "fortigate-fortios", "branch": "7.4"}]
+        state_a = {"id": "CVE-2026-00013", "severity": "medium", "cvssScore": 5.0, "affected": affected}
+        state_b = {"id": "CVE-2026-00013", "severity": "high", "cvssScore": 7.5, "affected": affected}
+        state_c = {"id": "CVE-2026-00013", "severity": "critical", "cvssScore": 9.5, "affected": affected}
         events_1 = notify.derive_cve_modification_events({"CVE-2026-00013": state_a}, {"CVE-2026-00013": state_b})
         events_2 = notify.derive_cve_modification_events({"CVE-2026-00013": state_b}, {"CVE-2026-00013": state_c})
         self.assertNotEqual(events_1[0].dedup_key, events_2[0].dedup_key)
@@ -510,7 +419,7 @@ class MainIntegrationTests(unittest.TestCase):
 
             fake_cve = {
                 "id": "CVE-2026-00099", "advisoryId": "FG-IR-26-099", "title": "t",
-                "severity": "critical", "affected": [], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
+                "severity": "critical", "affected": [{"product": "fortigate-fortios", "branch": "7.4"}], "publishedAt": "2026-07-17", "updatedAt": "2026-07-17",
             }
             original_collect = fw.collect_cve_catalog
             original_psirt_versions = fw.fetch_psirt_versions
@@ -559,7 +468,7 @@ class MainIntegrationTests(unittest.TestCase):
 
             self.assertEqual(exit_code_2, 0)
             self.assertTrue(client.send_message.called, "the retried event must actually be sent this time")
-            sent_body = client.send_message.call_args[0][0].get_content()
+            sent_body = client.send_message.call_args[0][0].get_body(preferencelist=("plain",)).get_content()
             self.assertIn("CVE-2026-00099", sent_body)
 
             state_after_run_2 = notify.load_notify_state(history_path)

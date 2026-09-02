@@ -30,6 +30,51 @@ l'activation atomique. Hors conteneur, la clé normalisée est écrite en mode
 n'est lisible que par le PGID du processus applicatif ; ce processus ne peut ni
 modifier la clé ni remplacer le lien actif.
 
+## HTTPS terminé par Nginx
+
+Quand Nginx termine TLS puis relaie vers le conteneur en HTTP, ne pas activer
+`FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST`. Utiliser à la place
+`FORTIOS_CERT_TRUSTED_PROXY_CIDRS` avec uniquement l'adresse ou le CIDR exact du
+proxy tel qu'il est vu par le conteneur. L'application n'accepte alors
+`X-Forwarded-Proto: https` et `X-Real-IP` que depuis cette source ; le cookie de
+session reste `Secure`, l'origine HTTPS exacte est exigée et les limites de
+connexion sont appliquées à l'IP cliente transmise par Nginx.
+
+L'activation derrière Nginx passe par un helper root **sur l'hôte**, sans réseau,
+joignable seulement par socket Unix. Le conteneur web monte les certificats et le
+socket en lecture seule. Le helper vérifie l'UID/GID du pair avec `SO_PEERCRED`,
+revérifie la révision du compte admin, valide et installe la paire, exécute
+`nginx -t`, puis recharge Nginx. Si ce rechargement échoue, l'ancienne paire est
+restaurée et Nginx est rechargé une seconde fois avant de retourner l'erreur.
+
+Procédure générique :
+
+1. copier `scripts/cert_helper.py`, `scripts/cert_helper_protocol.py`,
+   `scripts/cert_admin.py`, `scripts/cert_web.py`, `scripts/certctl.py` et
+   `scripts/tls_lock.py` sous `/opt/fortios-cert-helper/scripts/` ;
+2. copier `deploy/fortios-cert-helper.service` dans `/etc/systemd/system/` et
+   `deploy/fortios-cert-helper.env.example` dans
+   `/etc/fortios-cert-helper.env`, puis adapter le FQDN et protéger ce fichier en
+   mode `0600` ;
+3. amorcer `/var/lib/fortiupgrade/certificates/active` avec la paire actuellement
+   chargée par Nginx via `scripts/certctl.py` avant de démarrer le helper ;
+4. faire pointer `ssl_certificate` et `ssl_certificate_key` vers
+   `/var/lib/fortiupgrade/certificates/active/fullchain.pem` et `privkey.pem`,
+   exécuter `nginx -t`, puis recharger Nginx ;
+5. configurer le service web avec
+   `FORTIOS_CERT_HELPER_SOCKET=/run/fortios-cert-helper/helper.sock`, le même
+   répertoire de socket monté en lecture seule, le volume certificat en lecture
+   seule (`FORTIOS_CERTS_MOUNT_MODE=ro`), `FORTIOS_TLS_HOSTNAME=<fqdn>` et le
+   CIDR proxy exact ;
+6. créer le compte sur l'hôte avec `scripts/cert_admin.py setup` et
+   `PGID` configuré. Le mot de passe est saisi deux fois sur l'entrée standard et
+   n'est jamais placé dans Compose ni dans la ligne de commande.
+
+Conserver la configuration Nginx précédente et son certificat comme rollback
+jusqu'au smoke test externe complet. Le mode à volumes Docker nommés reste en
+validation uniquement : le helper hôte nécessite un bind mount explicite et
+stable vers `/var/lib/fortiupgrade/certificates`.
+
 ## Tester la page `/cert` sans Docker
 
 Le mode local permet de valider le parcours complet dans un navigateur, tout en

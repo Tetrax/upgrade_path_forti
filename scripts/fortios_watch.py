@@ -292,6 +292,7 @@ HEALTH_SOURCE_LABELS = {
 
 DEFAULT_HEALTH_PATH = Path("data/fortios-health.json")
 DEFAULT_NOTIFY_HISTORY_PATH = Path("data/fortios-notify-history.json")
+DEFAULT_NOTIFICATION_SETTINGS_PATH = Path("data/notification-settings.json")
 
 
 _VALID_HEALTH_STATUSES = frozenset(
@@ -2345,6 +2346,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Fichier d'historique de déduplication des notifications email.",
     )
     parser.add_argument(
+        "--notification-settings-output",
+        type=Path,
+        default=DEFAULT_NOTIFICATION_SETTINGS_PATH,
+        help="Préférences fonctionnelles persistantes des notifications email.",
+    )
+    parser.add_argument(
         "--test-email",
         action="store_true",
         help="Envoie un email de test (vérifie la config SMTP), ne lance aucune collecte.",
@@ -2362,7 +2369,9 @@ def main(argv: list[str]) -> int:
         # read/write, no dedup history — this is purely a "does SMTP actually work" check.
         import fortios_notify
 
-        config = fortios_notify.load_email_config()
+        config = fortios_notify.load_email_config(
+            settings_path=args.notification_settings_output
+        )
         return 0 if fortios_notify.send_test_email(config) else 1
 
     run_started_at_monotonic = time.monotonic()
@@ -2390,10 +2399,14 @@ def main(argv: list[str]) -> int:
     # pre-collection baseline is already safely anchored (see
     # fortios_notify.ensure_checkpoint()'s docstring for the full reasoning).
     notify_checkpoint: dict[str, Any] | None = None
+    notification_settings: Any = None
     try:
         import fortios_notify
 
-        if fortios_notify.load_email_config().enabled:
+        notification_settings = fortios_notify.load_notification_settings(
+            args.notification_settings_output
+        )
+        if notification_settings.enabled or args.notification_settings_output.exists():
             notify_checkpoint = fortios_notify.ensure_checkpoint(
                 args.notify_history_output,
                 {
@@ -2894,8 +2907,44 @@ def main(argv: list[str]) -> int:
 
         import fortios_notify  # deferred: avoids a load-time circular import with this module
 
-        email_config = fortios_notify.load_email_config()
-        if email_config.enabled and notify_checkpoint is not None:
+        email_config = fortios_notify.load_email_config(
+            settings=notification_settings,
+            settings_path=args.notification_settings_output,
+        )
+        if (
+            notification_settings is not None
+            and not email_config.enabled
+            and notify_checkpoint is not None
+        ):
+            health_after = read_health_state(args.health_output).get("sources", {})
+            cves_after_by_id = {
+                item["id"]: item
+                for item in final_state.get("cves", [])
+                if item.get("id")
+            }
+            notify_state = fortios_notify.load_notify_state(args.notify_history_output)
+            _, eol_state_after = fortios_notify.derive_eol_events(
+                final_state.get("fortiosLifecycle", {}),
+                notify_state.get("eolState", {}),
+                now=final_state["generatedAt"],
+            )
+            fortios_notify.commit_disabled_notification_state(
+                args.notify_history_output,
+                eol_state_after,
+                {
+                    "versionsByProduct": {
+                        product: sorted(versions)
+                        for product, versions in versions_by_product(final_state).items()
+                    },
+                    "cvesById": cves_after_by_id,
+                    "health": health_after,
+                },
+            )
+        if (
+            notification_settings is not None
+            and email_config.enabled
+            and notify_checkpoint is not None
+        ):
             health_after = read_health_state(args.health_output).get("sources", {})
             notify_state = fortios_notify.load_notify_state(args.notify_history_output)
 
@@ -2930,9 +2979,13 @@ def main(argv: list[str]) -> int:
                     for item in final_state.get("cves", [])
                     if item.get("id") and item["id"] not in checkpoint_cves_by_id
                 ]
-                events += fortios_notify.derive_new_cve_events(newly_added_cves)
+                events += fortios_notify.derive_new_cve_events(
+                    newly_added_cves, notification_settings
+                )
                 events += fortios_notify.derive_cve_modification_events(
-                    checkpoint_cves_by_id, cves_after_by_id
+                    checkpoint_cves_by_id,
+                    cves_after_by_id,
+                    notification_settings,
                 )
 
                 eol_events, eol_state_after = fortios_notify.derive_eol_events(
@@ -2976,8 +3029,10 @@ def main(argv: list[str]) -> int:
                     run_timestamp=final_state["generatedAt"],
                 )
                 if composed:
-                    subject, body = composed
-                    if fortios_notify.send_email(email_config, subject, body):
+                    subject, text_body, html_body = composed
+                    if fortios_notify.send_email(
+                        email_config, subject, text_body, html_body
+                    ):
                         fortios_notify.finalize_sent_events(
                             args.notify_history_output, pending
                         )

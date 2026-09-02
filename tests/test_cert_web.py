@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "scripts" / "fortios_server.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 import cert_admin  # type: ignore[import-not-found]
+import cert_helper  # type: ignore[import-not-found]
 
 from tests.test_certctl import HOSTNAME, create_self_signed
 
@@ -89,10 +90,12 @@ def running_server(environment: dict[str, str]) -> Iterator[str]:
 class CertificateWebTests(unittest.TestCase):
     def test_certificate_page_is_hidden_on_plain_http_by_default(self) -> None:
         with running_server({}) as base_url:
-            with self.assertRaises(urllib.error.HTTPError) as raised:
-                urllib.request.urlopen(f"{base_url}/cert/", timeout=2)
+            for path in ("/cert/", "/app/cert/"):
+                with self.subTest(path=path):
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        urllib.request.urlopen(f"{base_url}{path}", timeout=2)
 
-            self.assertEqual(raised.exception.code, 404)
+                    self.assertEqual(raised.exception.code, 404)
 
     def test_local_development_flag_exposes_the_certificate_login_page(self) -> None:
         with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url:
@@ -104,7 +107,8 @@ class CertificateWebTests(unittest.TestCase):
                 body = response.read().decode("utf-8")
 
             self.assertEqual(response.status, 200)
-            self.assertIn("Gestion des certificats", body)
+            self.assertIn("Administration", body)
+            self.assertIn("Certificats", body)
             self.assertIn('id="login-form"', body)
 
     def test_valid_login_creates_an_http_only_session_and_csrf_token(self) -> None:
@@ -182,6 +186,80 @@ class CertificateWebTests(unittest.TestCase):
 
             self.assertIn("Secure", cookie)
             self.assertEqual(hsts, "max-age=31536000")
+
+    def test_trusted_reverse_proxy_https_enables_login_and_secure_cookie(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            environment = {
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_CERT_TRUSTED_PROXY_CIDRS": "127.0.0.1/32",
+            }
+            with running_server(environment) as base_url:
+                request = urllib.request.Request(
+                    f"{base_url}/api/cert/login",
+                    data=json.dumps(
+                        {"username": "valentin", "password": "mot-de-passe-solide"},
+                    ).encode(),
+                    method="POST",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Host": "fortiupgrade.example",
+                        "Origin": "https://fortiupgrade.example",
+                        "X-Forwarded-Proto": "https",
+                        "X-Real-IP": "198.51.100.7",
+                    },
+                )
+                with urllib.request.urlopen(request, timeout=3) as response:
+                    cookie = response.headers.get("Set-Cookie", "")
+                    hsts = response.headers.get("Strict-Transport-Security", "")
+
+            self.assertIn("Secure", cookie)
+            self.assertEqual(hsts, "max-age=31536000")
+
+    def test_trusted_proxy_rate_limits_the_forwarded_client_not_the_proxy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            environment = {
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_CERT_TRUSTED_PROXY_CIDRS": "127.0.0.1/32",
+            }
+            with running_server(environment) as base_url:
+                def login(password: str, client_ip: str):
+                    return urllib.request.urlopen(
+                        urllib.request.Request(
+                            f"{base_url}/api/cert/login",
+                            data=json.dumps(
+                                {"username": "valentin", "password": password},
+                            ).encode(),
+                            method="POST",
+                            headers={
+                                "Content-Type": "application/json",
+                                "Host": "fortiupgrade.example",
+                                "Origin": "https://fortiupgrade.example",
+                                "X-Forwarded-Proto": "https",
+                                "X-Real-IP": client_ip,
+                            },
+                        ),
+                        timeout=3,
+                    )
+
+                for _ in range(5):
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        login("mauvais-mot-de-passe", "198.51.100.7")
+                    self.assertEqual(raised.exception.code, 401)
+
+                with login("mot-de-passe-solide", "198.51.100.8") as response:
+                    payload = json.load(response)
+
+            self.assertTrue(payload["authenticated"])
 
     def test_authenticated_session_can_read_private_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -438,6 +516,89 @@ class CertificateWebTests(unittest.TestCase):
 
             self.assertEqual(install_response.status, 200, installation)
             self.assertTrue(installation["installed"])
+            self.assertTrue((output / "fullchain.pem").is_file())
+            self.assertTrue((output / "privkey.pem").is_file())
+
+    def test_authenticated_admin_can_install_through_the_unix_helper(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            output = root / "active"
+            certificate, private_key = create_self_signed(root)
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            socket_path = root / "run" / "helper.sock"
+            socket_path.parent.mkdir()
+            processor = cert_helper.CertificateInstallProcessor(
+                hostname=HOSTNAME,
+                output_dir=output,
+                credentials_file=credentials,
+                allowed_uid=os.getuid(),
+                allowed_gid=os.getgid(),
+            )
+            helper_server = cert_helper.CertificateHelperServer(socket_path, processor)
+            helper_thread = threading.Thread(target=helper_server.serve_forever, daemon=True)
+            helper_thread.start()
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_CERT_HELPER_SOCKET": str(socket_path),
+                "FORTIOS_TLS_HOSTNAME": HOSTNAME,
+            }
+            try:
+                with running_server(environment) as base_url:
+                    opener = urllib.request.build_opener(
+                        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+                    )
+                    login = urllib.request.Request(
+                        f"{base_url}/api/cert/login",
+                        data=json.dumps(
+                            {"username": "valentin", "password": "mot-de-passe-solide"},
+                        ).encode(),
+                        method="POST",
+                        headers={"Content-Type": "application/json", "Origin": base_url},
+                    )
+                    with opener.open(login, timeout=3) as login_response:
+                        csrf_token = json.load(login_response)["csrfToken"]
+
+                    upload = {
+                        "certificateBase64": base64.b64encode(certificate.read_bytes()).decode(),
+                        "privateKeyBase64": base64.b64encode(private_key.read_bytes()).decode(),
+                        "chainBase64": "",
+                        "password": "",
+                    }
+                    headers = {
+                        "Content-Type": "application/json",
+                        "Origin": base_url,
+                        "X-CSRF-Token": csrf_token,
+                    }
+                    validate = urllib.request.Request(
+                        f"{base_url}/api/cert/validate",
+                        data=json.dumps(upload).encode(),
+                        method="POST",
+                        headers=headers,
+                    )
+                    with opener.open(validate, timeout=8) as validate_response:
+                        validation = json.load(validate_response)
+
+                    upload["validationToken"] = validation["validationToken"]
+                    install = urllib.request.Request(
+                        f"{base_url}/api/cert/install",
+                        data=json.dumps(upload).encode(),
+                        method="POST",
+                        headers=headers,
+                    )
+                    with opener.open(install, timeout=8) as install_response:
+                        installation = json.load(install_response)
+            finally:
+                helper_server.shutdown()
+                helper_server.server_close()
+                helper_thread.join(timeout=3)
+
+            self.assertTrue(installation["installed"])
+            self.assertFalse(installation["restartRequired"])
             self.assertTrue((output / "fullchain.pem").is_file())
             self.assertTrue((output / "privkey.pem").is_file())
 

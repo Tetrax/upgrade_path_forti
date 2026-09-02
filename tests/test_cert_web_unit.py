@@ -16,11 +16,42 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import cert_web  # type: ignore[import-not-found]
+import fortios_server  # type: ignore[import-not-found]
 
 from tests.test_certctl import HOSTNAME, create_self_signed
 
 
 class CertificateSessionTests(unittest.TestCase):
+    def test_certificate_activation_uses_the_privileged_helper_when_configured(self) -> None:
+        payload = {
+            "certificateBase64": "certificate",
+            "privateKeyBase64": "key",
+            "chainBase64": "",
+            "password": "",
+        }
+        expected = {"hostname": HOSTNAME}
+        helper_socket = Path("/run/fortios-cert-helper/helper.sock")
+
+        with mock.patch.object(
+            fortios_server,
+            "install_via_helper",
+            return_value=expected,
+        ) as install:
+            result = fortios_server.activate_uploaded_certificate(
+                payload,
+                HOSTNAME,
+                Path("/unused/direct/output"),
+                helper_socket=helper_socket,
+                credentials_revision="a" * 64,
+            )
+
+        self.assertEqual(result, expected)
+        install.assert_called_once_with(
+            helper_socket,
+            payload,
+            credentials_revision="a" * 64,
+        )
+
     def test_revoke_invalidates_an_existing_session(self) -> None:
         self.assertTrue(
             hasattr(cert_web.SessionStore, "revoke"),

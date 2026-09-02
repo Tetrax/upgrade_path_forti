@@ -86,12 +86,15 @@ FORTIOS_TLS_CERT=
 FORTIOS_TLS_KEY=
 FORTIOS_TLS_HOSTNAME=
 FORTIOS_RUN_ON_START=0
-FORTIOS_EMAIL_ENABLED=false
 FORTIOS_APP_URL=http://IP_LAN_VM:8000/app/
 FORTIOS_DATA_DIR=/opt/upgrade_path/data
 FORTIOS_DOCS_DIR=/opt/upgrade_path/docs
 FORTIOS_CERTS_DIR=/opt/upgrade_path/certificates
 ```
+
+Les paramètres SMTP sont optionnels et restent dans les variables de Stack, avec le password
+fourni uniquement par `FORTIOS_SMTP_PASSWORD_FILE`. L'activation, les produits surveillés et les
+destinataires se configurent ensuite dans **Administration > Notifications**.
 
 6. Cliquer **Deploy the stack**.
 
