@@ -271,6 +271,21 @@ class CertificateSessionTests(unittest.TestCase):
         self.assertTrue(store.consume(ticket, "session-a", payload))
         self.assertFalse(store.consume(ticket, "session-a", payload), "un ticket doit être à usage unique")
 
+    def test_email_preview_store_is_session_bound_short_lived_and_memory_bounded(self) -> None:
+        with mock.patch.object(cert_web.time, "monotonic", return_value=100.0):
+            store = cert_web.EmailPreviewStore(ttl_seconds=10, maximum=2)
+            first = store.issue("session-a", "<p>first</p>")
+            second = store.issue("session-a", "<p>second</p>")
+            third = store.issue("session-a", "<p>third</p>")
+            self.assertIsNone(store.get(first, "session-a"))
+            self.assertIsNone(store.get(second, "session-b"))
+            self.assertEqual(store.get(second, "session-a"), "<p>second</p>")
+            self.assertEqual(store.get(third, "session-a"), "<p>third</p>")
+            self.assertLessEqual(len(store._documents), 2)
+
+        with mock.patch.object(cert_web.time, "monotonic", return_value=111.0):
+            self.assertIsNone(store.get(second, "session-a"))
+
     def test_uploaded_base64_is_strictly_decoded_and_size_limited(self) -> None:
         with self.assertRaises(cert_web.certctl.CertificateError):
             cert_web._decode_upload({"certificate": "%%%"}, "certificate", 10)

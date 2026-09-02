@@ -395,7 +395,14 @@ def test_notifications_admin_exposes_grouped_smtp_and_email_appearance(page, for
     expect(page.locator("#smtp-password")).to_have_value("")
 
 
-def test_email_preview_scenarios_display_the_backend_subject_html_and_text(page, fortios_server):
+def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fortios_server):
+    csp_violations: list[str] = []
+
+    def record_console(message) -> None:
+        if "Content Security Policy directive" in message.text:
+            csp_violations.append(message.text)
+
+    page.on("console", record_console)
     login_cert_admin(page, fortios_server)
     page.click("#notifications-tab")
 
@@ -413,7 +420,53 @@ def test_email_preview_scenarios_display_the_backend_subject_html_and_text(page,
 
     expect(page.locator("#email-preview-subject")).to_have_text(preview["subject"])
     expect(page.locator("#email-preview-text")).to_have_text(preview["text"])
-    assert page.locator("#email-preview-frame").get_attribute("srcdoc") == preview["html"]
+    preview_frame = page.locator("#email-preview-frame")
+    assert preview_frame.get_attribute("srcdoc") is None
+    assert preview_frame.get_attribute("sandbox") == ""
+    expect(preview_frame).to_have_attribute("src", preview["renderUrl"])
+
+    frame = page.frame(url=re.compile(r"/api/cert/notifications/preview/render/"))
+    assert frame is not None
+    computed = frame.evaluate(
+        """() => {
+          const title = document.querySelector('h1');
+          const container = title.parentElement;
+          const headings = [...document.querySelectorAll('h2')];
+          const critical = headings.find(element => element.textContent.includes('CRITICAL'));
+          const high = headings.find(element => element.textContent.includes('HIGH'));
+          const criticalBlock = critical.parentElement;
+          return {
+            maxWidth: getComputedStyle(container).maxWidth,
+            fontFamily: getComputedStyle(container).fontFamily,
+            padding: getComputedStyle(container).padding,
+            criticalColor: getComputedStyle(critical).color,
+            highColor: getComputedStyle(high).color,
+            separatorStyle: getComputedStyle(criticalBlock).borderTopStyle,
+            separatorWidth: getComputedStyle(criticalBlock).borderTopWidth,
+          };
+        }"""
+    )
+    assert computed == {
+        "maxWidth": "680px",
+        "fontFamily": "Arial, sans-serif",
+        "padding": "20px",
+        "criticalColor": "rgb(180, 35, 24)",
+        "highColor": "rgb(181, 71, 8)",
+        "separatorStyle": "solid",
+        "separatorWidth": "1px",
+    }
+    isolation = frame.evaluate(
+        """() => {
+          let parentAccess;
+          try {
+            parentAccess = window.parent.document.title;
+          } catch (error) {
+            parentAccess = error.name;
+          }
+          return {origin: window.origin, parentAccess};
+        }"""
+    )
+    assert isolation == {"origin": "null", "parentAccess": "SecurityError"}
     for expected in (
         "Critical : 1",
         "High     : 2",
@@ -426,6 +479,13 @@ def test_email_preview_scenarios_display_the_backend_subject_html_and_text(page,
     expect(page.locator("#email-preview-text")).to_contain_text(
         "CRITICAL — CVE-2026-00001"
     )
+    assert frame.locator("h2", has_text="CVE-2026-00001").count() == 1
+    first_cve_block = frame.locator("h2", has_text="CVE-2026-00001").locator("..")
+    expect(first_cve_block).to_contain_text("FortiGate / FortiOS")
+    expect(first_cve_block).to_contain_text("FortiManager")
+    expect(frame.locator("body")).to_contain_text("FortiUpgrade")
+    expect(frame.locator("body")).to_contain_text("3 nouvelles vulnérabilités")
+    assert csp_violations == []
 
 
 def test_email_preview_refresh_applies_live_appearance_and_stays_mobile_safe(page, fortios_server):
@@ -444,8 +504,14 @@ def test_email_preview_refresh_applies_live_appearance_and_stays_mobile_safe(pag
     expect(page.locator("#email-preview-text")).to_contain_text(
         "FortiUpgrade Mobile SOC"
     )
-    assert "Introduction live." in preview["html"]
-    assert "Signature live." in preview["html"]
+    expect(page.locator("#email-preview-frame")).to_have_attribute(
+        "src", preview["renderUrl"]
+    )
+    frame = page.frame(url=re.compile(r"/api/cert/notifications/preview/render/"))
+    assert frame is not None
+    expect(frame.locator("body")).to_contain_text("FortiUpgrade Mobile SOC")
+    expect(frame.locator("body")).to_contain_text("Introduction live.")
+    expect(frame.locator("body")).to_contain_text("Signature live.")
 
     page.set_viewport_size({"width": 375, "height": 812})
     assert page.evaluate(
@@ -454,6 +520,33 @@ def test_email_preview_refresh_applies_live_appearance_and_stays_mobile_safe(pag
     assert page.locator("#email-preview-frame").evaluate(
         "element => element.getBoundingClientRect().width <= element.parentElement.getBoundingClientRect().width"
     )
+
+
+def test_email_preview_keeps_appearance_html_inert(page, fortios_server):
+    dialogs: list[str] = []
+    page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+    page.fill("#email-display-name", "<script>alert(1)</script>")
+    page.fill("#email-introduction", "<img src=x onerror=alert(2)>")
+    page.fill("#email-signature", "<svg onload=alert(3)>")
+
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/notifications/preview")
+    ) as preview_response:
+        page.click("#preview-email-button")
+    preview = preview_response.value.json()
+    expect(page.locator("#email-preview-frame")).to_have_attribute(
+        "src", preview["renderUrl"]
+    )
+
+    frame = page.frame(url=re.compile(r"/api/cert/notifications/preview/render/"))
+    assert frame is not None
+    expect(frame.locator("body")).to_contain_text("<script>alert(1)</script>")
+    expect(frame.locator("body")).to_contain_text("<img src=x onerror=alert(2)>")
+    expect(frame.locator("body")).to_contain_text("<svg onload=alert(3)>")
+    assert frame.locator("script, img, svg").count() == 0
+    assert dialogs == []
 
 
 def test_email_preview_ignores_stale_responses_after_rapid_scenario_changes(

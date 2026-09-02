@@ -297,6 +297,64 @@ class ValidationTicketStore:
             self._tickets.pop(key, None)
 
 
+@dataclass(frozen=True)
+class EmailPreviewDocument:
+    session_id: str
+    html: str
+    expires_at: float
+
+
+class EmailPreviewStore:
+    """Short-lived, session-bound email HTML kept only in process memory."""
+
+    def __init__(self, ttl_seconds: int = 5 * 60, maximum: int = 128) -> None:
+        if min(ttl_seconds, maximum) <= 0:
+            raise ValueError("Les limites d'aperçu doivent être strictement positives.")
+        self.ttl_seconds = ttl_seconds
+        self.maximum = maximum
+        self._documents: dict[str, EmailPreviewDocument] = {}
+        self._lock = threading.Lock()
+
+    def issue(self, session_id: str, html: str) -> str:
+        now = time.monotonic()
+        token = secrets.token_urlsafe(32)
+        document = EmailPreviewDocument(
+            session_id=session_id,
+            html=html,
+            expires_at=now + self.ttl_seconds,
+        )
+        with self._lock:
+            self._prune(now)
+            while len(self._documents) >= self.maximum:
+                oldest = min(
+                    self._documents,
+                    key=lambda key: self._documents[key].expires_at,
+                )
+                self._documents.pop(oldest, None)
+            self._documents[token] = document
+        return token
+
+    def get(self, token: str, session_id: str) -> str | None:
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            document = self._documents.get(token)
+            if document is None or not hmac.compare_digest(
+                document.session_id, session_id
+            ):
+                return None
+            return document.html
+
+    def _prune(self, now: float) -> None:
+        expired = [
+            key
+            for key, document in self._documents.items()
+            if document.expires_at <= now
+        ]
+        for key in expired:
+            self._documents.pop(key, None)
+
+
 def _decode_upload(payload: dict[str, Any], field: str, maximum: int) -> bytes:
     value = payload.get(field, "")
     if not isinstance(value, str):
