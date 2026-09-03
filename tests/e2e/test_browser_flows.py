@@ -45,6 +45,57 @@ def test_certificate_first_run_creates_the_admin_account(page, fortios_server):
     assert not fortios_server.certificate_output_dir.exists()
 
 
+def test_admin_can_rotate_password_and_must_reauthenticate(page, fortios_server):
+    login_cert_admin(page, fortios_server)
+    new_password = secrets.token_urlsafe(24)
+
+    page.click("#account-tab")
+    expect(page.get_by_role("heading", name="Compte administrateur", exact=True)).to_be_visible()
+    page.click("#change-password-button")
+    for selector in (
+        "#current-admin-password",
+        "#new-admin-password",
+        "#confirm-admin-password",
+    ):
+        expect(page.locator(selector)).to_have_attribute("type", "password")
+
+    page.fill("#current-admin-password", "incorrect-current-password")
+    page.fill("#new-admin-password", new_password)
+    page.fill("#confirm-admin-password", new_password)
+    page.click("#submit-password-change-button")
+    expect(page.locator("#password-change-message")).to_have_text(
+        "Mot de passe actuel incorrect."
+    )
+    expect(page.locator("#admin-view")).to_be_visible()
+
+    page.fill("#current-admin-password", fortios_server.admin_password)
+    page.fill("#new-admin-password", new_password)
+    page.fill("#confirm-admin-password", new_password)
+    page.click("#submit-password-change-button")
+
+    expect(page.locator("#login-view")).to_be_visible()
+    expect(page.locator("#admin-view")).to_be_hidden()
+    expect(page.locator("#login-message")).to_have_text(
+        "Mot de passe modifié. Pour votre sécurité, toutes les sessions "
+        "administrateur ont été fermées. Reconnectez-vous avec votre nouveau mot de passe."
+    )
+
+    page.fill("#username", fortios_server.admin_username)
+    page.fill("#password", fortios_server.admin_password)
+    page.click("#login-button")
+    expect(page.locator("#login-message")).to_have_text(
+        "Identifiant ou mot de passe invalide."
+    )
+    expect(page.locator("#login-view")).to_be_visible()
+
+    page.fill("#password", new_password)
+    page.click("#login-button")
+    expect(page.locator("#admin-view")).to_be_visible()
+    page.click("#notifications-tab")
+    expect(page.get_by_role("heading", name="Notifications de sécurité", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Configuration SMTP", exact=True)).to_be_visible()
+
+
 # 2. Select product/model/version pair ---------------------------------------------------
 
 def test_select_product_model_version(app_page):

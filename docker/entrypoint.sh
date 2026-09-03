@@ -28,7 +28,8 @@ if [ -z "${FORTIOS_CERT_HELPER_SOCKET:-}" ]; then
   chmod -R u=rwX,g=rX,o= /opt/fortios/certificates
   chmod 0770 "$ADMIN_DIR"
   # Older installations may have credentials without the lock introduced later.
-  # Recreate only that coordination file; credentials and active/ remain untouched.
+  # Safely create or repair only that coordination file through its descriptor;
+  # credentials and active/ remain untouched.
   if [ -e "$ADMIN_CREDENTIALS" ]; then
     PGID="$PGID" python -c 'import sys; from pathlib import Path; from scripts.cert_admin import ensure_credential_lock; ensure_credential_lock(Path(sys.argv[1]))' "$ADMIN_CREDENTIALS"
   fi

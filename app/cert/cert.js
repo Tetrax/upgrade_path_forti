@@ -21,6 +21,7 @@ const adminView = byId("admin-view");
 const logoutButton = byId("logout-button");
 const setupForm = byId("setup-form");
 const loginForm = byId("login-form");
+const passwordChangeForm = byId("password-change-form");
 const certificateForm = byId("certificate-form");
 const installButton = byId("install-button");
 const activationBox = byId("activation-box");
@@ -78,6 +79,9 @@ function resetPrivateState() {
   validationSucceeded = false;
   validationToken = "";
   canInstall = false;
+  passwordChangeForm.reset();
+  passwordChangeForm.hidden = true;
+  setMessage("password-change-message", "");
   certificateForm.reset();
   notificationsForm.reset();
   smtpForm.reset();
@@ -97,13 +101,13 @@ function showSetup() {
   setMessage("setup-message", "");
 }
 
-function showLogin(message = "") {
+function showLogin(message = "", success = false) {
   resetPrivateState();
   setupView.hidden = true;
   loginView.hidden = false;
   adminView.hidden = true;
   logoutButton.hidden = true;
-  setMessage("login-message", message);
+  setMessage("login-message", message, success);
 }
 
 function showAdmin(status) {
@@ -117,14 +121,15 @@ function showAdmin(status) {
   byId("session-username").textContent = status.username;
   byId("activation-mode").textContent = canInstall ? "Activation locale autorisée" : "Validation uniquement";
   installButton.disabled = !canInstall;
+  showAdminSection("certificates");
 }
 
 function showAdminSection(section) {
-  const notificationsActive = section === "notifications";
-  byId("certificates-section").hidden = notificationsActive;
-  byId("notifications-section").hidden = !notificationsActive;
-  byId("certificates-tab").classList.toggle("active", !notificationsActive);
-  byId("notifications-tab").classList.toggle("active", notificationsActive);
+  for (const name of ["certificates", "notifications", "account"]) {
+    const active = section === name;
+    byId(`${name}-section`).hidden = !active;
+    byId(`${name}-tab`).classList.toggle("active", active);
+  }
 }
 
 function addRecipient(value = "") {
@@ -413,6 +418,53 @@ logoutButton.addEventListener("click", async () => {
 
 byId("certificates-tab").addEventListener("click", () => showAdminSection("certificates"));
 byId("notifications-tab").addEventListener("click", () => showAdminSection("notifications"));
+byId("account-tab").addEventListener("click", () => showAdminSection("account"));
+byId("change-password-button").addEventListener("click", () => {
+  passwordChangeForm.hidden = false;
+  setMessage("password-change-message", "");
+  byId("current-admin-password").focus();
+});
+byId("cancel-password-change-button").addEventListener("click", () => {
+  passwordChangeForm.reset();
+  passwordChangeForm.hidden = true;
+  setMessage("password-change-message", "");
+});
+passwordChangeForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("submit-password-change-button");
+  button.disabled = true;
+  setMessage("password-change-message", "Modification en cours…");
+  try {
+    const currentPassword = byId("current-admin-password").value;
+    const newPassword = byId("new-admin-password").value;
+    const confirmation = byId("confirm-admin-password").value;
+    const passwordBytes = new TextEncoder().encode(newPassword).length;
+    if (passwordBytes < MIN_ADMIN_PASSWORD_BYTES || passwordBytes > MAX_PASSWORD_BYTES) {
+      throw new Error("Le mot de passe doit contenir entre 12 et 1 024 octets UTF-8.");
+    }
+    if (newPassword !== confirmation) {
+      throw new Error("Les mots de passe ne correspondent pas.");
+    }
+    if (newPassword === currentPassword) {
+      throw new Error("Le nouveau mot de passe doit être différent du mot de passe actuel.");
+    }
+    await apiRequest("password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword, confirmation }),
+    });
+    showLogin(
+      "Mot de passe modifié. Pour votre sécurité, toutes les sessions administrateur "
+        + "ont été fermées. Reconnectez-vous avec votre nouveau mot de passe.",
+      true,
+    );
+  } catch (error) {
+    setMessage("password-change-message", error.message);
+  } finally {
+    passwordChangeForm.reset();
+    button.disabled = false;
+  }
+});
 byId("add-recipient-button").addEventListener("click", () => addRecipient());
 
 notificationsForm.addEventListener("submit", async (event) => {

@@ -26,6 +26,22 @@ class HelperConflictError(HelperError):
     """Raised when the administrator account already exists."""
 
 
+class HelperAuthenticationError(HelperError):
+    """Raised when the current administrator password is incorrect."""
+
+
+class HelperValidationError(HelperError):
+    """Raised when a requested administrator password is invalid."""
+
+
+class HelperRevisionError(HelperError):
+    """Raised when administrator credentials changed concurrently."""
+
+
+class HelperCredentialError(HelperError):
+    """Raised when persistent administrator credentials are invalid or unavailable."""
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     for key, value in pairs:
@@ -169,4 +185,51 @@ def setup_via_helper(
     revision = response.get("credentialsRevision")
     if not isinstance(revision, str) or len(revision) != 64:
         raise ProtocolError("Réponse de configuration helper invalide.")
+    return revision
+
+
+def rotate_via_helper(
+    socket_path: Path,
+    username: str,
+    current_password: str,
+    new_password: str,
+    confirmation: str,
+    *,
+    credentials_revision: str,
+    timeout_seconds: float = 30.0,
+) -> str:
+    values = (username, current_password, new_password, confirmation)
+    if any(not isinstance(value, str) for value in values):
+        raise ProtocolError("Champs de rotation invalides.")
+    if not isinstance(credentials_revision, str) or len(credentials_revision) != 64:
+        raise ProtocolError("Révision des identifiants invalide.")
+    response = request_helper(
+        socket_path,
+        {
+            "version": PROTOCOL_VERSION,
+            "action": "rotate",
+            "username": username,
+            "currentPassword": current_password,
+            "newPassword": new_password,
+            "confirmation": confirmation,
+            "credentialsRevision": credentials_revision,
+        },
+        timeout_seconds=timeout_seconds,
+    )
+    if response.get("ok") is not True:
+        error = response.get("error")
+        message = error if isinstance(error, str) else "Rotation refusée par le helper."
+        error_code = response.get("errorCode")
+        if error_code == "authentication_failed":
+            raise HelperAuthenticationError(message)
+        if error_code == "validation_failed":
+            raise HelperValidationError(message)
+        if error_code == "credentials_changed":
+            raise HelperRevisionError(message)
+        if error_code == "credentials_invalid":
+            raise HelperCredentialError(message)
+        raise HelperError(message)
+    revision = response.get("credentialsRevision")
+    if not isinstance(revision, str) or len(revision) != 64:
+        raise ProtocolError("Réponse de rotation helper invalide.")
     return revision

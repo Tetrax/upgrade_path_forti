@@ -69,7 +69,10 @@ Procédure générique :
 6. ouvrir `/cert` pour créer le premier compte : le serveur web transmet cette
    unique opération au helper par le socket privé, sans obtenir d'accès en
    écriture à `active/`. `scripts/cert_admin.py setup` avec `PGID` configuré
-   reste le mécanisme CLI de secours.
+   reste le mécanisme CLI de secours ;
+7. les rotations de mot de passe demandées par un administrateur authentifié
+   passent par le même helper. Celui-ci revérifie l'UID/GID du pair, la révision
+   des credentials et l'ancien mot de passe sous verrou exclusif avant l'écriture.
 
 Conserver la configuration Nginx précédente et son certificat comme rollback
 jusqu'au smoke test externe complet. Le mode à volumes Docker nommés reste en
@@ -96,7 +99,7 @@ mot de passe par défaut. Le mot de passe doit contenir entre 12 et 1 024 octets
 UTF-8. Un fichier présent mais invalide est traité comme une erreur
 administrative et ne réactive jamais ce parcours anonyme.
 
-Une fois connecté, la page propose deux actions distinctes :
+Une fois connecté, la section **Certificats** propose deux actions distinctes :
 
 1. **Valider** : utilise un répertoire temporaire, affiche uniquement les
    métadonnées, ne modifie pas la paire active et délivre un ticket à usage
@@ -104,6 +107,19 @@ Une fois connecté, la page propose deux actions distinctes :
 2. **Activer** : réexécute toutes les validations de `certctl.py`, puis remplace
    atomiquement `certificates/local/active`. L'API refuse l'activation sans ce
    ticket de prévalidation ou si les fichiers ont changé.
+
+La section **Compte** permet à l'administrateur authentifié de changer son mot
+de passe. `POST /api/cert/password` exige l'Origin exact, le jeton CSRF de la
+session et l'ancien mot de passe. Le nouveau mot de passe réutilise les bornes
+de 12 à 1 024 octets UTF-8, doit correspondre à sa confirmation et différer de
+l'ancien. La révision de session est comparée sous le verrou exclusif de
+`cert_admin.py`, puis `credentials.json` est remplacé atomiquement avec un
+nouveau sel scrypt. Une révision concurrente, notamment un `reset` CLI, est
+refusée sans écrasement. Après succès, la nouvelle révision invalide toutes les
+sessions, y compris celle qui a demandé la rotation, et la page revient à la
+connexion. `active/`, les certificats, SMTP et les notifications ne sont pas
+modifiés. Il n'existe aucun endpoint anonyme de reset ni parcours « mot de passe
+oublié » ; `scripts/cert_admin.py reset` reste le secours opérateur.
 
 Le mode HTTP est refusé sans `FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST=1` et reste
 inaccessible à un client non-loopback. Ces deux drapeaux sont réservés à ce test

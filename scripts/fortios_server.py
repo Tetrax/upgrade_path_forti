@@ -29,19 +29,29 @@ import fortios_notify
 from cert_admin import (
     DEFAULT_CREDENTIALS,
     MAX_PASSWORD_LENGTH,
+    CredentialAuthenticationError,
     CredentialError,
     CredentialExistsError,
+    CredentialRevisionError,
+    CredentialValidationError,
     authenticate_credentials,
     create_initial_credentials,
     credential_lock,
     credentials_revision,
     ensure_credential_lock,
     load_credentials,
+    rotate_credentials,
 )
 from cert_helper_protocol import (
+    HelperAuthenticationError,
     HelperConflictError,
+    HelperCredentialError,
     HelperError,
+    HelperRevisionError,
+    HelperValidationError,
+    ProtocolError,
     install_via_helper,
+    rotate_via_helper,
     setup_via_helper,
 )
 from cert_web import (
@@ -491,6 +501,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         cert_direct_install: bool = False,
         cert_helper_socket: Path | None = None,
         cert_login_limiter: LoginRateLimiter | None = None,
+        cert_password_limiter: ActionRateLimiter | None = None,
         cert_test_email_limiter: ActionRateLimiter | None = None,
         cert_preview_limiter: ActionRateLimiter | None = None,
         cert_validation_tickets: ValidationTicketStore | None = None,
@@ -508,6 +519,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.cert_direct_install = cert_direct_install
         self.cert_helper_socket = cert_helper_socket
         self.cert_login_limiter = cert_login_limiter or LoginRateLimiter()
+        self.cert_password_limiter = cert_password_limiter or ActionRateLimiter()
         self.cert_test_email_limiter = (
             cert_test_email_limiter or ActionRateLimiter()
         )
@@ -1096,6 +1108,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_cert_setup()
             elif self.path == "/api/cert/logout":
                 self.handle_cert_logout()
+            elif self.path == "/api/cert/password":
+                self.handle_cert_password_change()
             elif self.path == "/api/cert/notifications":
                 self.handle_notification_settings_write()
             elif self.path == "/api/cert/smtp":
@@ -1269,6 +1283,116 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         finally:
             if reserved:
                 self.cert_login_limiter.finish(client, success=created)
+
+    def handle_cert_password_change(self) -> None:
+        session_id = self.cert_session_id()
+        try:
+            with credential_lock(self.cert_admin_file, exclusive=False):
+                load_credentials(self.cert_admin_file)
+                session = self.require_admin_session(csrf=True)
+        except CredentialError:
+            if session_id is not None:
+                self.cert_sessions.revoke(session_id)
+            self.write_json_response(
+                {"error": "Compte administrateur indisponible."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        if session_id is None or session is None:
+            return
+        if not self.cert_password_limiter.try_record(session_id):
+            self.write_json_response(
+                {"error": "Trop de tentatives. Réessaie dans quelques minutes."},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                extra_headers={"Cache-Control": "no-store", "Retry-After": "60"},
+            )
+            return
+        try:
+            payload = self.read_json_body(max_bytes=16 * 1024)
+            required = {"currentPassword", "newPassword", "confirmation"}
+            if set(payload) != required or not all(
+                isinstance(payload.get(name), str) for name in required
+            ):
+                raise CredentialValidationError("Champs de rotation invalides.")
+            if self.cert_helper_socket is None:
+                rotate_credentials(
+                    self.cert_admin_file,
+                    session.username,
+                    str(payload["currentPassword"]),
+                    str(payload["newPassword"]),
+                    str(payload["confirmation"]),
+                    expected_revision=session.credentials_revision,
+                )
+            else:
+                rotate_via_helper(
+                    self.cert_helper_socket,
+                    session.username,
+                    str(payload["currentPassword"]),
+                    str(payload["newPassword"]),
+                    str(payload["confirmation"]),
+                    credentials_revision=session.credentials_revision,
+                )
+        except (CredentialAuthenticationError, HelperAuthenticationError) as error:
+            self.write_json_response(
+                {"error": str(error)},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except (CredentialRevisionError, HelperRevisionError) as error:
+            self.write_json_response(
+                {"error": str(error)},
+                HTTPStatus.CONFLICT,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except (CredentialValidationError, HelperValidationError) as error:
+            self.write_json_response(
+                {"error": str(error)},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except ProtocolError:
+            self.write_json_response(
+                {"error": "Compte administrateur indisponible."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except (TypeError, ValueError):
+            self.write_json_response(
+                {"error": "Requête de rotation invalide."},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except (CredentialError, HelperCredentialError, HelperError, OSError):
+            self.write_json_response(
+                {"error": "Compte administrateur indisponible."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+
+        self.cert_sessions.revoke(session_id)
+        attributes = [
+            "fortios_cert_session=",
+            "Path=/api/cert",
+            "HttpOnly",
+            "SameSite=Strict",
+            "Max-Age=0",
+        ]
+        if self.request_is_secure():
+            attributes.append("Secure")
+        self.write_json_response(
+            {"message": "Mot de passe modifié.", "authenticated": False},
+            extra_headers={
+                "Cache-Control": "no-store",
+                "Set-Cookie": "; ".join(attributes),
+            },
+        )
 
     def handle_cert_upload(self, *, install: bool) -> None:
         session_id = self.cert_session_id()
@@ -1837,6 +1961,7 @@ def main(argv: list[str]) -> int:
     )
     cert_sessions = SessionStore()
     cert_login_limiter = LoginRateLimiter()
+    cert_password_limiter = ActionRateLimiter()
     cert_test_email_limiter = ActionRateLimiter()
     cert_preview_limiter = ActionRateLimiter(max_actions=30)
     cert_validation_tickets = ValidationTicketStore()
@@ -1871,6 +1996,7 @@ def main(argv: list[str]) -> int:
             cert_direct_install=cert_direct_install,
             cert_helper_socket=cert_helper_socket,
             cert_login_limiter=cert_login_limiter,
+            cert_password_limiter=cert_password_limiter,
             cert_test_email_limiter=cert_test_email_limiter,
             cert_preview_limiter=cert_preview_limiter,
             cert_validation_tickets=cert_validation_tickets,

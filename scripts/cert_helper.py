@@ -162,6 +162,36 @@ class CertificateInstallProcessor:
                 password,
             )
             return {"ok": True, "credentialsRevision": revision}
+        if action == "rotate":
+            required = {
+                "version",
+                "action",
+                "username",
+                "currentPassword",
+                "newPassword",
+                "confirmation",
+                "credentialsRevision",
+            }
+            if set(message) != required:
+                raise ProtocolError("Requête de rotation invalide.")
+            fields = (
+                message.get("username"),
+                message.get("currentPassword"),
+                message.get("newPassword"),
+                message.get("confirmation"),
+                message.get("credentialsRevision"),
+            )
+            if any(not isinstance(value, str) for value in fields):
+                raise ProtocolError("Champs de rotation invalides.")
+            revision = cert_admin.rotate_credentials(
+                self.credentials_file,
+                str(fields[0]),
+                str(fields[1]),
+                str(fields[2]),
+                str(fields[3]),
+                expected_revision=str(fields[4]),
+            )
+            return {"ok": True, "credentialsRevision": revision}
         if action != "install" or set(message) != {
             "version",
             "action",
@@ -203,11 +233,34 @@ class _CertificateRequestHandler(socketserver.BaseRequestHandler):
                 "error": str(error)[:1000],
                 "errorCode": "credentials_exists",
             }
+        except cert_admin.CredentialAuthenticationError as error:
+            response = {
+                "ok": False,
+                "error": str(error)[:1000],
+                "errorCode": "authentication_failed",
+            }
+        except cert_admin.CredentialValidationError as error:
+            response = {
+                "ok": False,
+                "error": str(error)[:1000],
+                "errorCode": "validation_failed",
+            }
+        except cert_admin.CredentialRevisionError as error:
+            response = {
+                "ok": False,
+                "error": str(error)[:1000],
+                "errorCode": "credentials_changed",
+            }
+        except cert_admin.CredentialError as error:
+            response = {
+                "ok": False,
+                "error": str(error)[:1000],
+                "errorCode": "credentials_invalid",
+            }
         except (
             ProtocolError,
             HelperAuthorizationError,
             CertificateReloadError,
-            cert_admin.CredentialError,
             certctl.CertificateError,
             ValueError,
             OSError,

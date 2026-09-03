@@ -14,6 +14,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -42,6 +43,18 @@ class CredentialError(RuntimeError):
 
 class CredentialExistsError(CredentialError):
     """The certificate administrator account already exists."""
+
+
+class CredentialAuthenticationError(CredentialError):
+    """The current administrator password is incorrect."""
+
+
+class CredentialValidationError(CredentialError):
+    """The requested administrator password does not meet the account contract."""
+
+
+class CredentialRevisionError(CredentialError):
+    """The administrator credentials changed before a requested mutation."""
 
 
 def _encode(data: bytes) -> str:
@@ -104,6 +117,28 @@ def credential_lock_path(path: Path) -> Path:
     return path.with_name(f".{path.name}.lock")
 
 
+def _open_credential_lock(lock_path: Path, flags: int, mode: int) -> int:
+    safe_flags = flags | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(lock_path, safe_flags, mode)
+        metadata = os.fstat(descriptor)
+        current = os.stat(lock_path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or (metadata.st_dev, metadata.st_ino) != (current.st_dev, current.st_ino)
+        ):
+            raise CredentialError("Verrou du compte administrateur invalide.")
+        return descriptor
+    except (OSError, CredentialError) as error:
+        if descriptor is not None:
+            os.close(descriptor)
+        if isinstance(error, CredentialError):
+            raise
+        raise CredentialError("Verrou du compte administrateur indisponible.") from error
+
+
 @contextmanager
 def credential_lock(
     path: Path,
@@ -113,23 +148,25 @@ def credential_lock(
 ):
     lock_path = credential_lock_path(path)
     if exclusive:
-        descriptor = os.open(
+        lock_mode = 0o660 if runtime_gid is not None else 0o600
+        descriptor = _open_credential_lock(
             lock_path,
             os.O_RDWR | os.O_CREAT,
-            0o640 if runtime_gid is not None else 0o600,
+            lock_mode,
         )
-        os.fchmod(descriptor, 0o640 if runtime_gid is not None else 0o600)
         if runtime_gid is not None:
+            os.fchmod(descriptor, lock_mode)
             os.fchown(descriptor, 0, runtime_gid)
+        elif os.fstat(descriptor).st_uid == os.geteuid():
+            os.fchmod(descriptor, lock_mode)
     else:
-        try:
-            descriptor = os.open(lock_path, os.O_RDONLY)
-        except OSError as error:
-            raise CredentialError(
-                "Verrou du compte administrateur indisponible."
-            ) from error
+        descriptor = _open_credential_lock(lock_path, os.O_RDONLY, 0o600)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        current = os.stat(lock_path, follow_symlinks=False)
+        metadata = os.fstat(descriptor)
+        if (metadata.st_dev, metadata.st_ino) != (current.st_dev, current.st_ino):
+            raise CredentialError("Verrou du compte administrateur remplacé.")
         yield
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -138,12 +175,13 @@ def credential_lock(
 
 def ensure_credential_lock(path: Path) -> bool:
     """Recreate an upgrade-missing lock without reading or replacing credentials."""
-    if not os.path.lexists(path) or os.path.lexists(credential_lock_path(path)):
+    if not os.path.lexists(path):
         return False
+    lock_existed = os.path.lexists(credential_lock_path(path))
     runtime_gid = configured_runtime_gid()
     with credential_lock(path, exclusive=True, runtime_gid=runtime_gid):
         pass
-    return True
+    return not lock_existed
 
 
 def _prepare_credentials_directory(path: Path, runtime_gid: int | None) -> None:
@@ -296,6 +334,61 @@ def authenticate_credentials(path: Path, username: str, password: str) -> str | 
 
 def verify_credentials(path: Path, username: str, password: str) -> bool:
     return authenticate_credentials(path, username, password) is not None
+
+
+def rotate_credentials(
+    path: Path,
+    username: str,
+    current_password: str,
+    new_password: str,
+    confirmation: str,
+    *,
+    expected_revision: str,
+) -> str:
+    """Replace only the password when account, password and revision still match."""
+    if not all(
+        isinstance(value, str)
+        for value in (
+            username,
+            current_password,
+            new_password,
+            confirmation,
+            expected_revision,
+        )
+    ):
+        raise CredentialValidationError("Champs de rotation invalides.")
+    if new_password != confirmation:
+        raise CredentialValidationError("Les mots de passe ne correspondent pas.")
+    if not os.path.lexists(path):
+        raise CredentialError("Compte administrateur indisponible.")
+
+    runtime_gid = configured_runtime_gid()
+    with credential_lock(path, exclusive=True, runtime_gid=runtime_gid):
+        payload, current_revision = load_credentials_with_revision(path)
+        if not hmac.compare_digest(expected_revision, current_revision):
+            raise CredentialRevisionError(
+                "Les identifiants administrateur ont été modifiés. Reconnectez-vous."
+            )
+        if not hmac.compare_digest(str(payload["username"]), username):
+            raise CredentialRevisionError("La session administrateur ne correspond plus au compte.")
+        authenticated_revision = authenticate_credentials(path, username, current_password)
+        if authenticated_revision is None or not hmac.compare_digest(
+            authenticated_revision, current_revision
+        ):
+            raise CredentialAuthenticationError("Mot de passe actuel incorrect.")
+        if hmac.compare_digest(
+            current_password.encode("utf-8"),
+            new_password.encode("utf-8"),
+        ):
+            raise CredentialValidationError(
+                "Le nouveau mot de passe doit être différent du mot de passe actuel."
+            )
+        try:
+            replacement = credential_payload(username, new_password)
+        except CredentialError as error:
+            raise CredentialValidationError(str(error)) from error
+        _write_credentials_unlocked(path, replacement, runtime_gid)
+        return credentials_revision(path)
 
 
 def read_password(password_stdin: bool) -> tuple[str, str]:
