@@ -22,6 +22,10 @@ class HelperError(RuntimeError):
     """Raised when the privileged helper refuses an installation."""
 
 
+class HelperConflictError(HelperError):
+    """Raised when the administrator account already exists."""
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     decoded: dict[str, Any] = {}
     for key, value in pairs:
@@ -135,3 +139,34 @@ def install_via_helper(
     if not isinstance(summary, dict):
         raise ProtocolError("Réponse d'installation helper invalide.")
     return summary
+
+
+def setup_via_helper(
+    socket_path: Path,
+    username: str,
+    password: str,
+    *,
+    timeout_seconds: float = 30.0,
+) -> str:
+    if not isinstance(username, str) or not isinstance(password, str):
+        raise ProtocolError("Champs de configuration invalides.")
+    response = request_helper(
+        socket_path,
+        {
+            "version": PROTOCOL_VERSION,
+            "action": "setup",
+            "username": username,
+            "password": password,
+        },
+        timeout_seconds=timeout_seconds,
+    )
+    if response.get("ok") is not True:
+        error = response.get("error")
+        message = error if isinstance(error, str) else "Configuration refusée par le helper."
+        if response.get("errorCode") == "credentials_exists":
+            raise HelperConflictError(message)
+        raise HelperError(message)
+    revision = response.get("credentialsRevision")
+    if not isinstance(revision, str) or len(revision) != 64:
+        raise ProtocolError("Réponse de configuration helper invalide.")
+    return revision

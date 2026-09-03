@@ -15,9 +15,11 @@ const MAX_PASSWORD_BYTES = 1024;
 const MIN_ADMIN_PASSWORD_BYTES = 12;
 
 const byId = (id) => document.getElementById(id);
+const setupView = byId("setup-view");
 const loginView = byId("login-view");
 const adminView = byId("admin-view");
 const logoutButton = byId("logout-button");
+const setupForm = byId("setup-form");
 const loginForm = byId("login-form");
 const certificateForm = byId("certificate-form");
 const installButton = byId("install-button");
@@ -52,24 +54,26 @@ async function readResponse(response) {
     payload = { error: "Réponse serveur illisible." };
   }
   if (!response.ok) {
-    throw new Error(payload.error || `Erreur HTTP ${response.status}`);
+    const error = new Error(payload.error || `Erreur HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
 
 async function apiRequest(endpoint, options = {}) {
   const headers = { ...(options.headers || {}) };
-  if (csrfToken && endpoint !== "login") headers["X-CSRF-Token"] = csrfToken;
+  if (csrfToken && !["login", "setup"].includes(endpoint)) headers["X-CSRF-Token"] = csrfToken;
   const response = await fetch(`/api/cert/${endpoint}`, {
     credentials: "same-origin",
     ...options,
     headers,
   });
-  if (response.status === 401 && endpoint !== "login") showLogin();
+  if (response.status === 401 && !["login", "setup"].includes(endpoint)) showLogin();
   return readResponse(response);
 }
 
-function showLogin() {
+function resetPrivateState() {
   csrfToken = "";
   validationSucceeded = false;
   validationToken = "";
@@ -82,14 +86,30 @@ function showLogin() {
   emailPreviewRequestGeneration += 1;
   byId("email-preview-frame").removeAttribute("src");
   recipientList.replaceChildren();
+}
+
+function showSetup() {
+  resetPrivateState();
+  setupView.hidden = false;
+  loginView.hidden = true;
+  adminView.hidden = true;
+  logoutButton.hidden = true;
+  setMessage("setup-message", "");
+}
+
+function showLogin(message = "") {
+  resetPrivateState();
+  setupView.hidden = true;
   loginView.hidden = false;
   adminView.hidden = true;
   logoutButton.hidden = true;
+  setMessage("login-message", message);
 }
 
 function showAdmin(status) {
   csrfToken = status.csrfToken;
   canInstall = Boolean(status.canInstall);
+  setupView.hidden = true;
   loginView.hidden = true;
   adminView.hidden = false;
   logoutButton.hidden = false;
@@ -300,12 +320,52 @@ function buildNotificationSettingsPayload() {
 async function refreshSession() {
   try {
     const status = await apiRequest("status");
+    if (status.setupRequired) {
+      showSetup();
+      return;
+    }
     showAdmin(status);
     await Promise.all([loadNotificationSettings(), loadSmtpSettings()]);
-  } catch (_error) {
-    showLogin();
+  } catch (error) {
+    showLogin(error.status === 401 ? "" : error.message);
   }
 }
+
+setupForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("setup-button");
+  button.disabled = true;
+  setMessage("setup-message", "Création du compte en cours…");
+  try {
+    const password = byId("setup-password").value;
+    const confirmation = byId("setup-password-confirmation").value;
+    const passwordBytes = new TextEncoder().encode(password).length;
+    if (passwordBytes < MIN_ADMIN_PASSWORD_BYTES || passwordBytes > MAX_PASSWORD_BYTES) {
+      throw new Error("Le mot de passe doit contenir entre 12 et 1 024 octets UTF-8.");
+    }
+    if (password !== confirmation) {
+      throw new Error("Les mots de passe ne correspondent pas.");
+    }
+    const payload = await apiRequest("setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: byId("setup-username").value,
+        password,
+        passwordConfirmation: confirmation,
+      }),
+    });
+    csrfToken = payload.csrfToken;
+    await refreshSession();
+  } catch (error) {
+    if (error.status === 409) showLogin(error.message);
+    else setMessage("setup-message", error.message);
+  } finally {
+    byId("setup-password").value = "";
+    byId("setup-password-confirmation").value = "";
+    button.disabled = false;
+  }
+});
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();

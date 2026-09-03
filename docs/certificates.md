@@ -66,9 +66,10 @@ Procédure générique :
    répertoire de socket monté en lecture seule, le volume certificat en lecture
    seule (`FORTIOS_CERTS_MOUNT_MODE=ro`), `FORTIOS_TLS_HOSTNAME=<fqdn>` et le
    CIDR proxy exact ;
-6. créer le compte sur l'hôte avec `scripts/cert_admin.py setup` et
-   `PGID` configuré. Le mot de passe est saisi deux fois sur l'entrée standard et
-   n'est jamais placé dans Compose ni dans la ligne de commande.
+6. ouvrir `/cert` pour créer le premier compte : le serveur web transmet cette
+   unique opération au helper par le socket privé, sans obtenir d'accès en
+   écriture à `active/`. `scripts/cert_admin.py setup` avec `PGID` configuré
+   reste le mécanisme CLI de secours.
 
 Conserver la configuration Nginx précédente et son certificat comme rollback
 jusqu'au smoke test externe complet. Le mode à volumes Docker nommés reste en
@@ -81,16 +82,6 @@ Le mode local permet de valider le parcours complet dans un navigateur, tout en
 bornant l'exception HTTP à un client loopback. Depuis la racine du dépôt :
 
 ```bash
-python3 scripts/cert_admin.py setup \
-  --credentials certificates/local/admin/credentials.json \
-  --username admin
-```
-
-Le mot de passe est demandé deux fois sans être affiché. Seuls le sel et le
-dérivé `scrypt` sont écrits ; sa longueur doit être comprise entre 12 et 1 024
-octets UTF-8. Démarrer ensuite le serveur local :
-
-```bash
 FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST=1 \
 FORTIOS_CERT_DIRECT_INSTALL=1 \
 FORTIOS_CERT_ADMIN_FILE=certificates/local/admin/credentials.json \
@@ -99,7 +90,13 @@ FORTIOS_TLS_HOSTNAME=upgrade-path.sns-security.lan \
 python3 scripts/fortios_server.py --host 127.0.0.1 --port 8000
 ```
 
-Ouvrir `http://127.0.0.1:8000/cert/`. La page propose deux actions distinctes :
+Ouvrir `http://127.0.0.1:8000/cert/`. Si le fichier d'identifiants n'existe pas,
+la page affiche **Première configuration** et crée le compte administrateur sans
+mot de passe par défaut. Le mot de passe doit contenir entre 12 et 1 024 octets
+UTF-8. Un fichier présent mais invalide est traité comme une erreur
+administrative et ne réactive jamais ce parcours anonyme.
+
+Une fois connecté, la page propose deux actions distinctes :
 
 1. **Valider** : utilise un répertoire temporaire, affiche uniquement les
    métadonnées, ne modifie pas la paire active et délivre un ticket à usage
@@ -111,9 +108,14 @@ Ouvrir `http://127.0.0.1:8000/cert/`. La page propose deux actions distinctes :
 Le mode HTTP est refusé sans `FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST=1` et reste
 inaccessible à un client non-loopback. Ces deux drapeaux sont réservés à ce test
 local ; ils ne doivent pas être activés dans la Stack Docker. Pour réinitialiser
-le compte local :
+le compte local, ou créer celui-ci en secours si le parcours web est
+indisponible :
 
 ```bash
+python3 scripts/cert_admin.py setup \
+  --credentials certificates/local/admin/credentials.json \
+  --username admin
+
 python3 scripts/cert_admin.py reset \
   --credentials certificates/local/admin/credentials.json \
   --username admin
@@ -158,8 +160,9 @@ printf 'Conteneur web : %s\n' "$WEB_CONTAINER"
 La variable ne doit contenir qu'un seul nom. Si elle est vide, vérifier dans
 Portainer le nom de la Stack et du service.
 
-Créer ensuite le compte dédié à `/cert` dans le volume persistant. Cette commande
-demande et confirme le mot de passe sans l'afficher :
+Le compte dédié à `/cert` sera créé dans l'interface web après l'activation de
+HTTPS. Le CLI reste disponible comme mécanisme de secours ; il demande et
+confirme le mot de passe sans l'afficher :
 
 ```bash
 docker exec -it "$WEB_CONTAINER" fortios-cert-admin setup \
@@ -244,6 +247,13 @@ https://upgrade-path.sns-security.lan/app/
 Les logs du conteneur web doivent annoncer HTTPS sur le listener interne 8000.
 Le healthcheck choisit HTTP ou HTTPS selon la configuration TLS et doit devenir
 `healthy`.
+
+Ouvrir ensuite `https://upgrade-path.sns-security.lan/cert/`. En l'absence de
+`admin/credentials.json`, le parcours **Première configuration** demande
+l'identifiant (`admin` par défaut), le mot de passe et sa confirmation. La
+vérification d'absence et la création sont sérialisées côté serveur ; une seule
+requête concurrente peut créer le compte. Sur une installation mise à niveau,
+un lock manquant est recréé au démarrage sans modifier les identifiants.
 
 Pour revenir temporairement au mode HTTP, vider `FORTIOS_TLS_CERT` et
 `FORTIOS_TLS_KEY`, remettre `FORTIOS_HTTP_PORT=8000`, puis mettre à jour la

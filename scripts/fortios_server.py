@@ -30,11 +30,20 @@ from cert_admin import (
     DEFAULT_CREDENTIALS,
     MAX_PASSWORD_LENGTH,
     CredentialError,
+    CredentialExistsError,
     authenticate_credentials,
+    create_initial_credentials,
     credential_lock,
     credentials_revision,
+    ensure_credential_lock,
+    load_credentials,
 )
-from cert_helper_protocol import HelperError, install_via_helper
+from cert_helper_protocol import (
+    HelperConflictError,
+    HelperError,
+    install_via_helper,
+    setup_via_helper,
+)
 from cert_web import (
     ActionRateLimiter,
     AdminSession,
@@ -637,10 +646,30 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         return morsel.value
 
     def handle_cert_status(self) -> None:
-        session = self.authenticated_cert_session()
+        if not os.path.lexists(self.cert_admin_file):
+            self.write_json_response(
+                {"authenticated": False, "setupRequired": True},
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        try:
+            with credential_lock(self.cert_admin_file, exclusive=False):
+                load_credentials(self.cert_admin_file)
+                session = self.authenticated_cert_session()
+        except CredentialError as error:
+            self.write_json_response(
+                {
+                    "authenticated": False,
+                    "setupRequired": False,
+                    "error": str(error),
+                },
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
         if session is None:
             self.write_json_response(
-                {"authenticated": False},
+                {"authenticated": False, "setupRequired": False},
                 HTTPStatus.UNAUTHORIZED,
                 extra_headers={"Cache-Control": "no-store"},
             )
@@ -1063,6 +1092,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 return
             if self.path == "/api/cert/login":
                 self.handle_cert_login()
+            elif self.path == "/api/cert/setup":
+                self.handle_cert_setup()
             elif self.path == "/api/cert/logout":
                 self.handle_cert_logout()
             elif self.path == "/api/cert/notifications":
@@ -1159,6 +1190,85 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         finally:
             if reserved:
                 self.cert_login_limiter.finish(client, success=authenticated)
+
+    def handle_cert_setup(self) -> None:
+        client = self.cert_client_identity()
+        created = False
+        reserved = False
+        try:
+            payload = self.read_json_body(max_bytes=16 * 1024)
+            username_value = payload.get("username")
+            password_value = payload.get("password")
+            confirmation_value = payload.get("passwordConfirmation")
+            if not all(
+                isinstance(value, str)
+                for value in (username_value, password_value, confirmation_value)
+            ):
+                raise TypeError("Champs de configuration invalides.")
+            username = str(username_value)
+            password = str(password_value)
+            confirmation = str(confirmation_value)
+            if (
+                len(username) > 64
+                or len(password.encode("utf-8")) > MAX_PASSWORD_LENGTH
+                or len(confirmation.encode("utf-8")) > MAX_PASSWORD_LENGTH
+            ):
+                raise ValueError("Champs de configuration invalides.")
+            if password != confirmation:
+                raise ValueError("Les mots de passe ne correspondent pas.")
+            if not self.cert_login_limiter.try_begin(client):
+                self.write_json_response(
+                    {"error": "Trop de tentatives. Réessaie dans quelques minutes."},
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    extra_headers={"Cache-Control": "no-store", "Retry-After": "10"},
+                )
+                return
+            reserved = True
+            if self.cert_helper_socket is None:
+                revision = create_initial_credentials(
+                    self.cert_admin_file,
+                    username,
+                    password,
+                )
+            else:
+                revision = setup_via_helper(
+                    self.cert_helper_socket,
+                    username,
+                    password,
+                )
+            created = True
+            session_id, session = self.cert_sessions.create(username, revision)
+            attributes = [
+                f"fortios_cert_session={session_id}",
+                "Path=/api/cert",
+                "HttpOnly",
+                "SameSite=Strict",
+                f"Max-Age={self.cert_sessions.ttl_seconds}",
+            ]
+            if self.request_is_secure():
+                attributes.append("Secure")
+            self.write_json_response(
+                {"authenticated": True, "csrfToken": session.csrf_token},
+                extra_headers={
+                    "Cache-Control": "no-store",
+                    "Set-Cookie": "; ".join(attributes),
+                },
+            )
+        except (CredentialExistsError, HelperConflictError) as error:
+            self.write_json_response(
+                {"error": str(error)},
+                HTTPStatus.CONFLICT,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+        except (CredentialError, HelperError, TypeError, ValueError, OSError) as error:
+            self.write_json_response(
+                {"error": str(error)},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+        finally:
+            if reserved:
+                self.cert_login_limiter.finish(client, success=created)
 
     def handle_cert_upload(self, *, install: bool) -> None:
         session_id = self.cert_session_id()
@@ -1737,6 +1847,11 @@ def main(argv: list[str]) -> int:
     )
     cert_helper_socket_value = os.environ.get("FORTIOS_CERT_HELPER_SOCKET", "").strip()
     cert_helper_socket = Path(cert_helper_socket_value) if cert_helper_socket_value else None
+    if cert_helper_socket is None:
+        try:
+            ensure_credential_lock(cert_admin_file)
+        except (CredentialError, OSError) as error:
+            print(f"Compte administrateur indisponible : {error}", file=sys.stderr)
     cert_direct_install = (
         os.environ.get("FORTIOS_CERT_DIRECT_INSTALL") == "1"
         or cert_helper_socket is not None
