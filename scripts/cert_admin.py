@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import fcntl
 import getpass
 import hashlib
@@ -37,6 +38,10 @@ MAX_PASSWORD_LENGTH = 1024
 
 class CredentialError(RuntimeError):
     """The certificate administrator credentials are invalid or unavailable."""
+
+
+class CredentialExistsError(CredentialError):
+    """The certificate administrator account already exists."""
 
 
 def _encode(data: bytes) -> str:
@@ -131,35 +136,74 @@ def credential_lock(
         os.close(descriptor)
 
 
-def write_credentials(path: Path, payload: dict[str, Any]) -> None:
+def ensure_credential_lock(path: Path) -> bool:
+    """Recreate an upgrade-missing lock without reading or replacing credentials."""
+    if not os.path.lexists(path) or os.path.lexists(credential_lock_path(path)):
+        return False
     runtime_gid = configured_runtime_gid()
+    with credential_lock(path, exclusive=True, runtime_gid=runtime_gid):
+        pass
+    return True
+
+
+def _prepare_credentials_directory(path: Path, runtime_gid: int | None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if runtime_gid is not None:
         path.parent.chmod(0o750)
         os.chown(path.parent, 0, runtime_gid)
-    with credential_lock(path, exclusive=True, runtime_gid=runtime_gid):
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", dir=path.parent
-        )
-        temporary = Path(temporary_name)
+
+
+def _write_credentials_unlocked(
+    path: Path,
+    payload: dict[str, Any],
+    runtime_gid: int | None,
+) -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o640 if runtime_gid is not None else 0o600)
+        if runtime_gid is not None:
+            os.fchown(descriptor, 0, runtime_gid)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            os.fchmod(descriptor, 0o640 if runtime_gid is not None else 0o600)
-            if runtime_gid is not None:
-                os.fchown(descriptor, 0, runtime_gid)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-                json.dump(payload, stream, ensure_ascii=False, indent=2)
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-            directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
-        except Exception:
-            temporary.unlink(missing_ok=True)
-            raise
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def write_credentials(path: Path, payload: dict[str, Any]) -> None:
+    runtime_gid = configured_runtime_gid()
+    _prepare_credentials_directory(path, runtime_gid)
+    with credential_lock(path, exclusive=True, runtime_gid=runtime_gid):
+        _write_credentials_unlocked(path, payload, runtime_gid)
+
+
+def create_initial_credentials(path: Path, username: str, password: str) -> str:
+    """Create the first account once, with the existence check under the file lock."""
+    if os.path.lexists(path):
+        raise CredentialExistsError("Le compte administrateur existe déjà.")
+    runtime_gid = configured_runtime_gid()
+    _prepare_credentials_directory(path, runtime_gid)
+    with credential_lock(path, exclusive=True, runtime_gid=runtime_gid):
+        if os.path.lexists(path):
+            raise CredentialExistsError("Le compte administrateur existe déjà.")
+        _write_credentials_unlocked(
+            path,
+            credential_payload(username, password),
+            runtime_gid,
+        )
+        return credentials_revision(path)
 
 
 def load_credentials_with_revision(path: Path) -> tuple[dict[str, Any], str]:
@@ -168,11 +212,30 @@ def load_credentials_with_revision(path: Path) -> tuple[dict[str, Any], str]:
         payload = json.loads(encoded.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CredentialError("Compte administrateur indisponible.") from error
-    required = {"username", "algorithm", "n", "r", "p", "salt", "digest"}
+    required = {"version", "username", "algorithm", "n", "r", "p", "salt", "digest"}
     if not isinstance(payload, dict) or not required.issubset(payload):
         raise CredentialError("Fichier du compte administrateur invalide.")
     if payload.get("algorithm") != "scrypt" or payload.get("version") != 1:
         raise CredentialError("Format du compte administrateur non pris en charge.")
+    username = payload.get("username")
+    if not isinstance(username, str) or not USERNAME_RE.fullmatch(username):
+        raise CredentialError("Fichier du compte administrateur invalide.")
+    if any(
+        type(payload.get(name)) is not int or payload[name] != expected
+        for name, expected in (("n", SCRYPT_N), ("r", SCRYPT_R), ("p", SCRYPT_P))
+    ):
+        raise CredentialError("Paramètres du compte administrateur invalides.")
+    salt = payload.get("salt")
+    digest = payload.get("digest")
+    if not isinstance(salt, str) or not isinstance(digest, str):
+        raise CredentialError("Fichier du compte administrateur invalide.")
+    try:
+        decoded_salt = _decode(salt)
+        decoded_digest = _decode(digest)
+    except (binascii.Error, ValueError) as error:
+        raise CredentialError("Fichier du compte administrateur invalide.") from error
+    if len(decoded_salt) != 16 or len(decoded_digest) != SCRYPT_LENGTH:
+        raise CredentialError("Fichier du compte administrateur invalide.")
     return payload, hashlib.sha256(encoded).hexdigest()
 
 
@@ -271,7 +334,10 @@ def main(argv: list[str]) -> int:
         print("Erreur : les mots de passe ne correspondent pas.", file=sys.stderr)
         return 1
     try:
-        write_credentials(args.credentials, credential_payload(args.username, first))
+        if args.command == "setup":
+            create_initial_credentials(args.credentials, args.username, first)
+        else:
+            write_credentials(args.credentials, credential_payload(args.username, first))
     except (CredentialError, OSError, ValueError) as error:
         print(f"Erreur : {error}", file=sys.stderr)
         return 1

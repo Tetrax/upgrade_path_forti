@@ -117,6 +117,42 @@ class CertificateHelperProtocolTests(unittest.TestCase):
                 credentials_revision="a" * 64,
             )
 
+    def test_setup_client_returns_revision_and_maps_an_existing_account(self) -> None:
+        protocol = importlib.import_module("cert_helper_protocol")
+        socket_path = Path("/run/fortios-cert-helper/helper.sock")
+        with mock.patch.object(
+            protocol,
+            "request_helper",
+            return_value={"ok": True, "credentialsRevision": "a" * 64},
+        ) as request:
+            revision = protocol.setup_via_helper(
+                socket_path,
+                "admin",
+                "first-run-password",
+            )
+
+        self.assertEqual(revision, "a" * 64)
+        self.assertEqual(
+            request.call_args.args[1],
+            {
+                "version": protocol.PROTOCOL_VERSION,
+                "action": "setup",
+                "username": "admin",
+                "password": "first-run-password",
+            },
+        )
+
+        with mock.patch.object(
+            protocol,
+            "request_helper",
+            return_value={
+                "ok": False,
+                "error": "Le compte administrateur existe déjà.",
+                "errorCode": "credentials_exists",
+            },
+        ), self.assertRaises(protocol.HelperConflictError):
+            protocol.setup_via_helper(socket_path, "admin", "second-password")
+
     def test_install_waits_for_a_definitive_response_after_sending(self) -> None:
         protocol = importlib.import_module("cert_helper_protocol")
         with tempfile.TemporaryDirectory() as tmp:
@@ -157,6 +193,53 @@ class CertificateHelperProtocolTests(unittest.TestCase):
 
 
 class CertificateHelperServiceTests(unittest.TestCase):
+    def test_authorized_setup_creates_one_account_without_touching_active(self) -> None:
+        cert_admin = importlib.import_module("cert_admin")
+        helper = importlib.import_module("cert_helper")
+        protocol = importlib.import_module("cert_helper_protocol")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "admin" / "credentials.json"
+            active = root / "active"
+            active.mkdir()
+            (active / "fullchain.pem").write_bytes(b"existing-certificate")
+            (active / "privkey.pem").write_bytes(b"existing-private-key")
+            before = {path.name: path.read_bytes() for path in active.iterdir()}
+            processor = helper.CertificateInstallProcessor(
+                credentials_file=credentials,
+                hostname=HOSTNAME,
+                output_dir=active,
+                allowed_uid=1000,
+                allowed_gid=1000,
+            )
+            request = {
+                "version": protocol.PROTOCOL_VERSION,
+                "action": "setup",
+                "username": "admin",
+                "password": "first-run-password",
+            }
+
+            response = processor.process(request, peer_uid=1000, peer_gid=1000)
+            with self.assertRaises(cert_admin.CredentialExistsError):
+                processor.process(
+                    {**request, "password": "second-password"},
+                    peer_uid=1000,
+                    peer_gid=1000,
+                )
+
+            self.assertEqual(len(response["credentialsRevision"]), 64)
+            self.assertTrue(
+                cert_admin.verify_credentials(
+                    credentials,
+                    "admin",
+                    "first-run-password",
+                )
+            )
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in active.iterdir()},
+                before,
+            )
+
     def test_server_makes_runtime_directory_searchable_by_the_allowed_group(self) -> None:
         cert_admin = importlib.import_module("cert_admin")
         cert_helper = importlib.import_module("cert_helper")

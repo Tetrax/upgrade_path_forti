@@ -50,8 +50,10 @@ http://localhost:8000/app/
 La page privée de gestion des certificats peut également être testée entièrement
 hors Docker sur `http://127.0.0.1:8000/cert/`. Elle utilise un compte
 administrateur dédié, une session `HttpOnly`, un jeton CSRF et le moteur de
-validation de `scripts/certctl.py`. Le démarrage local borné et la création du
-compte sont documentés dans [`docs/certificates.md`](docs/certificates.md).
+validation de `scripts/certctl.py`. Si aucun compte n'existe, un parcours First
+Run côté web permet de le créer ; le CLI reste disponible pour le secours et les
+réinitialisations. Le démarrage local borné et la gestion du compte sont
+documentés dans [`docs/certificates.md`](docs/certificates.md).
 
 Ce serveur sert l'interface et ajoute l'endpoint local `POST /api/official-path`. **Chaque clic** sur **Afficher le chemin** envoie le modèle, la version actuelle et la version cible à cet endpoint, qui interroge en direct le service public Fortinet Upgrade Path Tool, met à jour `data/fortios-data.generated.json`, puis rafraîchit l'affichage — jamais de confiance aveugle dans un chemin déjà en cache. Le chemin en cache ne sert que de repli si Fortinet est injoignable au moment du clic ; dans ce cas, l'interface l'affiche quand même (pour ne pas laisser un écran vide) mais l'indique clairement via un bandeau d'avertissement ("chemin affiché depuis le cache local, à revérifier dès que le service est de nouveau accessible").
 

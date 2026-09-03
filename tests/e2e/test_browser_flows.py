@@ -27,6 +27,24 @@ def test_app_and_catalog_load(app_page):
     assert any("FortiOS" in option or "FortiGate" in option for option in options)
 
 
+def test_certificate_first_run_creates_the_admin_account(page, fortios_server):
+    fortios_server.credentials_path.unlink()
+    page.goto(f"{fortios_server.base_url}/cert/")
+
+    expect(page.locator("#setup-view")).to_be_visible()
+    expect(page.locator("#login-view")).to_be_hidden()
+    expect(page.locator("#setup-username")).to_have_value("admin")
+    page.fill("#setup-password", "browser-test-password")
+    page.fill("#setup-password-confirmation", "browser-test-password")
+    page.click("#setup-button")
+
+    expect(page.locator("#admin-view")).to_be_visible()
+    expect(page.locator("#session-username")).to_have_text("admin")
+    assert fortios_server.credentials_path.is_file()
+    assert "browser-test-password" not in fortios_server.credentials_path.read_text()
+    assert not fortios_server.certificate_output_dir.exists()
+
+
 # 2. Select product/model/version pair ---------------------------------------------------
 
 def test_select_product_model_version(app_page):

@@ -32,6 +32,35 @@
       </div>
     </section>
 
+    <section class="auth-layout" id="setup-view" hidden>
+      <div class="panel login-panel">
+        <div class="panel-header">
+          <p class="eyebrow">Première configuration</p>
+          <h2 class="panel-title">Créer le compte administrateur</h2>
+          <p class="panel-copy">Ce compte protège l’administration des certificats et notifications.</p>
+        </div>
+        <div class="panel-body">
+          <form id="setup-form">
+            <div class="field">
+              <label for="setup-username">Identifiant</label>
+              <input id="setup-username" name="username" autocomplete="username" required maxlength="64" pattern="[A-Za-z0-9._@-]{1,64}" value="admin">
+            </div>
+            <div class="field">
+              <label for="setup-password">Mot de passe</label>
+              <input id="setup-password" name="password" type="password" autocomplete="new-password" required>
+              <span class="field-help">12 à 1 024 octets UTF-8.</span>
+            </div>
+            <div class="field">
+              <label for="setup-password-confirmation">Confirmation</label>
+              <input id="setup-password-confirmation" name="passwordConfirmation" type="password" autocomplete="new-password" required>
+            </div>
+            <button class="btn primary full-width" id="setup-button" type="submit">Créer le compte administrateur</button>
+            <p class="form-message" id="setup-message" role="alert"></p>
+          </form>
+        </div>
+      </div>
+    </section>
+
     <section class="auth-layout" id="login-view">
       <div class="panel login-panel">
         <div class="panel-header">

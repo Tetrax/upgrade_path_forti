@@ -91,6 +91,7 @@ class CertificateInstallProcessor:
         self.hostname = hostname
         self.output_dir = output_dir
         self.credentials_file = credentials_file
+        cert_admin.ensure_credential_lock(credentials_file)
         self.allowed_uid = allowed_uid
         self.allowed_gid = allowed_gid
         self.reload_callback = reload_callback
@@ -146,6 +147,21 @@ class CertificateInstallProcessor:
             if peer_uid not in {0, self.allowed_uid}:
                 raise HelperAuthorizationError("Processus pair non autorisé.")
             return {"ok": True, "version": PROTOCOL_VERSION}
+        if peer_uid != self.allowed_uid or peer_gid != self.allowed_gid:
+            raise HelperAuthorizationError("Processus pair non autorisé.")
+        if action == "setup":
+            if set(message) != {"version", "action", "username", "password"}:
+                raise ProtocolError("Requête de configuration invalide.")
+            username = message.get("username")
+            password = message.get("password")
+            if not isinstance(username, str) or not isinstance(password, str):
+                raise ProtocolError("Champs de configuration invalides.")
+            revision = cert_admin.create_initial_credentials(
+                self.credentials_file,
+                username,
+                password,
+            )
+            return {"ok": True, "credentialsRevision": revision}
         if action != "install" or set(message) != {
             "version",
             "action",
@@ -153,8 +169,6 @@ class CertificateInstallProcessor:
             "payload",
         }:
             raise ProtocolError("Opération helper interdite.")
-        if peer_uid != self.allowed_uid or peer_gid != self.allowed_gid:
-            raise HelperAuthorizationError("Processus pair non autorisé.")
         payload = message.get("payload")
         if not isinstance(payload, dict) or set(payload) != _ALLOWED_PAYLOAD_KEYS:
             raise ProtocolError("Payload d'installation invalide.")
@@ -183,6 +197,12 @@ class _CertificateRequestHandler(socketserver.BaseRequestHandler):
                 peer_uid=peer_uid,
                 peer_gid=peer_gid,
             )
+        except cert_admin.CredentialExistsError as error:
+            response = {
+                "ok": False,
+                "error": str(error)[:1000],
+                "errorCode": "credentials_exists",
+            }
         except (
             ProtocolError,
             HelperAuthorizationError,

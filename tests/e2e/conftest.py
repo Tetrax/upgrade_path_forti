@@ -62,6 +62,8 @@ class FortiosTestServer:
     base_url: str
     data_dir: Path
     mock_response_path: Path
+    credentials_path: Path
+    certificate_output_dir: Path
     process: subprocess.Popen
     admin_username: str
     admin_password: str
@@ -107,6 +109,8 @@ def fortios_server(tmp_path: Path):
     env["FORTIOS_E2E_MOCK_NETWORK"] = "1"
     env["FORTIOS_E2E_MOCK_RESPONSE_FILE"] = str(mock_response_path)
     env["FORTIOS_CERT_ADMIN_FILE"] = str(credentials_path)
+    certificate_output_dir = tmp_path / "certificates" / "active"
+    env["FORTIOS_CERT_OUTPUT_DIR"] = str(certificate_output_dir)
     env["FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST"] = "1"
     # A real SMTP config leaking from the host environment into a test run would be surprising
     # and is never needed by anything in this suite.
@@ -128,6 +132,8 @@ def fortios_server(tmp_path: Path):
             base_url=base_url,
             data_dir=data_dir,
             mock_response_path=mock_response_path,
+            credentials_path=credentials_path,
+            certificate_output_dir=certificate_output_dir,
             process=process,
             admin_username=E2E_ADMIN_USERNAME,
             admin_password=admin_password,

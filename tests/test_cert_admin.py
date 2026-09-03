@@ -111,6 +111,44 @@ class CertificateAdminTests(unittest.TestCase):
 
             self.assertEqual(json.loads(credentials.read_text(encoding="utf-8")), original)
 
+    def test_existing_credentials_recreate_only_the_missing_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "admin" / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "mot-de-passe-original"),
+            )
+            original = credentials.read_bytes()
+            lock_path = cert_admin.credential_lock_path(credentials)
+            lock_path.unlink()
+
+            self.assertTrue(cert_admin.ensure_credential_lock(credentials))
+
+            self.assertEqual(credentials.read_bytes(), original)
+            self.assertEqual(lock_path.stat().st_mode & 0o777, 0o600)
+            self.assertTrue(
+                cert_admin.verify_credentials(
+                    credentials, "admin", "mot-de-passe-original"
+                )
+            )
+
+    def test_upgrade_does_not_follow_an_existing_lock_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "mot-de-passe-original"),
+            )
+            lock_path = cert_admin.credential_lock_path(credentials)
+            lock_path.unlink()
+            outside = root / "outside"
+            lock_path.symlink_to(outside)
+
+            self.assertFalse(cert_admin.ensure_credential_lock(credentials))
+            self.assertTrue(lock_path.is_symlink())
+            self.assertFalse(outside.exists())
+
     def test_password_length_matches_the_web_login_limit(self) -> None:
         accepted = cert_admin.credential_payload("valentin", "a" * 1024)
         self.assertEqual(accepted["algorithm"], "scrypt")

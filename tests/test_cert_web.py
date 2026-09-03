@@ -87,6 +87,35 @@ def running_server(environment: dict[str, str]) -> Iterator[str]:
             process.stdout.close()
 
 
+def post_setup(
+    base_url: str,
+    *,
+    username: str = "admin",
+    password: str = "premier-mot-de-passe",
+    confirmation: str | None = None,
+    opener: urllib.request.OpenerDirector | None = None,
+) -> tuple[int, dict[str, object], str]:
+    request = urllib.request.Request(
+        f"{base_url}/api/cert/setup",
+        data=json.dumps(
+            {
+                "username": username,
+                "password": password,
+                "passwordConfirmation": password if confirmation is None else confirmation,
+            }
+        ).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", "Origin": base_url},
+    )
+    client = opener or urllib.request.build_opener()
+    try:
+        with client.open(request, timeout=8) as response:
+            return response.status, json.load(response), response.headers.get("Set-Cookie", "")
+    except urllib.error.HTTPError as error:
+        with error:
+            return error.code, json.load(error), error.headers.get("Set-Cookie", "")
+
+
 class CertificateWebTests(unittest.TestCase):
     def test_certificate_page_is_hidden_on_plain_http_by_default(self) -> None:
         with running_server({}) as base_url:
@@ -110,6 +139,187 @@ class CertificateWebTests(unittest.TestCase):
             self.assertIn("Administration", body)
             self.assertIn("Certificats", body)
             self.assertIn('id="login-form"', body)
+
+    def test_certificate_page_contains_the_first_run_account_form(self) -> None:
+        with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url:
+            with urllib.request.urlopen(f"{base_url}/cert/", timeout=2) as response:
+                body = response.read().decode("utf-8")
+            with urllib.request.urlopen(f"{base_url}/cert/cert.js", timeout=2) as response:
+                script = response.read().decode("utf-8")
+
+        self.assertIn("Première configuration", body)
+        self.assertIn('id="setup-form"', body)
+        self.assertIn('id="setup-username"', body)
+        self.assertIn('value="admin"', body)
+        self.assertIn('id="setup-password-confirmation"', body)
+        self.assertIn('apiRequest("setup"', script)
+
+    def test_new_install_without_admin_directory_requires_web_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "missing-admin" / "credentials.json"
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+            }
+            with (
+                running_server(environment) as base_url,
+                urllib.request.urlopen(
+                    f"{base_url}/api/cert/status", timeout=3
+                ) as response,
+            ):
+                payload = json.load(response)
+
+            self.assertEqual(response.status, 200)
+            self.assertFalse(payload["authenticated"])
+            self.assertTrue(payload["setupRequired"])
+            self.assertFalse(credentials.parent.exists())
+
+    def test_web_setup_creates_first_account_and_authenticated_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "admin" / "credentials.json"
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+            }
+            with running_server(environment) as base_url:
+                opener = urllib.request.build_opener(
+                    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+                )
+                status, setup_payload, cookie = post_setup(base_url, opener=opener)
+                with opener.open(f"{base_url}/api/cert/status", timeout=3) as response:
+                    status_payload = json.load(response)
+
+            self.assertEqual(status, 200, setup_payload)
+            self.assertTrue(setup_payload["authenticated"])
+            self.assertIn("fortios_cert_session=", cookie)
+            self.assertTrue(status_payload["authenticated"])
+            self.assertEqual(status_payload["username"], "admin")
+            self.assertTrue(
+                cert_admin.verify_credentials(
+                    credentials, "admin", "premier-mot-de-passe"
+                )
+            )
+
+    def test_second_web_setup_is_refused_without_replacing_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "admin" / "credentials.json"
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+            }
+            with running_server(environment) as base_url:
+                self.assertEqual(post_setup(base_url)[0], 200)
+                self.assertEqual(post_setup(base_url, password="second-mot-de-passe")[0], 409)
+
+            self.assertTrue(
+                cert_admin.verify_credentials(
+                    credentials, "admin", "premier-mot-de-passe"
+                )
+            )
+            self.assertFalse(
+                cert_admin.verify_credentials(
+                    credentials, "admin", "second-mot-de-passe"
+                )
+            )
+
+    def test_web_setup_preserves_username_password_and_confirmation_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "admin" / "credentials.json"
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+            }
+            with running_server(environment) as base_url:
+                self.assertEqual(post_setup(base_url, username="admin invalide")[0], 400)
+                self.assertEqual(post_setup(base_url, password="onze-octets", confirmation="différent")[0], 400)
+                self.assertEqual(post_setup(base_url, password="court")[0], 400)
+                self.assertEqual(post_setup(base_url, password="😀😀😀")[0], 200)
+
+            self.assertTrue(cert_admin.verify_credentials(credentials, "admin", "😀😀😀"))
+
+    def test_two_concurrent_web_setups_create_exactly_one_account(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "admin" / "credentials.json"
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+            }
+            with running_server(environment) as base_url:
+                barrier = threading.Barrier(2)
+
+                def setup(password: str) -> int:
+                    barrier.wait(timeout=5)
+                    return post_setup(base_url, password=password)[0]
+
+                passwords = ("premier-mot-de-passe", "second-mot-de-passe")
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    statuses = list(executor.map(setup, passwords))
+
+            self.assertEqual(sorted(statuses), [200, 409], statuses)
+            accepted = [
+                password
+                for password in passwords
+                if cert_admin.verify_credentials(credentials, "admin", password)
+            ]
+            self.assertEqual(len(accepted), 1)
+
+    def test_corrupt_credentials_never_reenable_anonymous_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "admin" / "credentials.json"
+            credentials.parent.mkdir()
+            credentials.write_text("{corrompu", encoding="utf-8")
+            original = credentials.read_bytes()
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+            }
+            with running_server(environment) as base_url:
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    urllib.request.urlopen(f"{base_url}/api/cert/status", timeout=3)
+                with raised.exception as response:
+                    status_payload = json.load(response)
+                setup_status = post_setup(base_url)[0]
+
+            self.assertEqual(raised.exception.code, 503)
+            self.assertFalse(status_payload["setupRequired"])
+            self.assertIn("administrateur", status_payload["error"])
+            self.assertEqual(setup_status, 409)
+            self.assertEqual(credentials.read_bytes(), original)
+
+    def test_existing_installation_recreates_lock_without_changing_password(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "admin" / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "mot-de-passe-original"),
+            )
+            original = credentials.read_bytes()
+            lock_path = cert_admin.credential_lock_path(credentials)
+            lock_path.unlink()
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+            }
+            with running_server(environment) as base_url:
+                login = urllib.request.Request(
+                    f"{base_url}/api/cert/login",
+                    data=json.dumps(
+                        {"username": "admin", "password": "mot-de-passe-original"}
+                    ).encode(),
+                    method="POST",
+                    headers={"Content-Type": "application/json", "Origin": base_url},
+                )
+                with urllib.request.urlopen(login, timeout=5) as response:
+                    payload = json.load(response)
+
+            self.assertEqual(response.status, 200, payload)
+            self.assertTrue(lock_path.is_file())
+            self.assertEqual(credentials.read_bytes(), original)
+            self.assertTrue(
+                cert_admin.verify_credentials(
+                    credentials, "admin", "mot-de-passe-original"
+                )
+            )
 
     def test_valid_login_creates_an_http_only_session_and_csrf_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -601,6 +811,77 @@ class CertificateWebTests(unittest.TestCase):
             self.assertFalse(installation["restartRequired"])
             self.assertTrue((output / "fullchain.pem").is_file())
             self.assertTrue((output / "privkey.pem").is_file())
+
+    def test_web_setup_uses_the_helper_without_touching_active_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "admin" / "credentials.json"
+            output = root / "active"
+            output.mkdir()
+            (output / "fullchain.pem").write_bytes(b"existing-certificate")
+            (output / "privkey.pem").write_bytes(b"existing-private-key")
+            before = {path.name: path.read_bytes() for path in output.iterdir()}
+            socket_path = root / "run" / "helper.sock"
+            socket_path.parent.mkdir()
+            processor = cert_helper.CertificateInstallProcessor(
+                hostname=HOSTNAME,
+                output_dir=output,
+                credentials_file=credentials,
+                allowed_uid=os.getuid(),
+                allowed_gid=os.getgid(),
+            )
+            setup_seen = threading.Event()
+            original_process = processor.process
+
+            def record_process(
+                message: dict[str, object], *, peer_uid: int, peer_gid: int
+            ) -> dict[str, object]:
+                if message.get("action") == "setup":
+                    setup_seen.set()
+                return original_process(message, peer_uid=peer_uid, peer_gid=peer_gid)
+
+            processor.process = record_process  # type: ignore[method-assign]
+            helper_server = cert_helper.CertificateHelperServer(socket_path, processor)
+            helper_thread = threading.Thread(target=helper_server.serve_forever, daemon=True)
+            helper_thread.start()
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_CERT_HELPER_SOCKET": str(socket_path),
+                "FORTIOS_TLS_HOSTNAME": HOSTNAME,
+            }
+            try:
+                with running_server(environment) as base_url:
+                    opener = urllib.request.build_opener(
+                        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+                    )
+                    status, payload, _ = post_setup(base_url, opener=opener)
+                    second_status = post_setup(
+                        base_url,
+                        password="second-mot-de-passe",
+                    )[0]
+                    with opener.open(f"{base_url}/api/cert/status", timeout=3) as response:
+                        authenticated = json.load(response)
+            finally:
+                helper_server.shutdown()
+                helper_server.server_close()
+                helper_thread.join(timeout=3)
+
+            self.assertEqual(status, 200, payload)
+            self.assertEqual(second_status, 409)
+            self.assertTrue(setup_seen.is_set())
+            self.assertTrue(authenticated["authenticated"])
+            self.assertTrue(
+                cert_admin.verify_credentials(
+                    credentials,
+                    "admin",
+                    "premier-mot-de-passe",
+                )
+            )
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in output.iterdir()},
+                before,
+            )
 
     def test_reset_revokes_an_install_request_already_reading_its_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
