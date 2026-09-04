@@ -54,6 +54,11 @@
               <label for="setup-password-confirmation">Confirmation</label>
               <input id="setup-password-confirmation" name="passwordConfirmation" type="password" autocomplete="new-password" required>
             </div>
+            <div class="field">
+              <label for="setup-recovery-email">Adresse de récupération <span class="field-help">(facultatif)</span></label>
+              <input id="setup-recovery-email" name="recoveryEmail" type="email" autocomplete="email" maxlength="254" placeholder="admin@example.tld">
+              <span class="field-help">Elle restera inactive jusqu’à sa vérification et n’empêche jamais la création du compte.</span>
+            </div>
             <button class="btn primary full-width" id="setup-button" type="submit">Créer le compte administrateur</button>
             <p class="form-message" id="setup-message" role="alert"></p>
           </form>
@@ -78,7 +83,58 @@
               <input id="password" name="password" type="password" autocomplete="current-password" required>
             </div>
             <button class="btn primary full-width" id="login-button" type="submit">Se connecter</button>
+            <button class="link-button" id="forgot-password-button" type="button">Mot de passe oublié ?</button>
             <p class="form-message" id="login-message" role="alert"></p>
+          </form>
+          <form id="forgot-password-form" hidden>
+            <div class="field">
+              <label for="forgot-username">Identifiant</label>
+              <input id="forgot-username" name="username" autocomplete="username" required maxlength="64" value="admin">
+            </div>
+            <button class="btn primary full-width" id="send-reset-link-button" type="submit">Envoyer le lien de récupération</button>
+            <button class="link-button" id="back-to-login-button" type="button">Retour à la connexion</button>
+            <p class="form-message" id="forgot-password-message" role="status"></p>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <section class="auth-layout" id="email-verification-view" hidden>
+      <div class="panel login-panel">
+        <div class="panel-header">
+          <p class="eyebrow">Compte &amp; sécurité</p>
+          <h2 class="panel-title">Vérifier l’adresse de récupération</h2>
+          <p class="panel-copy">Confirme l’adresse associée au compte administrateur.</p>
+        </div>
+        <div class="panel-body">
+          <button class="btn primary full-width" id="verify-recovery-email-button" type="button">Vérifier l’adresse</button>
+          <button class="link-button" id="verification-login-button" type="button">Retour à la connexion</button>
+          <p class="form-message" id="email-verification-message" role="status"></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="auth-layout" id="password-reset-view" hidden>
+      <div class="panel login-panel">
+        <div class="panel-header">
+          <p class="eyebrow">Compte &amp; sécurité</p>
+          <h2 class="panel-title">Réinitialiser le mot de passe</h2>
+          <p class="panel-copy">Choisis un nouveau mot de passe administrateur. Toutes les sessions seront fermées.</p>
+        </div>
+        <div class="panel-body">
+          <form id="password-reset-form">
+            <div class="field">
+              <label for="reset-password">Nouveau mot de passe</label>
+              <input id="reset-password" type="password" autocomplete="new-password" required>
+              <span class="field-help">12 à 1 024 octets UTF-8.</span>
+            </div>
+            <div class="field">
+              <label for="reset-password-confirmation">Confirmer le nouveau mot de passe</label>
+              <input id="reset-password-confirmation" type="password" autocomplete="new-password" required>
+            </div>
+            <button class="btn primary full-width" id="reset-password-button" type="submit">Réinitialiser le mot de passe</button>
+            <button class="link-button" id="reset-login-button" type="button">Retour à la connexion</button>
+            <p class="form-message" id="password-reset-message" role="alert"></p>
           </form>
         </div>
       </div>
@@ -88,6 +144,7 @@
       <nav class="admin-tabs" aria-label="Sections d’administration">
         <button class="admin-tab active" id="certificates-tab" type="button" aria-controls="certificates-section">Certificats</button>
         <button class="admin-tab" id="notifications-tab" type="button" aria-controls="notifications-section">Notifications</button>
+        <button class="admin-tab" id="account-tab" type="button" aria-controls="account-section">Compte</button>
       </nav>
 
       <section id="certificates-section">
@@ -170,6 +227,77 @@
                 <button class="btn primary" id="install-button" type="button">Activer ce certificat</button>
               </div>
               <p class="form-message" id="install-message" role="alert"></p>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="account-section" hidden>
+        <div class="account-layout">
+          <section class="panel account-panel">
+            <div class="panel-header">
+              <p class="eyebrow">Sécurité du compte</p>
+              <h2 class="panel-title">Compte &amp; sécurité</h2>
+              <p class="panel-copy">Compte administrateur unique, récupération et sessions actives.</p>
+            </div>
+            <div class="panel-body">
+              <dl class="account-summary">
+                <div>
+                  <dt>Compte administrateur</dt>
+                  <dd id="account-username">—</dd>
+                </div>
+                <div>
+                  <dt>Adresse de récupération</dt>
+                  <dd id="account-recovery-email">Non configurée</dd>
+                  <span class="field-help" id="account-recovery-status">Récupération indisponible</span>
+                </div>
+                <div>
+                  <dt>Mot de passe</dt>
+                  <dd>Dernière modification : <span id="account-password-changed-at">—</span></dd>
+                </div>
+                <div>
+                  <dt>Sessions</dt>
+                  <dd id="account-session-count">—</dd>
+                </div>
+              </dl>
+              <div class="account-actions account-primary-actions">
+                <button class="btn" id="change-password-button" type="button">Modifier le mot de passe</button>
+                <button class="btn" id="change-recovery-email-button" type="button">Modifier l’adresse de récupération</button>
+                <button class="btn danger" id="revoke-all-sessions-button" type="button">Déconnecter toutes les sessions</button>
+              </div>
+              <form id="recovery-email-form" hidden>
+                <div class="field">
+                  <label for="recovery-email">Nouvelle adresse de récupération</label>
+                  <input id="recovery-email" name="recoveryEmail" type="email" autocomplete="email" maxlength="254" required placeholder="admin@example.tld">
+                  <span class="field-help">La nouvelle adresse ne sera utilisable qu’après vérification.</span>
+                </div>
+                <div class="account-actions">
+                  <button class="btn" id="cancel-recovery-email-button" type="button">Annuler</button>
+                  <button class="btn" id="resend-recovery-email-button" type="button" hidden>Renvoyer la vérification</button>
+                  <button class="btn primary" id="save-recovery-email-button" type="submit">Enregistrer l’adresse</button>
+                </div>
+                <p class="form-message" id="recovery-email-message" role="alert"></p>
+              </form>
+              <form id="password-change-form" hidden>
+                <div class="field">
+                  <label for="current-admin-password">Mot de passe actuel</label>
+                  <input id="current-admin-password" name="currentPassword" type="password" autocomplete="current-password" required>
+                </div>
+                <div class="field">
+                  <label for="new-admin-password">Nouveau mot de passe</label>
+                  <input id="new-admin-password" name="newPassword" type="password" autocomplete="new-password" required>
+                  <span class="field-help">12 à 1 024 octets UTF-8.</span>
+                </div>
+                <div class="field">
+                  <label for="confirm-admin-password">Confirmer le nouveau mot de passe</label>
+                  <input id="confirm-admin-password" name="confirmation" type="password" autocomplete="new-password" required>
+                </div>
+                <div class="account-actions">
+                  <button class="btn" id="cancel-password-change-button" type="button">Annuler</button>
+                  <button class="btn primary" id="submit-password-change-button" type="submit">Modifier le mot de passe</button>
+                </div>
+                <p class="form-message" id="password-change-message" role="alert"></p>
+              </form>
             </div>
           </section>
         </div>

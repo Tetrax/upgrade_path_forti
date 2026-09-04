@@ -77,6 +77,18 @@ class SessionStore:
         with self._lock:
             self._sessions.pop(session_id, None)
 
+    def count(self) -> int:
+        now = time.monotonic()
+        with self._lock:
+            self._prune(now)
+            return len(self._sessions)
+
+    def revoke_all(self) -> int:
+        with self._lock:
+            count = len(self._sessions)
+            self._sessions.clear()
+            return count
+
     def _prune(self, now: float) -> None:
         expired = [
             key for key, session in self._sessions.items() if session.expires_at <= now
@@ -226,6 +238,49 @@ class ActionRateLimiter:
             if len(recent) >= self.max_actions:
                 return False
             recent.append(now)
+            return True
+
+
+class AnonymousRateLimiter:
+    """Bound anonymous recovery attempts per client and across the process."""
+
+    def __init__(
+        self,
+        *,
+        max_per_client: int = 5,
+        max_global: int = 30,
+        window_seconds: int = 10 * 60,
+        maximum_clients: int = 2048,
+    ) -> None:
+        if min(max_per_client, max_global, window_seconds, maximum_clients) <= 0:
+            raise ValueError("Les limites de récupération doivent être positives.")
+        self.max_per_client = max_per_client
+        self.max_global = max_global
+        self.window_seconds = window_seconds
+        self.maximum_clients = maximum_clients
+        self._clients: dict[str, list[float]] = {}
+        self._global: list[float] = []
+        self._lock = threading.Lock()
+
+    def try_record(self, client: str) -> bool:
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+        with self._lock:
+            self._global = [timestamp for timestamp in self._global if timestamp > cutoff]
+            for key in list(self._clients):
+                recent = [timestamp for timestamp in self._clients[key] if timestamp > cutoff]
+                if recent:
+                    self._clients[key] = recent
+                else:
+                    self._clients.pop(key, None)
+            recent = self._clients.get(client, [])
+            if len(recent) >= self.max_per_client or len(self._global) >= self.max_global:
+                return False
+            if client not in self._clients and len(self._clients) >= self.maximum_clients:
+                oldest = min(self._clients, key=lambda key: self._clients[key][-1])
+                self._clients.pop(oldest, None)
+            self._clients.setdefault(client, []).append(now)
+            self._global.append(now)
             return True
 
 
