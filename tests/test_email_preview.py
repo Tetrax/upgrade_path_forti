@@ -149,6 +149,7 @@ class EmailPreviewCompositionTests(unittest.TestCase):
             smtp_timeout=settings.timeout,
             app_url=settings.app_url,
             smtp_security=settings.security,
+            smtp_allow_insecure=settings.allow_insecure,
         )
 
         public = notify.smtp_public_settings(settings, config)
@@ -443,14 +444,10 @@ class EmailPreviewApiTests(unittest.TestCase):
             )
             notify.save_smtp_settings(
                 data_dir / "smtp-settings.json",
-                smtp_payload(
-                    host="127.0.0.1",
-                    port=smtp.server_address[1],
-                    security="none",
-                    allowInsecure=True,
-                    username="",
-                ),
-                password="smtp-private-secret",
+                {"emailAppearance": APPEARANCE},
+            )
+            (data_dir / "smtp-password").write_text(
+                "legacy-secret-must-not-be-read", encoding="utf-8"
             )
             notification_path.write_text(
                 '{"malformed":"must remain byte-identical"}\n', encoding="utf-8"
@@ -469,6 +466,12 @@ class EmailPreviewApiTests(unittest.TestCase):
                 "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
                 "FORTIOS_CERT_ADMIN_FILE": str(credentials),
                 "FORTIOS_TEST_DATA_DIR": str(data_dir),
+                "FORTIOS_SMTP_HOST": "127.0.0.1",
+                "FORTIOS_SMTP_PORT": str(smtp.server_address[1]),
+                "FORTIOS_SMTP_SECURITY": "none",
+                "FORTIOS_SMTP_ALLOW_INSECURE": "true",
+                "FORTIOS_SMTP_FROM": "fortiupgrade@example.com",
+                "FORTIOS_APP_URL": "https://upgrade.example/app/",
             }
             preview_request = {"scenario": "multi-product", "appearance": APPEARANCE}
             with running_server(environment) as base_url:

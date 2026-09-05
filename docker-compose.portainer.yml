@@ -1,12 +1,14 @@
-# Portainer / offline import variant with absolute host paths.
-# Load fortios-upgrade-intelligence:local first, then deploy this file as a Stack.
+# Portainer Git Stack with stable host paths; pin FORTIOS_IMAGE to a SHA/digest.
+# Uses a project network instead of site-specific static addresses.
 services:
   web:
-    image: ghcr.io/tetrax/upgrade_path_forti:latest
+    image: ${FORTIOS_IMAGE:-ghcr.io/tetrax/upgrade_path_forti:latest}
     restart: unless-stopped
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
+      FORTIOS_SMTP_SECURITY: ${FORTIOS_SMTP_SECURITY:-starttls}
+      FORTIOS_SMTP_ALLOW_INSECURE: ${FORTIOS_SMTP_ALLOW_INSECURE:-false}
       FORTIOS_TLS_CERT: ${FORTIOS_TLS_CERT:-}
       FORTIOS_TLS_KEY: ${FORTIOS_TLS_KEY:-}
       FORTIOS_TLS_HOSTNAME: ${FORTIOS_TLS_HOSTNAME:-}
@@ -32,6 +34,7 @@ services:
       - ${FORTIOS_DOCS_DIR}:/opt/fortios/docs
       - ${FORTIOS_CERTS_DIR}:/opt/fortios/certificates:${FORTIOS_CERTS_MOUNT_MODE:-rw}
       - ${FORTIOS_CERT_HELPER_SOCKET_DIR:-/run/fortios-cert-helper}:/run/fortios-cert-helper:ro
+      - ${FORTIOS_SECRETS_DIR:-/etc/fortiupgrade/secrets}:/run/fortios-secrets:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=128m
     healthcheck:
@@ -42,17 +45,17 @@ services:
       start_period: 10s
     security_opt:
       - no-new-privileges:true
-    networks:
-      fortiflow_net:
-        ipv4_address: 172.30.250.3
+
 
   scheduler:
-    image: ghcr.io/tetrax/upgrade_path_forti:latest
+    image: ${FORTIOS_IMAGE:-ghcr.io/tetrax/upgrade_path_forti:latest}
     restart: unless-stopped
     command: ["python", "scripts/container_scheduler.py"]
     environment:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
+      FORTIOS_SMTP_SECURITY: ${FORTIOS_SMTP_SECURITY:-starttls}
+      FORTIOS_SMTP_ALLOW_INSECURE: ${FORTIOS_SMTP_ALLOW_INSECURE:-false}
       FORTIOS_RUN_ON_START: ${FORTIOS_RUN_ON_START:-0}
       FORTIOS_EMAIL_ENABLED: ${FORTIOS_EMAIL_ENABLED:-false}
       FORTIOS_SMTP_HOST: ${FORTIOS_SMTP_HOST:-}
@@ -67,15 +70,8 @@ services:
     volumes:
       - ${FORTIOS_DATA_DIR}:/opt/fortios/data
       - ${FORTIOS_DOCS_DIR}:/opt/fortios/docs
+      - ${FORTIOS_SECRETS_DIR:-/etc/fortiupgrade/secrets}:/run/fortios-secrets:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m
     security_opt:
       - no-new-privileges:true
-    networks:
-      fortiflow_net:
-        ipv4_address: 172.30.250.4
-
-networks:
-  fortiflow_net:
-    external: true
-    name: Subnet-Docker

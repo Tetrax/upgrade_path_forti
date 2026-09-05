@@ -7,11 +7,9 @@ import io
 import json
 import smtplib
 import socketserver
-import stat
 import sys
 import tempfile
 import threading
-import time
 import unittest
 import urllib.error
 import urllib.request
@@ -146,74 +144,216 @@ def running_smtp_server() -> Iterator[RecordingSmtpServer]:
 
 
 class SmtpSettingsPersistenceTests(unittest.TestCase):
-    def test_hidden_private_backup_uses_a_single_dot_temporary_name(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            backup = Path(tmp) / ".smtp-password.transaction-backup"
-            with (
-                patch("os.open", side_effect=OSError("stop")) as open_file,
-                self.assertRaises(OSError),
-            ):
-                notify._atomic_write_private(backup, "test-secret", 0o600)
-
-            temporary = Path(open_file.call_args.args[0])
-            self.assertTrue(
-                temporary.name.startswith(
-                    ".smtp-password.transaction-backup.tmp-"
-                )
-            )
-            self.assertFalse(temporary.name.startswith(".."))
-
-    def test_unknown_starttls_environment_value_fails_closed(self) -> None:
+    def test_unknown_security_environment_value_fails_closed(self) -> None:
         smtp = notify._smtp_settings_from_env(
-            {"FORTIOS_SMTP_STARTTLS": "unexpected-value"}
+            {"FORTIOS_SMTP_SECURITY": "unexpected-value"}
         )
 
         self.assertEqual(smtp.security, "starttls")
         self.assertFalse(smtp.allow_insecure)
 
-    def test_saved_settings_override_environment_and_keep_password_out_of_json(self) -> None:
+    def test_legacy_starttls_environment_value_remains_supported(self) -> None:
+        smtp = notify._smtp_settings_from_env(
+            {"FORTIOS_SMTP_STARTTLS": "false"}
+        )
+
+        self.assertEqual(smtp.security, "none")
+        self.assertTrue(smtp.allow_insecure)
+
+    def test_environment_transport_is_authoritative_over_legacy_saved_fields(self) -> None:
+        appearance = {
+            "displayName": "Saved title",
+            "introduction": "Saved introduction",
+            "signature": "Saved signature",
+        }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             settings_path = root / "smtp-settings.json"
-            env_secret = root / "legacy-password"
-            env_secret.write_text("legacy-secret\n", encoding="utf-8")
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        **smtp_payload(),
+                        "host": "smtp.saved.example",
+                        "password": "legacy-secret-must-not-be-read",
+                        "emailAppearance": appearance,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            secret = root / "mounted-secret"
+            secret.write_text("environment-secret\n", encoding="utf-8")
             environment = {
                 "FORTIOS_SMTP_HOST": "smtp.environment.example",
-                "FORTIOS_SMTP_FROM": "legacy@example.com",
-                "FORTIOS_SMTP_PASSWORD_FILE": str(env_secret),
+                "FORTIOS_SMTP_PORT": "465",
+                "FORTIOS_SMTP_USERNAME": "environment-user",
+                "FORTIOS_SMTP_SECURITY": "tls",
+                "FORTIOS_SMTP_ALLOW_INSECURE": "false",
+                "FORTIOS_SMTP_FROM": "environment@example.com",
+                "FORTIOS_SMTP_TIMEOUT": "19",
+                "FORTIOS_APP_URL": "https://environment.example/app/",
+                "FORTIOS_SMTP_PASSWORD_FILE": str(secret),
             }
 
-            notify.save_smtp_settings(
-                settings_path,
-                smtp_payload(),
-                password="saved-secret-value",
-            )
-            config = notify.load_email_config(
+            smtp, config = notify.load_smtp_snapshot(
                 environment,
                 settings=notification_settings(),
                 smtp_settings_path=settings_path,
             )
+            public = notify.smtp_public_settings(smtp, config)
 
-            persisted = json.loads(settings_path.read_text(encoding="utf-8"))
-            self.assertEqual(config.smtp_host, "smtp.saved.example")
-            self.assertEqual(config.smtp_password, "saved-secret-value")
-            self.assertEqual(
-                config.email_appearance,
-                notify.EmailAppearance(
-                    display_name="FortiUpgrade",
-                    introduction="Alerte de sécurité Fortinet.",
-                    signature="Équipe sécurité",
+        self.assertEqual(smtp.source, "environment")
+        self.assertEqual(config.smtp_host, "smtp.environment.example")
+        self.assertEqual(config.smtp_port, 465)
+        self.assertEqual(config.smtp_username, "environment-user")
+        self.assertEqual(config.smtp_security, "tls")
+        self.assertEqual(config.smtp_from, "environment@example.com")
+        self.assertEqual(config.smtp_timeout, 19)
+        self.assertEqual(config.app_url, "https://environment.example/app/")
+        self.assertEqual(config.smtp_password, "environment-secret")
+        self.assertEqual(config.email_appearance, notify.validate_email_appearance(appearance))
+        self.assertEqual(public["host"], "smtp.environment.example")
+        self.assertEqual(public["source"], "environment")
+        serialized = json.dumps(public)
+        self.assertNotIn("environment-secret", serialized)
+        self.assertNotIn("legacy-secret", serialized)
+        self.assertNotIn(str(secret), serialized)
+
+    def test_save_accepts_only_appearance_and_preserves_environment_transport(self) -> None:
+        appearance = {
+            "displayName": "FortiUpgrade SOC",
+            "introduction": "Introduction contrôlée",
+            "signature": "Équipe sécurité",
+        }
+        environment = {
+            "FORTIOS_SMTP_HOST": "smtp.environment.example",
+            "FORTIOS_SMTP_PORT": "2525",
+            "FORTIOS_SMTP_SECURITY": "starttls",
+            "FORTIOS_SMTP_USERNAME": "mailer",
+            "FORTIOS_SMTP_FROM": "fortiupgrade@example.com",
+            "FORTIOS_APP_URL": "https://upgrade.example/app/",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "smtp-settings.json"
+            saved = notify.save_smtp_settings(
+                path,
+                {"emailAppearance": appearance},
+                env=environment,
+            )
+            persisted = json.loads(path.read_text(encoding="utf-8"))
+            loaded = notify.load_smtp_settings(path, env=environment)
+
+        self.assertEqual(persisted, {"emailAppearance": appearance})
+        self.assertEqual(saved, loaded)
+        self.assertEqual(saved.host, "smtp.environment.example")
+        self.assertEqual(saved.port, 2525)
+        self.assertEqual(saved.security, "starttls")
+        self.assertEqual(saved.username, "mailer")
+        self.assertEqual(saved.sender, "fortiupgrade@example.com")
+        self.assertEqual(saved.app_url, "https://upgrade.example/app/")
+        self.assertEqual(saved.email_appearance, notify.validate_email_appearance(appearance))
+        self.assertFalse((path.parent / notify.SMTP_PASSWORD_FILENAME).exists())
+
+    def test_save_rejects_infrastructure_mutations(self) -> None:
+        appearance_only = {"emailAppearance": smtp_payload()["emailAppearance"]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "smtp-settings.json"
+            for mutation in (
+                {**appearance_only, "host": "smtp.attacker.example"},
+                {**appearance_only, "port": 25},
+                {**appearance_only, "username": "attacker"},
+                {**appearance_only, "security": "none"},
+                {**appearance_only, "from": "attacker@example.com"},
+                {**appearance_only, "appUrl": "https://attacker.example/"},
+            ):
+                with self.subTest(mutation=mutation), self.assertRaisesRegex(
+                    ValueError, "Configuration SMTP"
+                ):
+                    notify.save_smtp_settings(path, mutation)
+            self.assertFalse(path.exists())
+
+    def test_save_rejects_web_password_even_when_appearance_is_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "smtp-settings.json"
+            with self.assertRaisesRegex(ValueError, "FORTIOS_SMTP_PASSWORD_FILE"):
+                notify.save_smtp_settings(
+                    path,
+                    {"emailAppearance": smtp_payload()["emailAppearance"]},
+                    password="browser-secret",
+                )
+            self.assertFalse(path.exists())
+
+    def test_delete_web_password_operation_is_rejected_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "smtp-settings.json"
+            path.write_text(json.dumps({"emailAppearance": smtp_payload()["emailAppearance"]}), encoding="utf-8")
+            before = path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "FORTIOS_SMTP_PASSWORD_FILE"):
+                notify.delete_smtp_password(path)
+
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_none_security_requires_explicit_allow_insecure(self) -> None:
+        allowed = notify.load_email_config(
+            {
+                "FORTIOS_SMTP_HOST": "smtp.example.com",
+                "FORTIOS_SMTP_SECURITY": "none",
+                "FORTIOS_SMTP_ALLOW_INSECURE": "true",
+                "FORTIOS_SMTP_FROM": "fortiupgrade@example.com",
+            },
+            settings=notification_settings(),
+        )
+        blocked = notify.load_email_config(
+            {
+                "FORTIOS_SMTP_HOST": "smtp.example.com",
+                "FORTIOS_SMTP_SECURITY": "none",
+                "FORTIOS_SMTP_ALLOW_INSECURE": "false",
+                "FORTIOS_SMTP_FROM": "fortiupgrade@example.com",
+            },
+            settings=notification_settings(),
+        )
+
+        self.assertTrue(allowed.is_complete())
+        self.assertFalse(blocked.is_complete())
+
+    def test_missing_smtp_environment_is_safe_for_read_and_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = notify.load_smtp_settings(Path(tmp) / "missing.json", env={})
+            config = notify.load_email_config(
+                {},
+                settings=notification_settings(),
+                smtp_settings_path=Path(tmp) / "missing.json",
+            )
+
+        self.assertEqual(settings.source, "environment")
+        self.assertEqual(settings.host, "")
+        self.assertEqual(settings.email_appearance, notify.EmailAppearance("FortiUpgrade", "", ""))
+        self.assertFalse(config.is_complete())
+        self.assertEqual(notify.smtp_public_settings(settings, config)["state"], "incomplete")
+
+    def test_malformed_legacy_appearance_falls_back_without_copying_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "smtp-settings.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "host": "smtp.legacy.example",
+                        "smtpPassword": "must-not-survive",
+                        "emailAppearance": {"displayName": ""},
+                    }
                 ),
+                encoding="utf-8",
             )
-            self.assertNotIn("password", json.dumps(persisted).lower())
-            self.assertNotIn("saved-secret-value", json.dumps(persisted))
-            self.assertEqual(stat.S_IMODE(settings_path.stat().st_mode), 0o640)
-            self.assertEqual(
-                stat.S_IMODE(notify.smtp_password_path(settings_path).stat().st_mode),
-                0o600,
+            settings = notify.load_smtp_settings(path, env={})
+            public = notify.smtp_public_settings(
+                settings,
+                notify.load_email_config({}, settings=notification_settings(), smtp_settings_path=path),
             )
 
-    def test_invalid_host_port_and_sender_are_rejected(self) -> None:
+        self.assertEqual(settings.email_appearance, notify.EmailAppearance("FortiUpgrade", "", ""))
+        self.assertNotIn("must-not-survive", json.dumps(public))
+
+    def test_invalid_host_port_and_sender_are_rejected_by_legacy_validator(self) -> None:
         invalid_payloads = (
             smtp_payload(host=""),
             smtp_payload(host="https://smtp.example.com"),
@@ -225,283 +365,6 @@ class SmtpSettingsPersistenceTests(unittest.TestCase):
         for payload in invalid_payloads:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
                 notify.validate_smtp_settings(payload)
-
-    def test_blank_password_preserves_secret_and_nonblank_replaces_it(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "smtp-settings.json"
-            notify.save_smtp_settings(
-                settings_path, smtp_payload(), password="initial-secret"
-            )
-
-            notify.save_smtp_settings(
-                settings_path,
-                smtp_payload(host="smtp.changed.example"),
-                password="",
-            )
-            preserved = notify.load_email_config(
-                {},
-                settings=notification_settings(),
-                smtp_settings_path=settings_path,
-            )
-            self.assertEqual(preserved.smtp_password, "initial-secret")
-
-            notify.save_smtp_settings(
-                settings_path,
-                smtp_payload(host="smtp.changed.example"),
-                password="replacement-secret",
-            )
-            replaced = notify.load_email_config(
-                {},
-                settings=notification_settings(),
-                smtp_settings_path=settings_path,
-            )
-            self.assertEqual(replaced.smtp_password, "replacement-secret")
-
-    def test_environment_is_bootstrap_only_until_saved_file_exists(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            settings_path = root / "smtp-settings.json"
-            env_secret = root / "environment-secret"
-            env_secret.write_text("bootstrap-secret\n", encoding="utf-8")
-            environment = {
-                "FORTIOS_SMTP_HOST": "smtp.bootstrap.example",
-                "FORTIOS_SMTP_PORT": "2525",
-                "FORTIOS_SMTP_USERNAME": "bootstrap-user",
-                "FORTIOS_SMTP_PASSWORD_FILE": str(env_secret),
-                "FORTIOS_SMTP_STARTTLS": "true",
-                "FORTIOS_SMTP_TIMEOUT": "20",
-                "FORTIOS_SMTP_FROM": "bootstrap@example.com",
-                "FORTIOS_APP_URL": "https://bootstrap.example/app/",
-            }
-
-            bootstrapped = notify.load_email_config(
-                environment,
-                settings=notification_settings(),
-                smtp_settings_path=settings_path,
-            )
-            self.assertEqual(bootstrapped.smtp_host, "smtp.bootstrap.example")
-            self.assertEqual(bootstrapped.smtp_password, "bootstrap-secret")
-
-            notify.save_smtp_settings(
-                settings_path, smtp_payload(), password="saved-secret"
-            )
-            saved = notify.load_email_config(
-                environment,
-                settings=notification_settings(),
-                smtp_settings_path=settings_path,
-            )
-            self.assertEqual(saved.smtp_host, "smtp.saved.example")
-            self.assertEqual(saved.smtp_password, "saved-secret")
-
-    def test_first_web_save_with_blank_password_migrates_bootstrap_secret(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            settings_path = root / "smtp-settings.json"
-            bootstrap_secret = root / "bootstrap-password"
-            bootstrap_secret.write_text("bootstrap-secret\n", encoding="utf-8")
-            environment = {
-                "FORTIOS_SMTP_PASSWORD_FILE": str(bootstrap_secret),
-            }
-
-            notify.save_smtp_settings(
-                settings_path,
-                smtp_payload(),
-                password="",
-                env=environment,
-            )
-            config = notify.load_email_config(
-                environment,
-                settings=notification_settings(),
-                smtp_settings_path=settings_path,
-            )
-
-            self.assertEqual(config.smtp_password, "bootstrap-secret")
-            self.assertEqual(
-                stat.S_IMODE(notify.smtp_password_path(settings_path).stat().st_mode),
-                0o600,
-            )
-
-    def test_runtime_never_reads_settings_and_secret_from_different_writes(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "smtp-settings.json"
-            notify.save_smtp_settings(
-                settings_path,
-                smtp_payload(host="smtp-a.example"),
-                password="secret-a",
-            )
-            secret_read_started = threading.Event()
-            original_env_secret = notify._env_secret
-
-            def delayed_env_secret(
-                env: dict[str, str], key: str
-            ) -> tuple[str, str, str]:
-                if env.get("FORTIOS_SMTP_PASSWORD_FILE") == str(
-                    notify.smtp_password_path(settings_path)
-                ):
-                    secret_read_started.set()
-                    time.sleep(0.1)
-                return original_env_secret(env, key)
-
-            loaded: list[notify.EmailConfig] = []
-            with patch.object(notify, "_env_secret", delayed_env_secret):
-                reader = threading.Thread(
-                    target=lambda: loaded.append(
-                        notify.load_email_config(
-                            {},
-                            settings=notification_settings(),
-                            smtp_settings_path=settings_path,
-                        )
-                    )
-                )
-                reader.start()
-                self.assertTrue(secret_read_started.wait(timeout=1))
-                writer = threading.Thread(
-                    target=lambda: notify.save_smtp_settings(
-                        settings_path,
-                        smtp_payload(host="smtp-b.example"),
-                        password="secret-b",
-                    )
-                )
-                writer.start()
-                reader.join(timeout=2)
-                writer.join(timeout=2)
-
-            self.assertFalse(reader.is_alive())
-            self.assertFalse(writer.is_alive())
-            self.assertIn(
-                (loaded[0].smtp_host, loaded[0].smtp_password),
-                {
-                    ("smtp-a.example", "secret-a"),
-                    ("smtp-b.example", "secret-b"),
-                },
-            )
-
-    def test_failed_settings_write_rolls_back_secret_and_settings(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "smtp-settings.json"
-            notify.save_smtp_settings(
-                settings_path,
-                smtp_payload(host="smtp-old.example"),
-                password="old-secret",
-            )
-            original_write = notify._atomic_write_private
-
-            def fail_new_settings_write(path: Path, content: str, mode: int) -> None:
-                if path == settings_path and "smtp-new.example" in content:
-                    raise OSError("injected settings write failure")
-                original_write(path, content, mode)
-
-            with patch.object(
-                notify, "_atomic_write_private", side_effect=fail_new_settings_write
-            ), self.assertRaises(OSError):
-                notify.save_smtp_settings(
-                    settings_path,
-                    smtp_payload(host="smtp-new.example"),
-                    password="new-secret",
-                )
-
-            config = notify.load_email_config(
-                {},
-                settings=notification_settings(),
-                smtp_settings_path=settings_path,
-            )
-            self.assertEqual(config.smtp_host, "smtp-old.example")
-            self.assertEqual(config.smtp_password, "old-secret")
-            self.assertFalse(
-                any("transaction" in path.name for path in settings_path.parent.iterdir())
-            )
-
-    def test_load_recovers_transaction_interrupted_after_both_replacements(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "smtp-settings.json"
-            notify.save_smtp_settings(
-                settings_path,
-                smtp_payload(host="smtp-old.example"),
-                password="old-secret",
-            )
-            with notify.cross_process_lock(settings_path):
-                notify._begin_smtp_transaction_unlocked(settings_path)
-                notify._atomic_write_private(
-                    notify.smtp_password_path(settings_path), "new-secret", 0o600
-                )
-                notify._atomic_write_private(
-                    settings_path,
-                    json.dumps(
-                        smtp_payload(host="smtp-new.example"),
-                        indent=2,
-                        ensure_ascii=False,
-                    )
-                    + "\n",
-                    0o640,
-                )
-
-            config = notify.load_email_config(
-                {},
-                settings=notification_settings(),
-                smtp_settings_path=settings_path,
-            )
-            self.assertEqual(config.smtp_host, "smtp-old.example")
-            self.assertEqual(config.smtp_password, "old-secret")
-            self.assertFalse(
-                any("transaction" in path.name for path in settings_path.parent.iterdir())
-            )
-
-    def test_smtp_snapshot_keeps_settings_and_secret_from_one_generation(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            settings_path = Path(tmp) / "smtp-settings.json"
-            notify.save_smtp_settings(
-                settings_path,
-                smtp_payload(host="smtp-a.example"),
-                password="secret-a",
-            )
-            read_started = threading.Event()
-            original_env_secret = notify._env_secret
-
-            def delayed_env_secret(
-                env: dict[str, str], key: str
-            ) -> tuple[str, str, str]:
-                if env.get("FORTIOS_SMTP_PASSWORD_FILE") == str(
-                    notify.smtp_password_path(settings_path)
-                ):
-                    read_started.set()
-                    time.sleep(0.1)
-                return original_env_secret(env, key)
-
-            snapshots: list[tuple[notify.SmtpSettings, notify.EmailConfig]] = []
-            with patch.object(notify, "_env_secret", delayed_env_secret):
-                reader = threading.Thread(
-                    target=lambda: snapshots.append(
-                        notify.load_smtp_snapshot(
-                            {},
-                            settings=notification_settings(),
-                            smtp_settings_path=settings_path,
-                        )
-                    )
-                )
-                reader.start()
-                self.assertTrue(read_started.wait(timeout=1))
-                writer = threading.Thread(
-                    target=lambda: notify.save_smtp_settings(
-                        settings_path,
-                        smtp_payload(host="smtp-b.example"),
-                        password="secret-b",
-                    )
-                )
-                writer.start()
-                reader.join(timeout=2)
-                writer.join(timeout=2)
-
-            self.assertFalse(reader.is_alive())
-            self.assertFalse(writer.is_alive())
-            smtp, config = snapshots[0]
-            self.assertEqual(smtp.host, config.smtp_host)
-            self.assertIn(
-                (smtp.host, config.smtp_password),
-                {
-                    ("smtp-a.example", "secret-a"),
-                    ("smtp-b.example", "secret-b"),
-                },
-            )
 
 
 class SmtpDeliveryTests(unittest.TestCase):
@@ -658,7 +521,7 @@ class SmtpAdminApiTests(unittest.TestCase):
                 self.assertEqual(anonymous.exception.code, 401)
 
                 opener, csrf_token = authenticated_opener(base_url)
-                body = {**smtp_payload(), "password": "browser-secret-value"}
+                body = {"emailAppearance": smtp_payload()["emailAppearance"]}
                 without_csrf = urllib.request.Request(
                     f"{base_url}/api/cert/smtp",
                     data=json.dumps(body).encode(),
@@ -690,13 +553,15 @@ class SmtpAdminApiTests(unittest.TestCase):
                 ) as response:
                     notification_projection = json.load(response)
 
-            self.assertTrue(written["smtp"]["passwordConfigured"])
+            self.assertFalse(written["smtp"]["passwordConfigured"])
             self.assertEqual(written, loaded)
             self.assertEqual(
-                notification_projection["smtp"]["host"], "smtp.saved.example"
+                notification_projection["smtp"]["host"], ""
+            )
+            self.assertEqual(
+                written["smtp"]["emailAppearance"], smtp_payload()["emailAppearance"]
             )
             serialized = json.dumps(written)
-            self.assertNotIn("browser-secret-value", serialized)
             self.assertNotIn('"password"', serialized.lower())
 
     def test_test_endpoint_sends_without_touching_notification_state(self) -> None:
@@ -721,16 +586,15 @@ class SmtpAdminApiTests(unittest.TestCase):
                 "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
                 "FORTIOS_CERT_ADMIN_FILE": str(credentials),
                 "FORTIOS_TEST_DATA_DIR": str(data_dir),
+                "FORTIOS_SMTP_HOST": "127.0.0.1",
+                "FORTIOS_SMTP_PORT": str(smtp.server_address[1]),
+                "FORTIOS_SMTP_SECURITY": "none",
+                "FORTIOS_SMTP_ALLOW_INSECURE": "true",
+                "FORTIOS_SMTP_FROM": "fortiupgrade@example.com",
             }
             with running_server(environment) as base_url:
                 opener, csrf_token = authenticated_opener(base_url)
-                smtp_body = smtp_payload(
-                    host="127.0.0.1",
-                    port=smtp.server_address[1],
-                    security="none",
-                    allowInsecure=True,
-                    username="",
-                )
+                smtp_body = {"emailAppearance": smtp_payload()["emailAppearance"]}
                 save = urllib.request.Request(
                     f"{base_url}/api/cert/smtp",
                     data=json.dumps(smtp_body).encode(),

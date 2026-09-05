@@ -877,7 +877,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         try:
             fortios_notify.delete_smtp_password(SMTP_SETTINGS_PATH)
             response = self.smtp_settings_response()
-        except OSError as error:
+        except (ValueError, OSError) as error:
             self.write_json_response(
                 {"error": str(error)[:500]},
                 HTTPStatus.BAD_REQUEST,

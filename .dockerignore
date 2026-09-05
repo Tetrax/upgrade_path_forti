@@ -26,3 +26,11 @@ deploy/
 tests/
 *.lock
 data/notification-settings.json*
+data/smtp-password*
+data/smtp-settings.json*
+data/fortios-notify-history.json*
+data/fortios-health.json*
+data/fortios-data.generated.json*
+data/advisory-images/
+data/*.log
+.hermes/
