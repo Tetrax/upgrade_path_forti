@@ -153,6 +153,37 @@ class CertificateHelperProtocolTests(unittest.TestCase):
         ), self.assertRaises(protocol.HelperConflictError):
             protocol.setup_via_helper(socket_path, "admin", "second-password")
 
+    def test_rotation_client_sends_only_account_fields_and_returns_revision(self) -> None:
+        protocol = importlib.import_module("cert_helper_protocol")
+        socket_path = Path("/run/fortios-cert-helper/helper.sock")
+        with mock.patch.object(
+            protocol,
+            "request_helper",
+            return_value={"ok": True, "credentialsRevision": "b" * 64},
+        ) as request:
+            revision = protocol.rotate_via_helper(
+                socket_path,
+                "admin",
+                "current-password",
+                "replacement-password",
+                "replacement-password",
+                credentials_revision="a" * 64,
+            )
+
+        self.assertEqual(revision, "b" * 64)
+        self.assertEqual(
+            request.call_args.args[1],
+            {
+                "version": protocol.PROTOCOL_VERSION,
+                "action": "rotate",
+                "username": "admin",
+                "currentPassword": "current-password",
+                "newPassword": "replacement-password",
+                "confirmation": "replacement-password",
+                "credentialsRevision": "a" * 64,
+            },
+        )
+
     def test_install_waits_for_a_definitive_response_after_sending(self) -> None:
         protocol = importlib.import_module("cert_helper_protocol")
         with tempfile.TemporaryDirectory() as tmp:
@@ -239,6 +270,235 @@ class CertificateHelperServiceTests(unittest.TestCase):
                 {path.name: path.read_bytes() for path in active.iterdir()},
                 before,
             )
+
+    def test_authorized_rotation_replaces_credentials_without_touching_active(self) -> None:
+        cert_admin = importlib.import_module("cert_admin")
+        helper = importlib.import_module("cert_helper")
+        protocol = importlib.import_module("cert_helper_protocol")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "admin" / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "current-password"),
+            )
+            active = root / "active"
+            active.mkdir()
+            (active / "fullchain.pem").write_bytes(b"existing-certificate")
+            (active / "privkey.pem").write_bytes(b"existing-private-key")
+            before = {path.name: path.read_bytes() for path in active.iterdir()}
+            processor = helper.CertificateInstallProcessor(
+                credentials_file=credentials,
+                hostname=HOSTNAME,
+                output_dir=active,
+                allowed_uid=1000,
+                allowed_gid=1000,
+            )
+            original_revision = cert_admin.credentials_revision(credentials)
+
+            response = processor.process(
+                {
+                    "version": protocol.PROTOCOL_VERSION,
+                    "action": "rotate",
+                    "username": "admin",
+                    "currentPassword": "current-password",
+                    "newPassword": "replacement-password",
+                    "confirmation": "replacement-password",
+                    "credentialsRevision": original_revision,
+                },
+                peer_uid=1000,
+                peer_gid=1000,
+            )
+
+            self.assertNotEqual(response["credentialsRevision"], original_revision)
+            self.assertFalse(
+                cert_admin.verify_credentials(credentials, "admin", "current-password")
+            )
+            self.assertTrue(
+                cert_admin.verify_credentials(credentials, "admin", "replacement-password")
+            )
+            self.assertEqual(credentials.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in active.iterdir()},
+                before,
+            )
+
+    def test_rotation_rejects_an_unauthorized_peer_without_writing(self) -> None:
+        cert_admin = importlib.import_module("cert_admin")
+        helper = importlib.import_module("cert_helper")
+        protocol = importlib.import_module("cert_helper_protocol")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "current-password"),
+            )
+            original = credentials.read_bytes()
+            processor = helper.CertificateInstallProcessor(
+                credentials_file=credentials,
+                hostname=HOSTNAME,
+                output_dir=root / "active",
+                allowed_uid=1000,
+                allowed_gid=1000,
+            )
+            message = {
+                "version": protocol.PROTOCOL_VERSION,
+                "action": "rotate",
+                "username": "admin",
+                "currentPassword": "current-password",
+                "newPassword": "replacement-password",
+                "confirmation": "replacement-password",
+                "credentialsRevision": cert_admin.credentials_revision(credentials),
+            }
+
+            with self.assertRaises(helper.HelperAuthorizationError):
+                processor.process(message, peer_uid=1001, peer_gid=1000)
+
+            self.assertEqual(credentials.read_bytes(), original)
+
+    def test_rotation_rejects_a_stale_revision_without_overwriting_reset(self) -> None:
+        cert_admin = importlib.import_module("cert_admin")
+        helper = importlib.import_module("cert_helper")
+        protocol = importlib.import_module("cert_helper_protocol")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "current-password"),
+            )
+            stale_revision = cert_admin.credentials_revision(credentials)
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "cli-reset-password"),
+            )
+            reset_credentials = credentials.read_bytes()
+            processor = helper.CertificateInstallProcessor(
+                credentials_file=credentials,
+                hostname=HOSTNAME,
+                output_dir=root / "active",
+                allowed_uid=1000,
+                allowed_gid=1000,
+            )
+
+            with self.assertRaises(cert_admin.CredentialRevisionError):
+                processor.process(
+                    {
+                        "version": protocol.PROTOCOL_VERSION,
+                        "action": "rotate",
+                        "username": "admin",
+                        "currentPassword": "current-password",
+                        "newPassword": "replacement-password",
+                        "confirmation": "replacement-password",
+                        "credentialsRevision": stale_revision,
+                    },
+                    peer_uid=1000,
+                    peer_gid=1000,
+                )
+
+            self.assertEqual(credentials.read_bytes(), reset_credentials)
+            self.assertTrue(
+                cert_admin.verify_credentials(credentials, "admin", "cli-reset-password")
+            )
+
+    def test_rotation_failure_is_atomic_and_preserves_active(self) -> None:
+        cert_admin = importlib.import_module("cert_admin")
+        helper = importlib.import_module("cert_helper")
+        protocol = importlib.import_module("cert_helper_protocol")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "current-password"),
+            )
+            original = credentials.read_bytes()
+            active = root / "active"
+            active.mkdir()
+            (active / "fullchain.pem").write_bytes(b"existing-certificate")
+            before = {path.name: path.read_bytes() for path in active.iterdir()}
+            processor = helper.CertificateInstallProcessor(
+                credentials_file=credentials,
+                hostname=HOSTNAME,
+                output_dir=active,
+                allowed_uid=1000,
+                allowed_gid=1000,
+            )
+
+            with (
+                mock.patch.object(
+                    cert_admin.os,
+                    "replace",
+                    side_effect=OSError("failed"),
+                ),
+                self.assertRaises(OSError),
+            ):
+                processor.process(
+                    {
+                        "version": protocol.PROTOCOL_VERSION,
+                        "action": "rotate",
+                        "username": "admin",
+                        "currentPassword": "current-password",
+                        "newPassword": "replacement-password",
+                        "confirmation": "replacement-password",
+                        "credentialsRevision": cert_admin.credentials_revision(credentials),
+                    },
+                    peer_uid=1000,
+                    peer_gid=1000,
+                )
+
+            self.assertEqual(credentials.read_bytes(), original)
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in active.iterdir()},
+                before,
+            )
+
+    def test_rotation_socket_errors_never_echo_passwords(self) -> None:
+        cert_admin = importlib.import_module("cert_admin")
+        helper = importlib.import_module("cert_helper")
+        protocol = importlib.import_module("cert_helper_protocol")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "real-current-password"),
+            )
+            original = credentials.read_bytes()
+            socket_path = root / "run" / "helper.sock"
+            socket_path.parent.mkdir()
+            processor = helper.CertificateInstallProcessor(
+                credentials_file=credentials,
+                hostname=HOSTNAME,
+                output_dir=root / "active",
+                allowed_uid=os.getuid(),
+                allowed_gid=os.getgid(),
+            )
+            server = helper.CertificateHelperServer(socket_path, processor)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                with self.assertRaises(protocol.HelperAuthenticationError) as raised:
+                    protocol.rotate_via_helper(
+                        socket_path,
+                        "admin",
+                        "submitted-wrong-password",
+                        "submitted-new-password",
+                        "submitted-new-password",
+                        credentials_revision=cert_admin.credentials_revision(credentials),
+                    )
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=3)
+
+            message = str(raised.exception)
+            self.assertEqual(message, "Mot de passe actuel incorrect.")
+            self.assertNotIn("submitted-wrong-password", message)
+            self.assertNotIn("submitted-new-password", message)
+            self.assertNotIn("real-current-password", message)
+            self.assertEqual(credentials.read_bytes(), original)
 
     def test_server_makes_runtime_directory_searchable_by_the_allowed_group(self) -> None:
         cert_admin = importlib.import_module("cert_admin")

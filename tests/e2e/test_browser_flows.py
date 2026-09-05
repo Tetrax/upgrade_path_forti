@@ -10,6 +10,8 @@ import secrets
 
 from playwright.sync_api import expect
 
+from scripts import cert_admin
+
 
 def select_path(page, *, current: str, target: str, model: str = "FGT60F") -> None:
     page.select_option("#productSelect", "fortigate-fortios")
@@ -36,13 +38,183 @@ def test_certificate_first_run_creates_the_admin_account(page, fortios_server):
     expect(page.locator("#setup-username")).to_have_value("admin")
     page.fill("#setup-password", "browser-test-password")
     page.fill("#setup-password-confirmation", "browser-test-password")
+    page.fill("#setup-recovery-email", "owner@example.test")
     page.click("#setup-button")
 
     expect(page.locator("#admin-view")).to_be_visible()
     expect(page.locator("#session-username")).to_have_text("admin")
+    page.click("#account-tab")
+    expect(page.locator("#account-recovery-email")).to_have_text("o***r@example.test")
+    expect(page.locator("#account-recovery-status")).to_have_text("En attente de vérification")
     assert fortios_server.credentials_path.is_file()
     assert "browser-test-password" not in fortios_server.credentials_path.read_text()
     assert not fortios_server.certificate_output_dir.exists()
+
+
+def test_admin_can_rotate_password_and_must_reauthenticate(page, fortios_server):
+    login_cert_admin(page, fortios_server)
+    new_password = secrets.token_urlsafe(24)
+
+    page.click("#account-tab")
+    expect(page.get_by_role("heading", name="Compte & sécurité", exact=True)).to_be_visible()
+    page.click("#change-password-button")
+    for selector in (
+        "#current-admin-password",
+        "#new-admin-password",
+        "#confirm-admin-password",
+    ):
+        expect(page.locator(selector)).to_have_attribute("type", "password")
+
+    page.fill("#current-admin-password", "incorrect-current-password")
+    page.fill("#new-admin-password", new_password)
+    page.fill("#confirm-admin-password", new_password)
+    page.click("#submit-password-change-button")
+    expect(page.locator("#password-change-message")).to_have_text(
+        "Mot de passe actuel incorrect."
+    )
+    expect(page.locator("#admin-view")).to_be_visible()
+
+    page.fill("#current-admin-password", fortios_server.admin_password)
+    page.fill("#new-admin-password", new_password)
+    page.fill("#confirm-admin-password", new_password)
+    page.click("#submit-password-change-button")
+
+    expect(page.locator("#login-view")).to_be_visible()
+    expect(page.locator("#admin-view")).to_be_hidden()
+    expect(page.locator("#login-message")).to_have_text(
+        "Mot de passe modifié. Pour votre sécurité, toutes les sessions "
+        "administrateur ont été fermées. Reconnectez-vous avec votre nouveau mot de passe."
+    )
+
+    page.fill("#username", fortios_server.admin_username)
+    page.fill("#password", fortios_server.admin_password)
+    page.click("#login-button")
+    expect(page.locator("#login-message")).to_have_text(
+        "Identifiant ou mot de passe invalide."
+    )
+    expect(page.locator("#login-view")).to_be_visible()
+
+    page.fill("#password", new_password)
+    page.click("#login-button")
+    expect(page.locator("#admin-view")).to_be_visible()
+    page.click("#notifications-tab")
+    expect(page.get_by_role("heading", name="Notifications de sécurité", exact=True)).to_be_visible()
+    expect(page.get_by_role("heading", name="Configuration SMTP", exact=True)).to_be_visible()
+
+
+def test_account_security_summary_and_global_session_revoke(browser, fortios_server):
+    first = browser.new_page()
+    second = browser.new_page()
+    login_cert_admin(first, fortios_server)
+    login_cert_admin(second, fortios_server)
+
+    first.reload()
+    first.click("#account-tab")
+    expect(first.get_by_role("heading", name="Compte & sécurité", exact=True)).to_be_visible()
+    expect(first.locator("#account-username")).to_have_text("admin")
+    expect(first.locator("#account-recovery-email")).to_have_text("Non configurée")
+    expect(first.locator("#account-session-count")).to_have_text("2 sessions actives")
+    expect(first.locator("#account-password-changed-at")).not_to_have_text("—")
+
+    first.click("#revoke-all-sessions-button")
+    expect(first.locator("#login-view")).to_be_visible()
+    second.reload()
+    expect(second.locator("#login-view")).to_be_visible()
+
+
+def test_admin_can_set_a_pending_recovery_email_without_smtp(page, fortios_server):
+    login_cert_admin(page, fortios_server)
+    page.click("#account-tab")
+    page.click("#change-recovery-email-button")
+
+    expect(page.locator("#recovery-email-form")).to_be_visible()
+    page.fill("#recovery-email", "owner@example.test")
+    page.click("#save-recovery-email-button")
+
+    expect(page.locator("#account-recovery-email")).to_have_text("o***r@example.test")
+    expect(page.locator("#account-recovery-status")).to_have_text("En attente de vérification")
+    expect(page.locator("#recovery-email-message")).to_contain_text("SMTP")
+
+
+def test_forgot_password_view_always_shows_the_generic_result(page, fortios_server):
+    page.goto(f"{fortios_server.base_url}/cert/")
+    page.click("#forgot-password-button")
+    expect(page.locator("#forgot-password-form")).to_be_visible()
+
+    page.fill("#forgot-username", "admin")
+    page.click("#send-reset-link-button")
+
+    expect(page.locator("#forgot-password-message")).to_have_text(
+        "Si ce compte peut être récupéré, un email sera envoyé."
+    )
+    expect(page.locator("#login-view")).to_be_visible()
+
+
+def test_verification_link_promotes_the_pending_recovery_email(page, fortios_server):
+    revision = cert_admin.credentials_revision(fortios_server.credentials_path)
+    cert_admin.set_recovery_email(
+        fortios_server.credentials_path,
+        "owner@example.test",
+        expected_revision=revision,
+    )
+    token = cert_admin.issue_verification_token(
+        fortios_server.credentials_path,
+        expected_revision=revision,
+    )
+
+    page.goto(f"{fortios_server.base_url}/cert/verify-email?token={token}")
+    expect(page.locator("#email-verification-view")).to_be_visible()
+    page.click("#verify-recovery-email-button")
+    expect(page.locator("#email-verification-message")).to_have_text(
+        "Adresse de récupération vérifiée."
+    )
+
+    login_cert_admin(page, fortios_server)
+    page.click("#account-tab")
+    expect(page.locator("#account-recovery-email")).to_have_text("o***r@example.test")
+    expect(page.locator("#account-recovery-status")).to_have_text("Vérifiée ✓")
+
+
+def test_password_reset_link_rotates_credentials_and_revokes_sessions(browser, fortios_server):
+    authenticated_page = browser.new_page()
+    reset_page = browser.new_page()
+    login_cert_admin(authenticated_page, fortios_server)
+    revision = cert_admin.credentials_revision(fortios_server.credentials_path)
+    cert_admin.set_recovery_email(
+        fortios_server.credentials_path,
+        "owner@example.test",
+        expected_revision=revision,
+    )
+    verification_token = cert_admin.issue_verification_token(
+        fortios_server.credentials_path,
+        expected_revision=revision,
+    )
+    cert_admin.consume_verification_token(
+        fortios_server.credentials_path,
+        verification_token,
+        expected_revision=revision,
+    )
+    reset_token = cert_admin.issue_password_reset_token(
+        fortios_server.credentials_path,
+        expected_revision=revision,
+    )
+    new_password = secrets.token_urlsafe(24)
+
+    reset_page.goto(f"{fortios_server.base_url}/cert/reset-password?token={reset_token}")
+    expect(reset_page.locator("#password-reset-view")).to_be_visible()
+    reset_page.fill("#reset-password", new_password)
+    reset_page.fill("#reset-password-confirmation", new_password)
+    reset_page.click("#reset-password-button")
+
+    expect(reset_page.locator("#login-view")).to_be_visible()
+    expect(reset_page.locator("#login-message")).to_contain_text("réinitialisé")
+    authenticated_page.reload()
+    expect(authenticated_page.locator("#login-view")).to_be_visible()
+
+    reset_page.fill("#username", fortios_server.admin_username)
+    reset_page.fill("#password", new_password)
+    reset_page.click("#login-button")
+    expect(reset_page.locator("#admin-view")).to_be_visible()
 
 
 # 2. Select product/model/version pair ---------------------------------------------------

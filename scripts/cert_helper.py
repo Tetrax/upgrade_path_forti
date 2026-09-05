@@ -80,6 +80,7 @@ class CertificateInstallProcessor:
         hostname: str,
         output_dir: Path,
         credentials_file: Path,
+        admin_state_file: Path | None = None,
         allowed_uid: int,
         allowed_gid: int,
         reload_callback: Callable[[], None] | None = None,
@@ -91,6 +92,7 @@ class CertificateInstallProcessor:
         self.hostname = hostname
         self.output_dir = output_dir
         self.credentials_file = credentials_file
+        self.admin_state_file = admin_state_file
         cert_admin.ensure_credential_lock(credentials_file)
         self.allowed_uid = allowed_uid
         self.allowed_gid = allowed_gid
@@ -150,18 +152,155 @@ class CertificateInstallProcessor:
         if peer_uid != self.allowed_uid or peer_gid != self.allowed_gid:
             raise HelperAuthorizationError("Processus pair non autorisé.")
         if action == "setup":
-            if set(message) != {"version", "action", "username", "password"}:
+            allowed = {"version", "action", "username", "password"}
+            if set(message) not in (allowed, allowed | {"recoveryEmail"}):
                 raise ProtocolError("Requête de configuration invalide.")
             username = message.get("username")
             password = message.get("password")
+            recovery_email = message.get("recoveryEmail")
             if not isinstance(username, str) or not isinstance(password, str):
                 raise ProtocolError("Champs de configuration invalides.")
+            if recovery_email is not None and not isinstance(recovery_email, str):
+                raise ProtocolError("Adresse email de récupération invalide.")
             revision = cert_admin.create_initial_credentials(
                 self.credentials_file,
                 username,
                 password,
+                recovery_email=recovery_email,
+                state_file=self.admin_state_file,
             )
             return {"ok": True, "credentialsRevision": revision}
+        if action == "rotate":
+            required = {
+                "version",
+                "action",
+                "username",
+                "currentPassword",
+                "newPassword",
+                "confirmation",
+                "credentialsRevision",
+            }
+            if set(message) != required:
+                raise ProtocolError("Requête de rotation invalide.")
+            fields = (
+                message.get("username"),
+                message.get("currentPassword"),
+                message.get("newPassword"),
+                message.get("confirmation"),
+                message.get("credentialsRevision"),
+            )
+            if any(not isinstance(value, str) for value in fields):
+                raise ProtocolError("Champs de rotation invalides.")
+            revision = cert_admin.rotate_credentials(
+                self.credentials_file,
+                str(fields[0]),
+                str(fields[1]),
+                str(fields[2]),
+                str(fields[3]),
+                expected_revision=str(fields[4]),
+                state_file=self.admin_state_file,
+            )
+            return {"ok": True, "credentialsRevision": revision}
+        if action == "set_recovery_email":
+            required = {"version", "action", "email", "credentialsRevision"}
+            if set(message) != required or not isinstance(message.get("email"), str):
+                raise ProtocolError("Requête de récupération invalide.")
+            revision = message.get("credentialsRevision")
+            if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision):
+                raise ProtocolError("Révision des identifiants invalide.")
+            cert_admin.set_recovery_email(
+                self.credentials_file,
+                message["email"],
+                self.admin_state_file,
+                expected_revision=revision,
+            )
+            return {"ok": True}
+        if action in {"issue_verification", "issue_reset"}:
+            required = {
+                "version",
+                "action",
+                "credentialsRevision",
+                "recoveryEmail",
+            }
+            if set(message) != required:
+                raise ProtocolError("Requête d'émission de token invalide.")
+            revision = message.get("credentialsRevision")
+            if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision):
+                raise ProtocolError("Révision des identifiants invalide.")
+            recovery_email = message.get("recoveryEmail")
+            if not isinstance(recovery_email, str):
+                raise ProtocolError("Adresse email de récupération invalide.")
+            if action == "issue_verification":
+                token = cert_admin.issue_verification_token(
+                    self.credentials_file,
+                    state_file=self.admin_state_file,
+                    expected_revision=revision,
+                    expected_recovery_email=recovery_email,
+                )
+                purpose = cert_admin.RECOVERY_PURPOSE_VERIFY
+            else:
+                token = cert_admin.issue_password_reset_token(
+                    self.credentials_file,
+                    state_file=self.admin_state_file,
+                    expected_revision=revision,
+                    expected_recovery_email=recovery_email,
+                )
+                purpose = cert_admin.RECOVERY_PURPOSE_RESET
+            state = cert_admin.load_admin_state(
+                self.credentials_file,
+                self.admin_state_file,
+            )
+            record = next(record for record in state["tokens"] if record["purpose"] == purpose)
+            return {"ok": True, "token": token, "expiresAt": record["expiresAt"]}
+        if action == "verify_recovery":
+            required = {"version", "action", "token", "credentialsRevision"}
+            if set(message) != required:
+                raise ProtocolError("Requête de vérification invalide.")
+            token = message.get("token")
+            revision = message.get("credentialsRevision")
+            if (
+                not isinstance(token, str)
+                or not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", token)
+                or not isinstance(revision, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", revision)
+            ):
+                raise ProtocolError("Requête de vérification invalide.")
+            cert_admin.consume_verification_token(
+                self.credentials_file,
+                token,
+                state_file=self.admin_state_file,
+                expected_revision=revision,
+            )
+            return {"ok": True, "verified": True}
+        if action == "reset_password":
+            required = {
+                "version",
+                "action",
+                "token",
+                "newPassword",
+                "confirmation",
+                "credentialsRevision",
+            }
+            if set(message) != required or not all(
+                isinstance(message.get(name), str)
+                for name in ("token", "newPassword", "confirmation", "credentialsRevision")
+            ):
+                raise ProtocolError("Requête de réinitialisation invalide.")
+            token = message["token"]
+            revision = message["credentialsRevision"]
+            if not re.fullmatch(r"[A-Za-z0-9_-]{43,128}", token) or not re.fullmatch(
+                r"[0-9a-f]{64}", revision
+            ):
+                raise ProtocolError("Requête de réinitialisation invalide.")
+            new_revision = cert_admin.reset_credentials_with_token(
+                self.credentials_file,
+                token,
+                message["newPassword"],
+                message["confirmation"],
+                state_file=self.admin_state_file,
+                expected_revision=revision,
+            )
+            return {"ok": True, "credentialsRevision": new_revision}
         if action != "install" or set(message) != {
             "version",
             "action",
@@ -203,11 +342,34 @@ class _CertificateRequestHandler(socketserver.BaseRequestHandler):
                 "error": str(error)[:1000],
                 "errorCode": "credentials_exists",
             }
+        except cert_admin.CredentialAuthenticationError as error:
+            response = {
+                "ok": False,
+                "error": str(error)[:1000],
+                "errorCode": "authentication_failed",
+            }
+        except cert_admin.CredentialValidationError as error:
+            response = {
+                "ok": False,
+                "error": str(error)[:1000],
+                "errorCode": "validation_failed",
+            }
+        except cert_admin.CredentialRevisionError as error:
+            response = {
+                "ok": False,
+                "error": str(error)[:1000],
+                "errorCode": "credentials_changed",
+            }
+        except cert_admin.CredentialError as error:
+            response = {
+                "ok": False,
+                "error": str(error)[:1000],
+                "errorCode": "credentials_invalid",
+            }
         except (
             ProtocolError,
             HelperAuthorizationError,
             CertificateReloadError,
-            cert_admin.CredentialError,
             certctl.CertificateError,
             ValueError,
             OSError,
@@ -323,6 +485,11 @@ def main(argv: list[str]) -> int:
             output_dir=Path(os.environ.get("FORTIOS_CERT_OUTPUT_DIR", str(DEFAULT_OUTPUT))),
             credentials_file=Path(
                 os.environ.get("FORTIOS_CERT_ADMIN_FILE", str(DEFAULT_CREDENTIALS)),
+            ),
+            admin_state_file=(
+                Path(os.environ["FORTIOS_CERT_ADMIN_STATE_FILE"])
+                if os.environ.get("FORTIOS_CERT_ADMIN_STATE_FILE")
+                else None
             ),
             allowed_uid=uid,
             allowed_gid=gid,

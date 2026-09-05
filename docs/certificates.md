@@ -69,7 +69,10 @@ Procédure générique :
 6. ouvrir `/cert` pour créer le premier compte : le serveur web transmet cette
    unique opération au helper par le socket privé, sans obtenir d'accès en
    écriture à `active/`. `scripts/cert_admin.py setup` avec `PGID` configuré
-   reste le mécanisme CLI de secours.
+   reste le mécanisme CLI de secours ;
+7. les rotations de mot de passe demandées par un administrateur authentifié
+   passent par le même helper. Celui-ci revérifie l'UID/GID du pair, la révision
+   des credentials et l'ancien mot de passe sous verrou exclusif avant l'écriture.
 
 Conserver la configuration Nginx précédente et son certificat comme rollback
 jusqu'au smoke test externe complet. Le mode à volumes Docker nommés reste en
@@ -93,10 +96,13 @@ python3 scripts/fortios_server.py --host 127.0.0.1 --port 8000
 Ouvrir `http://127.0.0.1:8000/cert/`. Si le fichier d'identifiants n'existe pas,
 la page affiche **Première configuration** et crée le compte administrateur sans
 mot de passe par défaut. Le mot de passe doit contenir entre 12 et 1 024 octets
-UTF-8. Un fichier présent mais invalide est traité comme une erreur
-administrative et ne réactive jamais ce parcours anonyme.
+UTF-8. Une adresse email de récupération peut être fournie à cette étape ; elle
+reste en attente et inutilisable tant que son lien de vérification n'a pas été
+consommé. L'absence de SMTP ne bloque jamais ce First Run. Un fichier
+d'identifiants présent mais invalide est traité comme une erreur administrative
+et ne réactive jamais ce parcours anonyme.
 
-Une fois connecté, la page propose deux actions distinctes :
+Une fois connecté, la section **Certificats** propose deux actions distinctes :
 
 1. **Valider** : utilise un répertoire temporaire, affiche uniquement les
    métadonnées, ne modifie pas la paire active et délivre un ticket à usage
@@ -104,6 +110,43 @@ Une fois connecté, la page propose deux actions distinctes :
 2. **Activer** : réexécute toutes les validations de `certctl.py`, puis remplace
    atomiquement `certificates/local/active`. L'API refuse l'activation sans ce
    ticket de prévalidation ou si les fichiers ont changé.
+
+La section **Compte & sécurité** affiche l'identité de l'administrateur unique,
+l'adresse de récupération masquée, son statut, la date de modification du mot
+de passe et le nombre de sessions actives. Elle permet de :
+
+- changer le mot de passe ; `POST /api/cert/password` exige l'Origin exact, le
+  jeton CSRF, l'ancien mot de passe et une confirmation. Le nouveau mot de passe
+  respecte les bornes de 12 à 1 024 octets UTF-8 et diffère de l'ancien ;
+- enregistrer une nouvelle adresse de récupération, qui reste en attente tant
+  que le lien à usage unique envoyé par le SMTP existant n'a pas été validé ;
+- renvoyer ce lien de vérification ;
+- révoquer toutes les sessions, y compris la session courante.
+
+Les credentials sont remplacés atomiquement sous verrou avec un nouveau sel
+scrypt. Une révision concurrente, notamment un `reset` CLI, est refusée sans
+écrasement. Après changement ou réinitialisation, la nouvelle révision invalide
+tous les tokens de récupération résiduels et toutes les sessions.
+
+Le lien **Mot de passe oublié ?** est public, mais sa réponse reste identique que
+le compte, une adresse vérifiée ou SMTP soient disponibles ou non. Si les trois
+conditions sont réunies, le moteur SMTP autoritatif envoie en arrière-plan un
+lien de réinitialisation de 15 minutes. Les liens de vérification expirent après
+30 minutes. Les tokens sont générés aléatoirement, stockés uniquement sous forme
+de condensat, liés à la révision des credentials et consommables une seule fois.
+Les endpoints publics conservent le contrôle d'Origin, une taille de requête
+bornée et des limites par client et globales.
+
+L'état privé associé est stocké séparément dans `admin-state.json`, à côté de
+`credentials.json`, avec les mêmes verrouillage, écriture atomique, permissions
+et frontière helper. Une installation existante sans ce fichier continue de se
+connecter normalement ; la récupération reste simplement indisponible jusqu'à
+la configuration d'une adresse. Un état de récupération illisible désactive la
+récupération sans bloquer une rotation authentifiée. L'ancien binaire ignore le
+sidecar lors d'un rollback et le format des credentials reste compatible.
+`active/`, les certificats, SMTP et l'état des notifications ne sont pas
+modifiés par ces opérations. `scripts/cert_admin.py reset` reste le mécanisme
+break-glass ultime lorsqu'aucune récupération vérifiée n'est utilisable.
 
 Le mode HTTP est refusé sans `FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST=1` et reste
 inaccessible à un client non-loopback. Ces deux drapeaux sont réservés à ce test

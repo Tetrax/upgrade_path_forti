@@ -29,24 +29,51 @@ import fortios_notify
 from cert_admin import (
     DEFAULT_CREDENTIALS,
     MAX_PASSWORD_LENGTH,
+    AdminStateError,
+    CredentialAuthenticationError,
     CredentialError,
     CredentialExistsError,
+    CredentialRevisionError,
+    CredentialValidationError,
+    RecoveryTokenError,
+    admin_account_projection,
+    admin_state_path,
     authenticate_credentials,
+    consume_verification_token,
     create_initial_credentials,
     credential_lock,
     credentials_revision,
     ensure_credential_lock,
+    issue_password_reset_token,
+    issue_verification_token,
+    load_admin_state,
     load_credentials,
+    load_credentials_with_revision,
+    reset_credentials_with_token,
+    rotate_credentials,
+    set_recovery_email,
 )
 from cert_helper_protocol import (
+    HelperAuthenticationError,
     HelperConflictError,
+    HelperCredentialError,
     HelperError,
+    HelperRevisionError,
+    HelperValidationError,
+    ProtocolError,
     install_via_helper,
+    issue_reset_via_helper,
+    issue_verification_via_helper,
+    reset_via_helper,
+    rotate_via_helper,
+    set_recovery_email_via_helper,
     setup_via_helper,
+    verify_recovery_email_via_helper,
 )
 from cert_web import (
     ActionRateLimiter,
     AdminSession,
+    AnonymousRateLimiter,
     EmailPreviewStore,
     LoginRateLimiter,
     SessionStore,
@@ -171,6 +198,8 @@ OFFICIAL_PATH_MAX_CONCURRENCY = min(
 )
 OFFICIAL_PATH_SEMAPHORE = threading.BoundedSemaphore(OFFICIAL_PATH_MAX_CONCURRENCY)
 INTERNAL_ERROR_MESSAGE = "Erreur interne du serveur."
+RECOVERY_GENERIC_MESSAGE = "Si ce compte peut être récupéré, un email sera envoyé."
+RECOVERY_INVALID_MESSAGE = "Lien de récupération invalide ou expiré."
 OFFICIAL_PATH_BUSY_MESSAGE = "Trop de requêtes Fortinet en cours."
 # Only these two directories are anything the UI actually needs served over HTTP — ROOT is the
 # whole repo checkout, which also holds scripts/, deploy/, docs/ and .git/. Defined next to ROOT
@@ -485,14 +514,20 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             ipaddress.IPv4Network | ipaddress.IPv6Network, ...
         ] = (),
         cert_admin_file: Path = DEFAULT_CREDENTIALS,
+        cert_admin_state_file: Path | None = None,
         cert_sessions: SessionStore | None = None,
         cert_hostname: str = "",
         cert_output_dir: Path = Path("certificates/active"),
         cert_direct_install: bool = False,
         cert_helper_socket: Path | None = None,
         cert_login_limiter: LoginRateLimiter | None = None,
+        cert_password_limiter: ActionRateLimiter | None = None,
         cert_test_email_limiter: ActionRateLimiter | None = None,
         cert_preview_limiter: ActionRateLimiter | None = None,
+        cert_recovery_limiter: AnonymousRateLimiter | None = None,
+        cert_verify_limiter: AnonymousRateLimiter | None = None,
+        cert_reset_limiter: AnonymousRateLimiter | None = None,
+        cert_recovery_email_limiter: ActionRateLimiter | None = None,
         cert_validation_tickets: ValidationTicketStore | None = None,
         email_previews: EmailPreviewStore | None = None,
         **kwargs: Any,
@@ -502,17 +537,26 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.allow_insecure_localhost = allow_insecure_localhost
         self.cert_trusted_proxy_networks = cert_trusted_proxy_networks
         self.cert_admin_file = cert_admin_file
+        self.cert_admin_state_file = cert_admin_state_file
         self.cert_sessions = cert_sessions or SessionStore()
         self.cert_hostname = cert_hostname
         self.cert_output_dir = cert_output_dir
         self.cert_direct_install = cert_direct_install
         self.cert_helper_socket = cert_helper_socket
         self.cert_login_limiter = cert_login_limiter or LoginRateLimiter()
+        self.cert_password_limiter = cert_password_limiter or ActionRateLimiter()
         self.cert_test_email_limiter = (
             cert_test_email_limiter or ActionRateLimiter()
         )
         self.cert_preview_limiter = cert_preview_limiter or ActionRateLimiter(
             max_actions=30
+        )
+        self.cert_recovery_limiter = cert_recovery_limiter or AnonymousRateLimiter()
+        self.cert_verify_limiter = cert_verify_limiter or AnonymousRateLimiter()
+        self.cert_reset_limiter = cert_reset_limiter or AnonymousRateLimiter()
+        self.cert_recovery_email_limiter = (
+            cert_recovery_email_limiter
+            or ActionRateLimiter(max_actions=3, window_seconds=15 * 60)
         )
         self.cert_validation_tickets = (
             cert_validation_tickets or ValidationTicketStore()
@@ -611,6 +655,12 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
             return
+        if url_path in ("/cert/verify-email", "/cert/reset-password"):
+            if not self.certificate_ui_available():
+                self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
+                return
+            self.serve_cert_spa()
+            return
         if (
             url_path in ("/cert", "/app/cert")
             or url_path.startswith(("/cert/", "/app/cert/"))
@@ -618,6 +668,18 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
             return
         super().do_GET()
+
+    def serve_cert_spa(self) -> None:
+        try:
+            body = (ALLOWED_STATIC_DIR_CERT / "index.html").read_bytes()
+        except OSError:
+            self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def authenticated_cert_session(self) -> AdminSession | None:
         session_id = self.cert_session_id()
@@ -654,8 +716,20 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             return
         try:
             with credential_lock(self.cert_admin_file, exclusive=False):
-                load_credentials(self.cert_admin_file)
+                credentials, _ = load_credentials_with_revision(self.cert_admin_file)
                 session = self.authenticated_cert_session()
+            try:
+                state = load_admin_state(
+                    self.cert_admin_file,
+                    self.cert_admin_state_file,
+                )
+            except AdminStateError:
+                state = None
+            account = admin_account_projection(
+                credentials,
+                state,
+                session_count=self.cert_sessions.count(),
+            )
         except CredentialError as error:
             self.write_json_response(
                 {
@@ -677,7 +751,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.write_json_response(
             {
                 "authenticated": True,
-                "username": session.username,
+                **account,
                 "csrfToken": session.csrf_token,
                 "hostname": self.cert_hostname,
                 "canInstall": self.cert_direct_install,
@@ -1083,19 +1157,34 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         return True  # neither header present — a same-origin browser navigation, not fetch()
 
     def do_POST(self) -> None:
-        if self.path.startswith("/api/cert/"):
+        url_path = urllib.parse.urlsplit(self.path).path
+        if url_path.startswith("/api/cert/"):
             if not self.certificate_ui_available():
                 self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
                 return
             if not self.is_safe_cert_origin():
                 self.send_error(HTTPStatus.FORBIDDEN, "Origin invalide")
                 return
-            if self.path == "/api/cert/login":
+            if url_path == "/api/cert/login":
                 self.handle_cert_login()
-            elif self.path == "/api/cert/setup":
+            elif url_path == "/api/cert/setup":
                 self.handle_cert_setup()
-            elif self.path == "/api/cert/logout":
+            elif url_path == "/api/cert/forgot-password":
+                self.handle_cert_forgot_password()
+            elif url_path == "/api/cert/verify-email":
+                self.handle_cert_verify_email()
+            elif url_path == "/api/cert/recovery-email":
+                self.handle_cert_recovery_email()
+            elif url_path == "/api/cert/recovery-email/resend":
+                self.handle_cert_recovery_email_resend()
+            elif url_path == "/api/cert/sessions/revoke-all":
+                self.handle_cert_revoke_all_sessions()
+            elif url_path == "/api/cert/reset-password":
+                self.handle_cert_reset_password()
+            elif url_path == "/api/cert/logout":
                 self.handle_cert_logout()
+            elif url_path == "/api/cert/password":
+                self.handle_cert_password_change()
             elif self.path == "/api/cert/notifications":
                 self.handle_notification_settings_write()
             elif self.path == "/api/cert/smtp":
@@ -1124,6 +1213,455 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.handle_create_compatibility()
         else:
             self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
+
+    def _recovery_state_path(self) -> Path:
+        return admin_state_path(self.cert_admin_file, self.cert_admin_state_file)
+
+    def _send_recovery_email(
+        self,
+        *,
+        purpose: str,
+        token: str,
+        recipient: str,
+        expires_at: str,
+    ) -> None:
+        try:
+            _smtp_settings, config = fortios_notify.load_smtp_preview_snapshot(
+                smtp_settings_path=SMTP_SETTINGS_PATH,
+            )
+            recipient_config = fortios_notify.prepare_recovery_email_config(
+                config,
+                recipient,
+            )
+            rendered = fortios_notify.compose_recovery_email(
+                purpose,
+                token,
+                recipient_config.app_url,
+                expires_at,
+                appearance=recipient_config.email_appearance,
+            )
+            fortios_notify.send_email_result(
+                recipient_config,
+                rendered["subject"],
+                rendered["text"],
+                rendered["html"],
+                force=True,
+            )
+        except Exception:  # noqa: BLE001 - mail failure must not break account flows
+            return
+
+    def _queue_recovery_email(
+        self,
+        *,
+        purpose: str,
+        token: str,
+        recipient: str,
+        expires_at: str,
+    ) -> None:
+        threading.Thread(
+            target=self._send_recovery_email,
+            kwargs={
+                "purpose": purpose,
+                "token": token,
+                "recipient": recipient,
+                "expires_at": expires_at,
+            },
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _recovery_delivery_ready(recipient: str) -> bool:
+        try:
+            _smtp_settings, config = fortios_notify.load_smtp_preview_snapshot(
+                smtp_settings_path=SMTP_SETTINGS_PATH,
+            )
+            fortios_notify.prepare_recovery_email_config(config, recipient)
+        except (OSError, TypeError, ValueError):
+            return False
+        return True
+
+    def _recovery_response(self) -> None:
+        self.write_json_response(
+            {"message": RECOVERY_GENERIC_MESSAGE},
+            HTTPStatus.ACCEPTED,
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_cert_forgot_password(self) -> None:
+        client = self.cert_client_identity()
+        if not self.cert_recovery_limiter.try_record(client):
+            self._recovery_response()
+            return
+        try:
+            payload = self.read_json_body(max_bytes=4096)
+            if set(payload) != {"username"} or not isinstance(payload["username"], str):
+                self._recovery_response()
+                return
+            username = payload["username"]
+            if not os.path.lexists(self.cert_admin_file):
+                self._recovery_response()
+                return
+            with credential_lock(self.cert_admin_file, exclusive=False):
+                credentials, current_revision = load_credentials_with_revision(
+                    self.cert_admin_file
+                )
+            if not hmac.compare_digest(str(credentials["username"]), username):
+                self._recovery_response()
+                return
+            state = load_admin_state(
+                self.cert_admin_file,
+                self.cert_admin_state_file,
+            )
+            recipient = state["currentRecoveryEmail"]
+            if not recipient or not self._recovery_delivery_ready(recipient):
+                self._recovery_response()
+                return
+            if self.cert_helper_socket is None:
+                token = issue_password_reset_token(
+                    self.cert_admin_file,
+                    state_file=self.cert_admin_state_file,
+                    expected_revision=current_revision,
+                    expected_recovery_email=recipient,
+                )
+                issued_state = load_admin_state(
+                    self.cert_admin_file,
+                    self.cert_admin_state_file,
+                )
+                token_record = next(
+                    record
+                    for record in issued_state["tokens"]
+                    if record["purpose"] == "password_reset"
+                )
+                expires_at = token_record["expiresAt"]
+            else:
+                token, expires_at = issue_reset_via_helper(
+                    self.cert_helper_socket,
+                    credentials_revision=current_revision,
+                    recovery_email=recipient,
+                )
+            self._queue_recovery_email(
+                purpose="password_reset",
+                token=token,
+                recipient=recipient,
+                expires_at=expires_at,
+            )
+        except (
+            CredentialError,
+            HelperError,
+            ProtocolError,
+            TypeError,
+            ValueError,
+            OSError,
+            StopIteration,
+        ):
+            pass
+        self._recovery_response()
+
+    def handle_cert_verify_email(self) -> None:
+        if not self.cert_verify_limiter.try_record(self.cert_client_identity()):
+            self.write_json_response(
+                {"error": "Trop de tentatives. Réessaie dans quelques minutes."},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                extra_headers={"Cache-Control": "no-store", "Retry-After": "600"},
+            )
+            return
+        try:
+            payload = self.read_json_body(max_bytes=4096)
+            if set(payload) != {"token"} or not isinstance(payload["token"], str):
+                raise RecoveryTokenError("Token de récupération invalide.")
+            if self.cert_helper_socket is None:
+                consume_verification_token(
+                    self.cert_admin_file,
+                    payload["token"],
+                    state_file=self.cert_admin_state_file,
+                )
+            else:
+                verify_recovery_email_via_helper(
+                    self.cert_helper_socket,
+                    payload["token"],
+                    credentials_revision=credentials_revision(self.cert_admin_file),
+                )
+        except (CredentialError, HelperError, ProtocolError, TypeError, ValueError, OSError):
+            self.write_json_response(
+                {"error": RECOVERY_INVALID_MESSAGE},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            {"verified": True},
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_cert_reset_password(self) -> None:
+        if not self.cert_reset_limiter.try_record(self.cert_client_identity()):
+            self.write_json_response(
+                {"error": "Trop de tentatives. Réessaie dans quelques minutes."},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                extra_headers={"Cache-Control": "no-store", "Retry-After": "600"},
+            )
+            return
+        try:
+            payload = self.read_json_body(max_bytes=16 * 1024)
+            required = {"token", "newPassword", "confirmation"}
+            if set(payload) != required or not all(
+                isinstance(payload.get(name), str) for name in required
+            ):
+                raise CredentialValidationError("Champs de réinitialisation invalides.")
+            if self.cert_helper_socket is None:
+                reset_credentials_with_token(
+                    self.cert_admin_file,
+                    payload["token"],
+                    payload["newPassword"],
+                    payload["confirmation"],
+                    state_file=self.cert_admin_state_file,
+                )
+            else:
+                reset_via_helper(
+                    self.cert_helper_socket,
+                    payload["token"],
+                    payload["newPassword"],
+                    payload["confirmation"],
+                    credentials_revision=credentials_revision(self.cert_admin_file),
+                )
+        except (
+            CredentialValidationError,
+            RecoveryTokenError,
+            CredentialError,
+            HelperError,
+            ProtocolError,
+            TypeError,
+            ValueError,
+            OSError,
+        ):
+            self.write_json_response(
+                {"error": RECOVERY_INVALID_MESSAGE},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.cert_sessions.revoke_all()
+        attributes = [
+            "fortios_cert_session=",
+            "Path=/api/cert",
+            "HttpOnly",
+            "SameSite=Strict",
+            "Max-Age=0",
+        ]
+        if self.request_is_secure():
+            attributes.append("Secure")
+        self.write_json_response(
+            {"reset": True, "authenticated": False},
+            extra_headers={
+                "Cache-Control": "no-store",
+                "Set-Cookie": "; ".join(attributes),
+            },
+        )
+
+    def _account_response(self, session: AdminSession) -> dict[str, Any]:
+        credentials, _ = load_credentials_with_revision(self.cert_admin_file)
+        state = load_admin_state(
+            self.cert_admin_file,
+            self.cert_admin_state_file,
+        )
+        return admin_account_projection(
+            credentials,
+            state,
+            session_count=self.cert_sessions.count(),
+        )
+
+    def handle_cert_recovery_email(self) -> None:
+        session = self.require_admin_session(csrf=True)
+        if session is None:
+            return
+        session_id = self.cert_session_id()
+        if session_id is None or not self.cert_recovery_email_limiter.try_record(session_id):
+            self.write_json_response(
+                {"error": "Trop d'emails de vérification demandés."},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                extra_headers={"Cache-Control": "no-store", "Retry-After": "900"},
+            )
+            return
+        try:
+            payload = self.read_json_body(max_bytes=4096)
+            if set(payload) != {"email"} or not isinstance(payload["email"], str):
+                raise ValueError("Adresse email de récupération invalide.")
+            if self.cert_helper_socket is None:
+                set_recovery_email(
+                    self.cert_admin_file,
+                    payload["email"],
+                    self.cert_admin_state_file,
+                    expected_revision=session.credentials_revision,
+                )
+                issued_state = load_admin_state(
+                    self.cert_admin_file,
+                    self.cert_admin_state_file,
+                )
+                recipient = issued_state["pendingRecoveryEmail"]
+            else:
+                set_recovery_email_via_helper(
+                    self.cert_helper_socket,
+                    payload["email"],
+                    credentials_revision=session.credentials_revision,
+                )
+                recipient = payload["email"].strip()
+            if not recipient or not self._recovery_delivery_ready(recipient):
+                account = self._account_response(session)
+                self.write_json_response(
+                    {**account, "verificationQueued": False},
+                    extra_headers={"Cache-Control": "no-store"},
+                )
+                return
+            if self.cert_helper_socket is None:
+                token = issue_verification_token(
+                    self.cert_admin_file,
+                    state_file=self.cert_admin_state_file,
+                    expected_revision=session.credentials_revision,
+                    expected_recovery_email=recipient,
+                )
+                issued_state = load_admin_state(
+                    self.cert_admin_file,
+                    self.cert_admin_state_file,
+                )
+                record = next(
+                    record
+                    for record in issued_state["tokens"]
+                    if record["purpose"] == "verify_recovery_email"
+                )
+                expires_at = record["expiresAt"]
+            else:
+                token, expires_at = issue_verification_via_helper(
+                    self.cert_helper_socket,
+                    credentials_revision=session.credentials_revision,
+                    recovery_email=recipient,
+                )
+            self._queue_recovery_email(
+                purpose="verify_recovery_email",
+                token=token,
+                recipient=recipient,
+                expires_at=expires_at,
+            )
+            account = self._account_response(session)
+        except (
+            CredentialError,
+            HelperError,
+            ProtocolError,
+            TypeError,
+            ValueError,
+            OSError,
+            StopIteration,
+        ) as error:
+            self.write_json_response(
+                {"error": str(error)[:300]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            {**account, "verificationQueued": True},
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_cert_recovery_email_resend(self) -> None:
+        session = self.require_admin_session(csrf=True)
+        if session is None:
+            return
+        session_id = self.cert_session_id()
+        if session_id is None or not self.cert_recovery_email_limiter.try_record(session_id):
+            self.write_json_response(
+                {"error": "Trop d'emails de vérification demandés."},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                extra_headers={"Cache-Control": "no-store", "Retry-After": "900"},
+            )
+            return
+        try:
+            payload = self.read_json_body(max_bytes=4096)
+            if payload:
+                raise ValueError("Requête de renvoi invalide.")
+            state = load_admin_state(
+                self.cert_admin_file,
+                self.cert_admin_state_file,
+            )
+            recipient = state["pendingRecoveryEmail"]
+            if not recipient:
+                raise RecoveryTokenError("Aucune adresse de récupération en attente.")
+            if not self._recovery_delivery_ready(recipient):
+                self.write_json_response(
+                    {"error": "Configuration SMTP indisponible."},
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    extra_headers={"Cache-Control": "no-store"},
+                )
+                return
+            if self.cert_helper_socket is None:
+                token = issue_verification_token(
+                    self.cert_admin_file,
+                    state_file=self.cert_admin_state_file,
+                    expected_revision=session.credentials_revision,
+                    expected_recovery_email=recipient,
+                )
+                issued_state = load_admin_state(
+                    self.cert_admin_file,
+                    self.cert_admin_state_file,
+                )
+                record = next(
+                    record
+                    for record in issued_state["tokens"]
+                    if record["purpose"] == "verify_recovery_email"
+                )
+                expires_at = record["expiresAt"]
+            else:
+                token, expires_at = issue_verification_via_helper(
+                    self.cert_helper_socket,
+                    credentials_revision=session.credentials_revision,
+                    recovery_email=recipient,
+                )
+            self._queue_recovery_email(
+                purpose="verify_recovery_email",
+                token=token,
+                recipient=recipient,
+                expires_at=expires_at,
+            )
+        except (
+            CredentialError,
+            HelperError,
+            ProtocolError,
+            TypeError,
+            ValueError,
+            OSError,
+            StopIteration,
+        ):
+            self.write_json_response(
+                {"error": "Impossible de renvoyer la vérification."},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            {"message": "Email de vérification envoyé."},
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_cert_revoke_all_sessions(self) -> None:
+        session = self.require_admin_session(csrf=True)
+        if session is None:
+            return
+        count = self.cert_sessions.revoke_all()
+        attributes = [
+            "fortios_cert_session=",
+            "Path=/api/cert",
+            "HttpOnly",
+            "SameSite=Strict",
+            "Max-Age=0",
+        ]
+        if self.request_is_secure():
+            attributes.append("Secure")
+        self.write_json_response(
+            {"revoked": count, "authenticated": False},
+            extra_headers={
+                "Cache-Control": "no-store",
+                "Set-Cookie": "; ".join(attributes),
+            },
+        )
 
     def handle_cert_login(self) -> None:
         client = self.cert_client_identity()
@@ -1200,6 +1738,9 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             username_value = payload.get("username")
             password_value = payload.get("password")
             confirmation_value = payload.get("passwordConfirmation")
+            recovery_email_value = payload.get("recoveryEmail")
+            if recovery_email_value is not None and not isinstance(recovery_email_value, str):
+                raise TypeError("Adresse email de récupération invalide.")
             if not all(
                 isinstance(value, str)
                 for value in (username_value, password_value, confirmation_value)
@@ -1208,10 +1749,15 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             username = str(username_value)
             password = str(password_value)
             confirmation = str(confirmation_value)
+            recovery_email = recovery_email_value
             if (
                 len(username) > 64
                 or len(password.encode("utf-8")) > MAX_PASSWORD_LENGTH
                 or len(confirmation.encode("utf-8")) > MAX_PASSWORD_LENGTH
+                or (
+                    recovery_email is not None
+                    and len(recovery_email.encode("utf-8")) > 1024
+                )
             ):
                 raise ValueError("Champs de configuration invalides.")
             if password != confirmation:
@@ -1229,12 +1775,15 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                     self.cert_admin_file,
                     username,
                     password,
+                    recovery_email=recovery_email,
+                    state_file=self.cert_admin_state_file,
                 )
             else:
                 revision = setup_via_helper(
                     self.cert_helper_socket,
                     username,
                     password,
+                    recovery_email=recovery_email,
                 )
             created = True
             session_id, session = self.cert_sessions.create(username, revision)
@@ -1269,6 +1818,117 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         finally:
             if reserved:
                 self.cert_login_limiter.finish(client, success=created)
+
+    def handle_cert_password_change(self) -> None:
+        session_id = self.cert_session_id()
+        try:
+            with credential_lock(self.cert_admin_file, exclusive=False):
+                load_credentials(self.cert_admin_file)
+                session = self.require_admin_session(csrf=True)
+        except CredentialError:
+            if session_id is not None:
+                self.cert_sessions.revoke(session_id)
+            self.write_json_response(
+                {"error": "Compte administrateur indisponible."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        if session_id is None or session is None:
+            return
+        if not self.cert_password_limiter.try_record(session_id):
+            self.write_json_response(
+                {"error": "Trop de tentatives. Réessaie dans quelques minutes."},
+                HTTPStatus.TOO_MANY_REQUESTS,
+                extra_headers={"Cache-Control": "no-store", "Retry-After": "60"},
+            )
+            return
+        try:
+            payload = self.read_json_body(max_bytes=16 * 1024)
+            required = {"currentPassword", "newPassword", "confirmation"}
+            if set(payload) != required or not all(
+                isinstance(payload.get(name), str) for name in required
+            ):
+                raise CredentialValidationError("Champs de rotation invalides.")
+            if self.cert_helper_socket is None:
+                rotate_credentials(
+                    self.cert_admin_file,
+                    session.username,
+                    str(payload["currentPassword"]),
+                    str(payload["newPassword"]),
+                    str(payload["confirmation"]),
+                    expected_revision=session.credentials_revision,
+                    state_file=self.cert_admin_state_file,
+                )
+            else:
+                rotate_via_helper(
+                    self.cert_helper_socket,
+                    session.username,
+                    str(payload["currentPassword"]),
+                    str(payload["newPassword"]),
+                    str(payload["confirmation"]),
+                    credentials_revision=session.credentials_revision,
+                )
+        except (CredentialAuthenticationError, HelperAuthenticationError) as error:
+            self.write_json_response(
+                {"error": str(error)},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except (CredentialRevisionError, HelperRevisionError) as error:
+            self.write_json_response(
+                {"error": str(error)},
+                HTTPStatus.CONFLICT,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except (CredentialValidationError, HelperValidationError) as error:
+            self.write_json_response(
+                {"error": str(error)},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except ProtocolError:
+            self.write_json_response(
+                {"error": "Compte administrateur indisponible."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except (TypeError, ValueError):
+            self.write_json_response(
+                {"error": "Requête de rotation invalide."},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except (CredentialError, HelperCredentialError, HelperError, OSError):
+            self.write_json_response(
+                {"error": "Compte administrateur indisponible."},
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+
+        self.cert_sessions.revoke_all()
+        attributes = [
+            "fortios_cert_session=",
+            "Path=/api/cert",
+            "HttpOnly",
+            "SameSite=Strict",
+            "Max-Age=0",
+        ]
+        if self.request_is_secure():
+            attributes.append("Secure")
+        self.write_json_response(
+            {"message": "Mot de passe modifié.", "authenticated": False},
+            extra_headers={
+                "Cache-Control": "no-store",
+                "Set-Cookie": "; ".join(attributes),
+            },
+        )
 
     def handle_cert_upload(self, *, install: bool) -> None:
         session_id = self.cert_session_id()
@@ -1782,6 +2442,14 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        requestline = re.sub(
+            r"([?&]token=)[^&\s]*",
+            r"\1[REDACTED]",
+            self.requestline,
+        )
+        self.log_message('"%s" %s %s', requestline, str(code), str(size))
+
     def log_message(self, format: str, *args: Any) -> None:
         sys.stderr.write(f"{self.log_date_time_string()} - {format % args}\n")
 
@@ -1835,10 +2503,20 @@ def main(argv: list[str]) -> int:
     cert_admin_file = Path(
         os.environ.get("FORTIOS_CERT_ADMIN_FILE", str(DEFAULT_CREDENTIALS))
     )
+    cert_admin_state_value = os.environ.get("FORTIOS_CERT_ADMIN_STATE_FILE", "").strip()
+    cert_admin_state_file = Path(cert_admin_state_value) if cert_admin_state_value else None
     cert_sessions = SessionStore()
     cert_login_limiter = LoginRateLimiter()
+    cert_password_limiter = ActionRateLimiter()
     cert_test_email_limiter = ActionRateLimiter()
     cert_preview_limiter = ActionRateLimiter(max_actions=30)
+    cert_recovery_limiter = AnonymousRateLimiter()
+    cert_verify_limiter = AnonymousRateLimiter()
+    cert_reset_limiter = AnonymousRateLimiter()
+    cert_recovery_email_limiter = ActionRateLimiter(
+        max_actions=3,
+        window_seconds=15 * 60,
+    )
     cert_validation_tickets = ValidationTicketStore()
     email_previews = EmailPreviewStore()
     cert_hostname = os.environ.get("FORTIOS_TLS_HOSTNAME", "").strip()
@@ -1865,14 +2543,20 @@ def main(argv: list[str]) -> int:
             allow_insecure_localhost=allow_insecure_localhost,
             cert_trusted_proxy_networks=cert_trusted_proxy_networks,
             cert_admin_file=cert_admin_file,
+            cert_admin_state_file=cert_admin_state_file,
             cert_sessions=cert_sessions,
             cert_hostname=cert_hostname,
             cert_output_dir=cert_output_dir,
             cert_direct_install=cert_direct_install,
             cert_helper_socket=cert_helper_socket,
             cert_login_limiter=cert_login_limiter,
+            cert_password_limiter=cert_password_limiter,
             cert_test_email_limiter=cert_test_email_limiter,
             cert_preview_limiter=cert_preview_limiter,
+            cert_recovery_limiter=cert_recovery_limiter,
+            cert_verify_limiter=cert_verify_limiter,
+            cert_reset_limiter=cert_reset_limiter,
+            cert_recovery_email_limiter=cert_recovery_email_limiter,
             cert_validation_tickets=cert_validation_tickets,
             email_previews=email_previews,
             **handler_kwargs,

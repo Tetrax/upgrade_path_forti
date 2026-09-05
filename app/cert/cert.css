@@ -47,6 +47,8 @@
 .full-width { justify-content: center; width: 100%; min-height: 42px; }
 .form-message { min-height: 20px; margin: 12px 0 0; color: var(--danger); line-height: 1.45; }
 .form-message.success { color: var(--ok); }
+.link-button { display: block; margin: 12px auto 0; border: 0; padding: 4px; background: transparent; color: var(--brand); font: inherit; font-weight: 700; cursor: pointer; }
+.link-button:hover { text-decoration: underline; }
 
 .context-grid {
   display: grid;
@@ -109,6 +111,16 @@
 .admin-tabs { display: flex; gap: 4px; margin: 0 0 16px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .admin-tab { min-height: 38px; border: 0; border-radius: 6px; padding: 0 16px; background: transparent; color: var(--muted); font-weight: 700; cursor: pointer; }
 .admin-tab.active { background: var(--soft-blue); color: var(--brand-dark); }
+.account-layout { max-width: 620px; }
+.account-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 0 0 18px; border: 1px solid var(--soft-line); border-radius: 8px; }
+.account-summary > div { min-width: 0; padding: 14px; }
+.account-summary > div:nth-child(even) { border-left: 1px solid var(--soft-line); }
+.account-summary > div:nth-child(n + 3) { border-top: 1px solid var(--soft-line); }
+.account-summary dt { color: var(--muted); font-size: 12px; font-weight: 700; }
+.account-summary dd { margin: 5px 0 0; color: var(--ink); font-weight: 700; overflow-wrap: anywhere; }
+.account-primary-actions { justify-content: flex-start; }
+.account-panel form { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--soft-line); }
+.account-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .notifications-heading { margin: 4px 0 16px; }
 .notifications-heading h2 { margin: 3px 0 5px; color: var(--ink); }
 .notifications-heading p:last-child { margin: 0; color: var(--muted); }
@@ -185,5 +197,8 @@
   .compact-field-grid .field-wide, .smtp-checks, .test-email-layout > .form-message { grid-column: auto; }
   .summary-grid { grid-template-columns: 1fr; }
   .summary-grid .wide { grid-column: auto; }
-  .recipient-heading, .secret-control { align-items: flex-start; flex-direction: column; }
+  .recipient-heading, .secret-control, .account-actions { align-items: flex-start; flex-direction: column; }
+  .account-summary { grid-template-columns: 1fr; }
+  .account-summary > div:nth-child(even) { border-left: 0; }
+  .account-summary > div + div { border-top: 1px solid var(--soft-line); }
 }

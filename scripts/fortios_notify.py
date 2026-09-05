@@ -1952,6 +1952,113 @@ def compose_email_preview(
     }
 
 
+def _trusted_app_origin(app_url: str) -> str:
+    if not isinstance(app_url, str) or any(character in app_url for character in "\r\n"):
+        raise ValueError("URL FortiUpgrade invalide.")
+    parsed = urllib.parse.urlsplit(app_url.strip())
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.netloc != parsed.netloc.strip()
+    ):
+        raise ValueError("URL FortiUpgrade invalide.")
+    try:
+        if parsed.hostname is None or parsed.port is not None and not (0 < parsed.port <= 65535):
+            raise ValueError("URL FortiUpgrade invalide.")
+    except ValueError as error:
+        raise ValueError("URL FortiUpgrade invalide.") from error
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def prepare_recovery_email_config(config: EmailConfig, recipient: str) -> EmailConfig:
+    """Bind one verified account recipient and validate the complete delivery path."""
+    if not isinstance(recipient, str) or not _EMAIL_ADDRESS_RE.fullmatch(recipient.strip()):
+        raise ValueError("Destinataire de récupération invalide.")
+    prepared = replace(config, smtp_to=(recipient.strip(),))
+    _trusted_app_origin(prepared.app_url)
+    if not prepared.is_complete():
+        raise ValueError("Configuration SMTP de récupération incomplète.")
+    return prepared
+
+
+def compose_recovery_email(
+    purpose: str,
+    token: str,
+    app_url: str,
+    expires_at: str,
+    *,
+    appearance: EmailAppearance | None = None,
+) -> dict[str, str]:
+    """Render a recovery email using only the trusted app origin and a fixed path."""
+    paths = {
+        "verify_recovery_email": "/cert/verify-email",
+        "password_reset": "/cert/reset-password",
+    }
+    if purpose not in paths or not isinstance(token, str) or not re.fullmatch(
+        r"[A-Za-z0-9_-]{43,128}", token
+    ):
+        raise ValueError("Paramètres du message de récupération invalides.")
+    if not _is_valid_notify_timestamp(expires_at):
+        raise ValueError("Expiration du message de récupération invalide.")
+    link = f"{_trusted_app_origin(app_url)}{paths[purpose]}?{urllib.parse.urlencode({'token': token})}"
+    if purpose == "verify_recovery_email":
+        subject = "[FortiUpgrade] Vérifiez votre adresse de récupération"
+        action = "vérifier votre adresse email de récupération"
+    else:
+        subject = "[FortiUpgrade] Réinitialisez votre mot de passe"
+        action = "réinitialiser votre mot de passe"
+    text_body = (
+        "Une demande a été reçue pour "
+        f"{action}.\n\n"
+        f"Ouvrez ce lien dans les {30 if purpose == 'verify_recovery_email' else 15} prochaines minutes :\n"
+        f"{link}\n\n"
+        "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email."
+    )
+    html_body = (
+        "<!doctype html><html><body style='margin:0;padding:24px;background:#f8fafc;"
+        "font-family:Arial,sans-serif;color:#101828'>"
+        f"<h1 style='font-size:22px'>{html.escape(subject)}</h1>"
+        f"<p>Une demande a été reçue pour {html.escape(action)}.</p>"
+        f"<p><a href='{html.escape(link, quote=True)}' "
+        "style='display:inline-block;padding:10px 14px;background:#175cd3;color:#fff;"
+        "text-decoration:none;border-radius:6px'>Continuer</a></p>"
+        f"<p>Ce lien expire le {html.escape(expires_at)}.</p>"
+        "<p>Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>"
+        "</body></html>"
+    )
+    if appearance is not None:
+        text_body, html_body = _apply_email_appearance(
+            text_body, html_body, appearance
+        )
+    return {
+        "purpose": purpose,
+        "subject": subject,
+        "text": text_body,
+        "html": html_body,
+        "link": link,
+        "expiresAt": expires_at,
+    }
+
+
+def compose_account_recovery_email(
+    purpose: str,
+    token: str,
+    app_url: str,
+    expires_at: str,
+    *,
+    appearance: EmailAppearance | None = None,
+) -> dict[str, str]:
+    return compose_recovery_email(
+        purpose,
+        token,
+        app_url,
+        expires_at,
+        appearance=appearance,
+    )
+
+
 @dataclass(frozen=True)
 class SmtpResult:
     sent: bool

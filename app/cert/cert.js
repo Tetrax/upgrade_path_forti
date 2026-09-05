@@ -8,19 +8,33 @@ let savedSmtpSettings = null;
 let selectedPreviewScenario = "single";
 let currentEmailPreview = null;
 let emailPreviewRequestGeneration = 0;
+let publicActionToken = "";
 const MAX_CERTIFICATE_BYTES = 16 * 1024 * 1024;
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024 * 1024;
 const MAX_CHAIN_BYTES = 16 * 1024 * 1024;
 const MAX_PASSWORD_BYTES = 1024;
 const MIN_ADMIN_PASSWORD_BYTES = 12;
+const PUBLIC_CERT_ENDPOINTS = new Set([
+  "login",
+  "setup",
+  "forgot-password",
+  "verify-email",
+  "reset-password",
+]);
 
 const byId = (id) => document.getElementById(id);
 const setupView = byId("setup-view");
 const loginView = byId("login-view");
+const emailVerificationView = byId("email-verification-view");
+const passwordResetView = byId("password-reset-view");
 const adminView = byId("admin-view");
 const logoutButton = byId("logout-button");
 const setupForm = byId("setup-form");
 const loginForm = byId("login-form");
+const forgotPasswordForm = byId("forgot-password-form");
+const passwordResetForm = byId("password-reset-form");
+const passwordChangeForm = byId("password-change-form");
+const recoveryEmailForm = byId("recovery-email-form");
 const certificateForm = byId("certificate-form");
 const installButton = byId("install-button");
 const activationBox = byId("activation-box");
@@ -63,13 +77,13 @@ async function readResponse(response) {
 
 async function apiRequest(endpoint, options = {}) {
   const headers = { ...(options.headers || {}) };
-  if (csrfToken && !["login", "setup"].includes(endpoint)) headers["X-CSRF-Token"] = csrfToken;
+  if (csrfToken && !PUBLIC_CERT_ENDPOINTS.has(endpoint)) headers["X-CSRF-Token"] = csrfToken;
   const response = await fetch(`/api/cert/${endpoint}`, {
     credentials: "same-origin",
     ...options,
     headers,
   });
-  if (response.status === 401 && !["login", "setup"].includes(endpoint)) showLogin();
+  if (response.status === 401 && !PUBLIC_CERT_ENDPOINTS.has(endpoint)) showLogin();
   return readResponse(response);
 }
 
@@ -78,6 +92,21 @@ function resetPrivateState() {
   validationSucceeded = false;
   validationToken = "";
   canInstall = false;
+  loginForm.hidden = false;
+  forgotPasswordForm.reset();
+  forgotPasswordForm.hidden = true;
+  setMessage("forgot-password-message", "");
+  emailVerificationView.hidden = true;
+  setMessage("email-verification-message", "");
+  passwordResetForm.reset();
+  passwordResetView.hidden = true;
+  setMessage("password-reset-message", "");
+  passwordChangeForm.reset();
+  passwordChangeForm.hidden = true;
+  setMessage("password-change-message", "");
+  recoveryEmailForm.reset();
+  recoveryEmailForm.hidden = true;
+  setMessage("recovery-email-message", "");
   certificateForm.reset();
   notificationsForm.reset();
   smtpForm.reset();
@@ -97,13 +126,13 @@ function showSetup() {
   setMessage("setup-message", "");
 }
 
-function showLogin(message = "") {
+function showLogin(message = "", success = false) {
   resetPrivateState();
   setupView.hidden = true;
   loginView.hidden = false;
   adminView.hidden = true;
   logoutButton.hidden = true;
-  setMessage("login-message", message);
+  setMessage("login-message", message, success);
 }
 
 function showAdmin(status) {
@@ -111,20 +140,74 @@ function showAdmin(status) {
   canInstall = Boolean(status.canInstall);
   setupView.hidden = true;
   loginView.hidden = true;
+  emailVerificationView.hidden = true;
+  passwordResetView.hidden = true;
   adminView.hidden = false;
   logoutButton.hidden = false;
   byId("target-hostname").textContent = status.hostname || "FORTIOS_TLS_HOSTNAME non configuré";
   byId("session-username").textContent = status.username;
   byId("activation-mode").textContent = canInstall ? "Activation locale autorisée" : "Validation uniquement";
+  renderAccount(status);
   installButton.disabled = !canInstall;
+  showAdminSection("certificates");
+}
+
+function showEmailVerification() {
+  resetPrivateState();
+  setupView.hidden = true;
+  loginView.hidden = true;
+  adminView.hidden = true;
+  emailVerificationView.hidden = false;
+  logoutButton.hidden = true;
+  const token = new URLSearchParams(window.location.search).get("token") || "";
+  publicActionToken = token;
+  window.history.replaceState({}, "", window.location.pathname);
+  const usable = /^[A-Za-z0-9_-]{43,128}$/.test(token);
+  byId("verify-recovery-email-button").disabled = !usable;
+  if (!usable) setMessage("email-verification-message", "Lien de vérification invalide ou expiré.");
+}
+
+function showPasswordReset() {
+  resetPrivateState();
+  setupView.hidden = true;
+  loginView.hidden = true;
+  adminView.hidden = true;
+  passwordResetView.hidden = false;
+  logoutButton.hidden = true;
+  const token = new URLSearchParams(window.location.search).get("token") || "";
+  publicActionToken = token;
+  window.history.replaceState({}, "", window.location.pathname);
+  const usable = /^[A-Za-z0-9_-]{43,128}$/.test(token);
+  byId("reset-password-button").disabled = !usable;
+  if (!usable) setMessage("password-reset-message", "Lien de récupération invalide ou expiré.");
+}
+
+function renderAccount(account) {
+  byId("account-username").textContent = account.username || "admin";
+  byId("account-recovery-email").textContent = account.recoveryEmail
+    || account.pendingRecoveryEmail
+    || "Non configurée";
+  let recoveryStatus = "Récupération indisponible";
+  if (account.recoveryStateAvailable === false) recoveryStatus = "État de récupération indisponible";
+  else if (account.recoveryEmailVerified) recoveryStatus = "Vérifiée ✓";
+  else if (account.pendingRecoveryEmailPresent) recoveryStatus = "En attente de vérification";
+  byId("account-recovery-status").textContent = recoveryStatus;
+  byId("resend-recovery-email-button").hidden = !account.pendingRecoveryEmailPresent;
+
+  const changedAt = new Date(account.passwordChangedAt || "");
+  byId("account-password-changed-at").textContent = Number.isNaN(changedAt.valueOf())
+    ? "—"
+    : new Intl.DateTimeFormat("fr-FR", { dateStyle: "long" }).format(changedAt);
+  const count = Number(account.sessionCount || 0);
+  byId("account-session-count").textContent = `${count} session${count === 1 ? "" : "s"} active${count === 1 ? "" : "s"}`;
 }
 
 function showAdminSection(section) {
-  const notificationsActive = section === "notifications";
-  byId("certificates-section").hidden = notificationsActive;
-  byId("notifications-section").hidden = !notificationsActive;
-  byId("certificates-tab").classList.toggle("active", !notificationsActive);
-  byId("notifications-tab").classList.toggle("active", notificationsActive);
+  for (const name of ["certificates", "notifications", "account"]) {
+    const active = section === name;
+    byId(`${name}-section`).hidden = !active;
+    byId(`${name}-tab`).classList.toggle("active", active);
+  }
 }
 
 function addRecipient(value = "") {
@@ -339,6 +422,7 @@ setupForm.addEventListener("submit", async (event) => {
   try {
     const password = byId("setup-password").value;
     const confirmation = byId("setup-password-confirmation").value;
+    const recoveryEmail = byId("setup-recovery-email").value.trim();
     const passwordBytes = new TextEncoder().encode(password).length;
     if (passwordBytes < MIN_ADMIN_PASSWORD_BYTES || passwordBytes > MAX_PASSWORD_BYTES) {
       throw new Error("Le mot de passe doit contenir entre 12 et 1 024 octets UTF-8.");
@@ -353,10 +437,27 @@ setupForm.addEventListener("submit", async (event) => {
         username: byId("setup-username").value,
         password,
         passwordConfirmation: confirmation,
+        recoveryEmail: recoveryEmail || null,
       }),
     });
     csrfToken = payload.csrfToken;
     await refreshSession();
+    if (recoveryEmail) {
+      try {
+        const result = await apiRequest("recovery-email/resend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        });
+        renderAccount(result);
+        setMessage("recovery-email-message", "Le lien de vérification a été envoyé.", true);
+      } catch (_error) {
+        setMessage(
+          "recovery-email-message",
+          "Adresse enregistrée en attente. Configure SMTP pour envoyer sa vérification.",
+        );
+      }
+    }
   } catch (error) {
     if (error.status === 409) showLogin(error.message);
     else setMessage("setup-message", error.message);
@@ -397,6 +498,90 @@ loginForm.addEventListener("submit", async (event) => {
   }
 });
 
+byId("forgot-password-button").addEventListener("click", () => {
+  loginForm.hidden = true;
+  forgotPasswordForm.hidden = false;
+  setMessage("forgot-password-message", "");
+  byId("forgot-username").focus();
+});
+byId("back-to-login-button").addEventListener("click", () => showLogin());
+byId("verification-login-button").addEventListener("click", () => {
+  window.history.replaceState({}, "", "/cert/");
+  showLogin();
+});
+byId("verify-recovery-email-button").addEventListener("click", async () => {
+  const button = byId("verify-recovery-email-button");
+  button.disabled = true;
+  setMessage("email-verification-message", "Vérification en cours…");
+  try {
+    await apiRequest("verify-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: publicActionToken }),
+    });
+    publicActionToken = "";
+    setMessage("email-verification-message", "Adresse de récupération vérifiée.", true);
+  } catch (_error) {
+    setMessage("email-verification-message", "Lien de vérification invalide ou expiré.");
+  }
+});
+byId("reset-login-button").addEventListener("click", () => {
+  window.history.replaceState({}, "", "/cert/");
+  showLogin();
+});
+passwordResetForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("reset-password-button");
+  button.disabled = true;
+  setMessage("password-reset-message", "Réinitialisation en cours…");
+  try {
+    const newPassword = byId("reset-password").value;
+    const confirmation = byId("reset-password-confirmation").value;
+    const passwordBytes = new TextEncoder().encode(newPassword).length;
+    if (passwordBytes < MIN_ADMIN_PASSWORD_BYTES || passwordBytes > MAX_PASSWORD_BYTES) {
+      throw new Error("Le mot de passe doit contenir entre 12 et 1 024 octets UTF-8.");
+    }
+    if (newPassword !== confirmation) throw new Error("Les mots de passe ne correspondent pas.");
+    await apiRequest("reset-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: publicActionToken, newPassword, confirmation }),
+    });
+    publicActionToken = "";
+    window.history.replaceState({}, "", "/cert/");
+    showLogin(
+      "Mot de passe réinitialisé. Toutes les sessions administrateur ont été fermées.",
+      true,
+    );
+  } catch (error) {
+    passwordResetForm.reset();
+    setMessage("password-reset-message", error.message);
+    button.disabled = !publicActionToken;
+  }
+});
+forgotPasswordForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("send-reset-link-button");
+  button.disabled = true;
+  setMessage("forgot-password-message", "Demande en cours…");
+  try {
+    const result = await apiRequest("forgot-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: byId("forgot-username").value }),
+    });
+    setMessage("forgot-password-message", result.message, true);
+  } catch (_error) {
+    setMessage(
+      "forgot-password-message",
+      "Si un compte correspondant existe et qu’une adresse de récupération vérifiée est configurée, un email de récupération a été envoyé.",
+      true,
+    );
+  } finally {
+    button.disabled = false;
+  }
+});
+
 logoutButton.addEventListener("click", async () => {
   try {
     await apiRequest("logout", {
@@ -413,6 +598,123 @@ logoutButton.addEventListener("click", async () => {
 
 byId("certificates-tab").addEventListener("click", () => showAdminSection("certificates"));
 byId("notifications-tab").addEventListener("click", () => showAdminSection("notifications"));
+byId("account-tab").addEventListener("click", () => showAdminSection("account"));
+byId("change-recovery-email-button").addEventListener("click", () => {
+  passwordChangeForm.hidden = true;
+  recoveryEmailForm.hidden = false;
+  setMessage("recovery-email-message", "");
+  byId("recovery-email").focus();
+});
+byId("cancel-recovery-email-button").addEventListener("click", () => {
+  recoveryEmailForm.reset();
+  recoveryEmailForm.hidden = true;
+  setMessage("recovery-email-message", "");
+});
+recoveryEmailForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("save-recovery-email-button");
+  button.disabled = true;
+  setMessage("recovery-email-message", "Enregistrement…");
+  try {
+    const result = await apiRequest("recovery-email", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: byId("recovery-email").value.trim() }),
+    });
+    renderAccount(result);
+    recoveryEmailForm.reset();
+    setMessage(
+      "recovery-email-message",
+      result.verificationQueued
+        ? "Adresse enregistrée. Le lien de vérification a été envoyé."
+        : "Adresse enregistrée en attente. SMTP indisponible : configure-le puis renvoie la vérification.",
+      result.verificationQueued,
+    );
+  } catch (error) {
+    setMessage("recovery-email-message", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+byId("resend-recovery-email-button").addEventListener("click", async () => {
+  const button = byId("resend-recovery-email-button");
+  button.disabled = true;
+  setMessage("recovery-email-message", "Envoi en cours…");
+  try {
+    const result = await apiRequest("recovery-email/resend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    renderAccount(result);
+    setMessage("recovery-email-message", "Le lien de vérification a été renvoyé.", true);
+  } catch (error) {
+    setMessage("recovery-email-message", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+byId("revoke-all-sessions-button").addEventListener("click", async () => {
+  const button = byId("revoke-all-sessions-button");
+  button.disabled = true;
+  try {
+    await apiRequest("sessions/revoke-all", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    showLogin("Toutes les sessions administrateur ont été fermées.", true);
+  } catch (error) {
+    setMessage("password-change-message", error.message);
+    button.disabled = false;
+  }
+});
+byId("change-password-button").addEventListener("click", () => {
+  passwordChangeForm.hidden = false;
+  setMessage("password-change-message", "");
+  byId("current-admin-password").focus();
+});
+byId("cancel-password-change-button").addEventListener("click", () => {
+  passwordChangeForm.reset();
+  passwordChangeForm.hidden = true;
+  setMessage("password-change-message", "");
+});
+passwordChangeForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("submit-password-change-button");
+  button.disabled = true;
+  setMessage("password-change-message", "Modification en cours…");
+  try {
+    const currentPassword = byId("current-admin-password").value;
+    const newPassword = byId("new-admin-password").value;
+    const confirmation = byId("confirm-admin-password").value;
+    const passwordBytes = new TextEncoder().encode(newPassword).length;
+    if (passwordBytes < MIN_ADMIN_PASSWORD_BYTES || passwordBytes > MAX_PASSWORD_BYTES) {
+      throw new Error("Le mot de passe doit contenir entre 12 et 1 024 octets UTF-8.");
+    }
+    if (newPassword !== confirmation) {
+      throw new Error("Les mots de passe ne correspondent pas.");
+    }
+    if (newPassword === currentPassword) {
+      throw new Error("Le nouveau mot de passe doit être différent du mot de passe actuel.");
+    }
+    await apiRequest("password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword, newPassword, confirmation }),
+    });
+    showLogin(
+      "Mot de passe modifié. Pour votre sécurité, toutes les sessions administrateur "
+        + "ont été fermées. Reconnectez-vous avec votre nouveau mot de passe.",
+      true,
+    );
+  } catch (error) {
+    setMessage("password-change-message", error.message);
+  } finally {
+    passwordChangeForm.reset();
+    button.disabled = false;
+  }
+});
 byId("add-recipient-button").addEventListener("click", () => addRecipient());
 
 notificationsForm.addEventListener("submit", async (event) => {
@@ -681,4 +983,6 @@ for (const id of ["certificate-file", "private-key-file", "chain-file", "certifi
   byId(id).addEventListener("input", resetValidation);
 }
 
-refreshSession();
+if (window.location.pathname === "/cert/verify-email") showEmailVerification();
+else if (window.location.pathname === "/cert/reset-password") showPasswordReset();
+else refreshSession();

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import base64
 import concurrent.futures
 import http.cookiejar
@@ -24,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "scripts" / "fortios_server.py"
+PASSWORD_SERVER_TEMPORARIES: list[tempfile.TemporaryDirectory[str]] = []
 sys.path.insert(0, str(ROOT / "scripts"))
 import cert_admin  # type: ignore[import-not-found]
 import cert_helper  # type: ignore[import-not-found]
@@ -87,6 +89,31 @@ def running_server(environment: dict[str, str]) -> Iterator[str]:
             process.stdout.close()
 
 
+@contextmanager
+def running_password_server(
+    password: str = "mot-de-passe-actuel",
+) -> Iterator[tuple[str, Path]]:
+    temporary = tempfile.TemporaryDirectory()
+    PASSWORD_SERVER_TEMPORARIES.append(temporary)
+    credentials = Path(temporary.name) / "credentials.json"
+    cert_admin.write_credentials(
+        credentials,
+        cert_admin.credential_payload("admin", password),
+    )
+    environment = {
+        "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+        "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+    }
+    with running_server(environment) as base_url:
+        yield base_url, credentials
+
+
+@atexit.register
+def cleanup_password_server_temporaries() -> None:
+    while PASSWORD_SERVER_TEMPORARIES:
+        PASSWORD_SERVER_TEMPORARIES.pop().cleanup()
+
+
 def post_setup(
     base_url: str,
     *,
@@ -114,6 +141,64 @@ def post_setup(
     except urllib.error.HTTPError as error:
         with error:
             return error.code, json.load(error), error.headers.get("Set-Cookie", "")
+
+
+def login_admin(
+    base_url: str,
+    username: str,
+    password: str,
+    *,
+    opener: urllib.request.OpenerDirector | None = None,
+) -> tuple[int, dict[str, object], str]:
+    request = urllib.request.Request(
+        f"{base_url}/api/cert/login",
+        data=json.dumps({"username": username, "password": password}).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", "Origin": base_url},
+    )
+    client = opener or urllib.request.build_opener()
+    try:
+        with client.open(request, timeout=8) as response:
+            return response.status, json.load(response), response.headers.get("Set-Cookie", "")
+    except urllib.error.HTTPError as error:
+        with error:
+            return error.code, json.load(error), error.headers.get("Set-Cookie", "")
+
+
+def post_password_change(
+    base_url: str,
+    opener: urllib.request.OpenerDirector,
+    csrf_token: str,
+    *,
+    current_password: str,
+    new_password: str,
+    confirmation: str | None = None,
+    origin: str | None = None,
+) -> tuple[int, dict[str, object], str]:
+    request = urllib.request.Request(
+        f"{base_url}/api/cert/password",
+        data=json.dumps(
+            {
+                "currentPassword": current_password,
+                "newPassword": new_password,
+                "confirmation": new_password if confirmation is None else confirmation,
+            }
+        ).encode(),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Origin": base_url if origin is None else origin,
+            "X-CSRF-Token": csrf_token,
+        },
+    )
+    try:
+        with opener.open(request, timeout=8) as response:
+            return response.status, json.load(response), response.headers.get("Set-Cookie", "")
+    except urllib.error.HTTPError as error:
+        with error:
+            content_type = error.headers.get_content_type()
+            payload = json.load(error) if content_type == "application/json" else {"error": error.reason}
+            return error.code, payload, error.headers.get("Set-Cookie", "")
 
 
 class CertificateWebTests(unittest.TestCase):
@@ -512,6 +597,496 @@ class CertificateWebTests(unittest.TestCase):
             self.assertEqual(status_payload["username"], "valentin")
             self.assertEqual(status_payload["csrfToken"], login_payload["csrfToken"])
 
+    def test_password_rotation_invalidates_all_sessions_and_replaces_the_password(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credentials = Path(tmp) / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "mot-de-passe-actuel"),
+            )
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+            }
+            with running_server(environment) as base_url:
+                openers = [
+                    urllib.request.build_opener(
+                        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+                    )
+                    for _ in range(2)
+                ]
+                sessions = [
+                    login_admin(
+                        base_url,
+                        "admin",
+                        "mot-de-passe-actuel",
+                        opener=opener,
+                    )
+                    for opener in openers
+                ]
+                self.assertTrue(all(status == 200 for status, _, _ in sessions), sessions)
+
+                status, payload, cookie = post_password_change(
+                    base_url,
+                    openers[0],
+                    str(sessions[0][1]["csrfToken"]),
+                    current_password="mot-de-passe-actuel",
+                    new_password="nouveau-mot-de-passe",
+                )
+
+                revoked_statuses = []
+                for opener in openers:
+                    try:
+                        opener.open(f"{base_url}/api/cert/status", timeout=3).close()
+                        revoked_statuses.append(200)
+                    except urllib.error.HTTPError as error:
+                        revoked_statuses.append(error.code)
+                old_status = login_admin(
+                    base_url,
+                    "admin",
+                    "mot-de-passe-actuel",
+                )[0]
+                new_status = login_admin(
+                    base_url,
+                    "admin",
+                    "nouveau-mot-de-passe",
+                )[0]
+
+            self.assertEqual(status, 200, payload)
+            self.assertEqual(payload["message"], "Mot de passe modifié.")
+            self.assertIn("Max-Age=0", cookie)
+            self.assertEqual(revoked_statuses, [401, 401])
+            self.assertEqual(old_status, 401)
+            self.assertEqual(new_status, 200)
+
+    def test_password_rotation_requires_an_authenticated_session(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            status, _payload, _cookie = post_password_change(
+                base_url,
+                opener,
+                "missing-session-token",
+                current_password="mot-de-passe-actuel",
+                new_password="nouveau-mot-de-passe",
+            )
+
+        self.assertEqual(status, 401)
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_rejects_an_invalid_csrf_token(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            login_status, _login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            self.assertEqual(login_status, 200)
+            status, _payload, _cookie = post_password_change(
+                base_url,
+                opener,
+                "invalid-csrf-token",
+                current_password="mot-de-passe-actuel",
+                new_password="nouveau-mot-de-passe",
+            )
+
+        self.assertEqual(status, 403)
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_rejects_an_invalid_origin(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            login_status, login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            self.assertEqual(login_status, 200)
+            status, _payload, _cookie = post_password_change(
+                base_url,
+                opener,
+                str(login_payload["csrfToken"]),
+                current_password="mot-de-passe-actuel",
+                new_password="nouveau-mot-de-passe",
+                origin="https://invalid.example",
+            )
+
+        self.assertEqual(status, 403)
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_bounds_invalid_json_requests(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            login_status, login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            self.assertEqual(login_status, 200)
+            for body in (b"{", b"[]"):
+                with self.subTest(body=body):
+                    request = urllib.request.Request(
+                        f"{base_url}/api/cert/password",
+                        data=body,
+                        method="POST",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Origin": base_url,
+                            "X-CSRF-Token": str(login_payload["csrfToken"]),
+                        },
+                    )
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        opener.open(request, timeout=3)
+                    with raised.exception:
+                        self.assertEqual(raised.exception.code, 400)
+                        self.assertEqual(
+                            json.load(raised.exception)["error"],
+                            "Requête de rotation invalide.",
+                        )
+            with opener.open(f"{base_url}/api/cert/status", timeout=3) as response:
+                self.assertEqual(response.status, 200)
+
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_rejects_an_incorrect_current_password(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            login_status, login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            self.assertEqual(login_status, 200)
+            status, payload, _cookie = post_password_change(
+                base_url,
+                opener,
+                str(login_payload["csrfToken"]),
+                current_password="mot-de-passe-incorrect",
+                new_password="nouveau-mot-de-passe",
+            )
+            with opener.open(f"{base_url}/api/cert/status", timeout=3) as response:
+                session_status = response.status
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "Mot de passe actuel incorrect.")
+        self.assertEqual(session_status, 200)
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_rejects_a_mismatched_confirmation(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            _status, login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            status, payload, _cookie = post_password_change(
+                base_url,
+                opener,
+                str(login_payload["csrfToken"]),
+                current_password="mot-de-passe-actuel",
+                new_password="nouveau-mot-de-passe",
+                confirmation="confirmation-differente",
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "Les mots de passe ne correspondent pas.")
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_rejects_a_short_new_password(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            _status, login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            status, payload, _cookie = post_password_change(
+                base_url,
+                opener,
+                str(login_payload["csrfToken"]),
+                current_password="mot-de-passe-actuel",
+                new_password="court",
+            )
+
+        self.assertEqual(status, 400)
+        self.assertIn("entre 12 et 1024 octets UTF-8", str(payload["error"]))
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_rejects_a_long_new_password(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            _status, login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            status, payload, _cookie = post_password_change(
+                base_url,
+                opener,
+                str(login_payload["csrfToken"]),
+                current_password="mot-de-passe-actuel",
+                new_password="é" * 513,
+            )
+
+        self.assertEqual(status, 400)
+        self.assertIn("entre 12 et 1024 octets UTF-8", str(payload["error"]))
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_rejects_the_current_password_as_the_new_password(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            _status, login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            status, payload, _cookie = post_password_change(
+                base_url,
+                opener,
+                str(login_payload["csrfToken"]),
+                current_password="mot-de-passe-actuel",
+                new_password="mot-de-passe-actuel",
+            )
+
+        self.assertEqual(status, 400)
+        self.assertEqual(
+            payload["error"],
+            "Le nouveau mot de passe doit être différent du mot de passe actuel.",
+        )
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_fails_closed_when_credentials_are_corrupted(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            _status, login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            corrupted = b'{"username":"admin"}\n'
+            credentials.write_bytes(corrupted)
+            status, payload, _cookie = post_password_change(
+                base_url,
+                opener,
+                str(login_payload["csrfToken"]),
+                current_password="mot-de-passe-actuel",
+                new_password="nouveau-mot-de-passe",
+            )
+            after = credentials.read_bytes()
+
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"], "Compte administrateur indisponible.")
+        self.assertEqual(after, corrupted)
+
+    def test_two_concurrent_password_rotations_cannot_both_succeed(self) -> None:
+        with running_password_server() as (base_url, _credentials):
+            openers = [
+                urllib.request.build_opener(
+                    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+                )
+                for _ in range(2)
+            ]
+            sessions = [
+                login_admin(
+                    base_url,
+                    "admin",
+                    "mot-de-passe-actuel",
+                    opener=opener,
+                )
+                for opener in openers
+            ]
+            self.assertTrue(all(status == 200 for status, _, _ in sessions), sessions)
+            barrier = threading.Barrier(2)
+            replacements = ("nouveau-mot-de-passe-a", "nouveau-mot-de-passe-b")
+
+            def rotate(index: int) -> tuple[int, str]:
+                barrier.wait(timeout=5)
+                status, _payload, _cookie = post_password_change(
+                    base_url,
+                    openers[index],
+                    str(sessions[index][1]["csrfToken"]),
+                    current_password="mot-de-passe-actuel",
+                    new_password=replacements[index],
+                )
+                return status, replacements[index]
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                results = list(executor.map(rotate, range(2)))
+
+            winners = [password for status, password in results if status == 200]
+            losers = [password for status, password in results if status != 200]
+            old_status = login_admin(base_url, "admin", "mot-de-passe-actuel")[0]
+            winner_status = login_admin(base_url, "admin", winners[0])[0]
+            loser_status = login_admin(base_url, "admin", losers[0])[0]
+
+        self.assertEqual(len(winners), 1, results)
+        self.assertEqual(len(losers), 1, results)
+        self.assertIn(next(status for status, _password in results if status != 200), (401, 409))
+        self.assertEqual(old_status, 401)
+        self.assertEqual(winner_status, 200)
+        self.assertEqual(loser_status, 401)
+
+    def test_password_rotation_rate_limits_incorrect_current_password_attempts(self) -> None:
+        with running_password_server() as (base_url, credentials):
+            original = credentials.read_bytes()
+            opener = urllib.request.build_opener(
+                urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+            )
+            _status, login_payload, _cookie = login_admin(
+                base_url,
+                "admin",
+                "mot-de-passe-actuel",
+                opener=opener,
+            )
+            statuses = [
+                post_password_change(
+                    base_url,
+                    opener,
+                    str(login_payload["csrfToken"]),
+                    current_password="mot-de-passe-incorrect",
+                    new_password="nouveau-mot-de-passe",
+                )[0]
+                for _ in range(4)
+            ]
+
+        self.assertEqual(statuses, [400, 400, 400, 429])
+        self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_reports_an_unavailable_helper_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "mot-de-passe-actuel"),
+            )
+            original = credentials.read_bytes()
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_CERT_HELPER_SOCKET": str(root / "missing-helper.sock"),
+            }
+            with running_server(environment) as base_url:
+                opener = urllib.request.build_opener(
+                    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+                )
+                _status, login_payload, _cookie = login_admin(
+                    base_url,
+                    "admin",
+                    "mot-de-passe-actuel",
+                    opener=opener,
+                )
+                status, payload, _cookie = post_password_change(
+                    base_url,
+                    opener,
+                    str(login_payload["csrfToken"]),
+                    current_password="mot-de-passe-actuel",
+                    new_password="nouveau-mot-de-passe",
+                )
+
+            self.assertEqual(status, 503)
+            self.assertEqual(payload["error"], "Compte administrateur indisponible.")
+            self.assertEqual(credentials.read_bytes(), original)
+
+    def test_password_rotation_bounds_an_invalid_helper_response(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "mot-de-passe-actuel"),
+            )
+            original = credentials.read_bytes()
+            output = root / "active"
+            output.mkdir()
+            socket_path = root / "run" / "helper.sock"
+            socket_path.parent.mkdir()
+            processor = cert_helper.CertificateInstallProcessor(
+                hostname=HOSTNAME,
+                output_dir=output,
+                credentials_file=credentials,
+                allowed_uid=os.getuid(),
+                allowed_gid=os.getgid(),
+            )
+            processor.process = lambda *_args, **_kwargs: {"ok": True}  # type: ignore[method-assign]
+            helper_server = cert_helper.CertificateHelperServer(socket_path, processor)
+            helper_thread = threading.Thread(target=helper_server.serve_forever, daemon=True)
+            helper_thread.start()
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_CERT_HELPER_SOCKET": str(socket_path),
+                "FORTIOS_TLS_HOSTNAME": HOSTNAME,
+            }
+            try:
+                with running_server(environment) as base_url:
+                    opener = urllib.request.build_opener(
+                        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+                    )
+                    login_status, login_payload, _cookie = login_admin(
+                        base_url,
+                        "admin",
+                        "mot-de-passe-actuel",
+                        opener=opener,
+                    )
+                    self.assertEqual(login_status, 200)
+                    status, payload, _cookie = post_password_change(
+                        base_url,
+                        opener,
+                        str(login_payload["csrfToken"]),
+                        current_password="mot-de-passe-actuel",
+                        new_password="nouveau-mot-de-passe",
+                    )
+                    with opener.open(f"{base_url}/api/cert/status", timeout=3) as response:
+                        self.assertEqual(response.status, 200)
+            finally:
+                helper_server.shutdown()
+                helper_server.server_close()
+                helper_thread.join(timeout=3)
+
+            self.assertEqual(status, 503)
+            self.assertEqual(payload["error"], "Compte administrateur indisponible.")
+            self.assertEqual(credentials.read_bytes(), original)
+
     def test_resetting_credentials_revokes_existing_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             credentials = Path(tmp) / "credentials.json"
@@ -877,6 +1452,73 @@ class CertificateWebTests(unittest.TestCase):
                     "admin",
                     "premier-mot-de-passe",
                 )
+            )
+            self.assertEqual(
+                {path.name: path.read_bytes() for path in output.iterdir()},
+                before,
+            )
+
+    def test_password_rotation_uses_the_helper_without_touching_active_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "admin" / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("admin", "current-password"),
+            )
+            output = root / "active"
+            output.mkdir()
+            (output / "fullchain.pem").write_bytes(b"existing-certificate")
+            (output / "privkey.pem").write_bytes(b"existing-private-key")
+            before = {path.name: path.read_bytes() for path in output.iterdir()}
+            socket_path = root / "run" / "helper.sock"
+            socket_path.parent.mkdir()
+            processor = cert_helper.CertificateInstallProcessor(
+                hostname=HOSTNAME,
+                output_dir=output,
+                credentials_file=credentials,
+                allowed_uid=os.getuid(),
+                allowed_gid=os.getgid(),
+            )
+            helper_server = cert_helper.CertificateHelperServer(socket_path, processor)
+            helper_thread = threading.Thread(target=helper_server.serve_forever, daemon=True)
+            helper_thread.start()
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_CERT_HELPER_SOCKET": str(socket_path),
+                "FORTIOS_TLS_HOSTNAME": HOSTNAME,
+            }
+            try:
+                with running_server(environment) as base_url:
+                    opener = urllib.request.build_opener(
+                        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+                    )
+                    login_status, login_payload, _ = login_admin(
+                        base_url,
+                        "admin",
+                        "current-password",
+                        opener=opener,
+                    )
+                    self.assertEqual(login_status, 200, login_payload)
+                    status, payload, _ = post_password_change(
+                        base_url,
+                        opener,
+                        str(login_payload["csrfToken"]),
+                        current_password="current-password",
+                        new_password="replacement-password",
+                    )
+            finally:
+                helper_server.shutdown()
+                helper_server.server_close()
+                helper_thread.join(timeout=3)
+
+            self.assertEqual(status, 200, payload)
+            self.assertFalse(
+                cert_admin.verify_credentials(credentials, "admin", "current-password")
+            )
+            self.assertTrue(
+                cert_admin.verify_credentials(credentials, "admin", "replacement-password")
             )
             self.assertEqual(
                 {path.name: path.read_bytes() for path in output.iterdir()},
