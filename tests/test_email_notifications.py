@@ -51,6 +51,22 @@ class ConfigLoadingTests(unittest.TestCase):
             })
         self.assertEqual(config.smtp_password, "from-file")
 
+    def test_missing_password_file_is_incomplete_without_plaintext_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = notify.load_email_config(
+                {
+                    "FORTIOS_SMTP_HOST": "smtp.example.com",
+                    "FORTIOS_SMTP_FROM": "fortios@example.com",
+                    "FORTIOS_SMTP_TO": "alice@example.com",
+                    "FORTIOS_SMTP_USERNAME": "user@example.com",
+                    "FORTIOS_SMTP_PASSWORD": "must-not-be-used",
+                    "FORTIOS_SMTP_PASSWORD_FILE": str(Path(tmp) / "missing-secret"),
+                }
+            )
+        self.assertEqual(config.smtp_password, "")
+        self.assertTrue(config.smtp_password_error)
+        self.assertFalse(config.is_complete())
+
     def test_is_complete_requires_host_from_to(self):
         self.assertFalse(notify.EmailConfig(
             enabled=True, smtp_host="", smtp_port=587, smtp_username="", smtp_password="",

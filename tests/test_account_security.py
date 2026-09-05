@@ -1230,6 +1230,7 @@ class HttpAccountSecurityTests(unittest.TestCase):
             smtp_starttls=False,
             smtp_timeout=5,
             app_url="https://fortiupgrade.example.test/app/",
+            smtp_allow_insecure=True,
         )
 
         with (

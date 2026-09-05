@@ -280,6 +280,7 @@ class EmailConfig:
     smtp_password_error: str = ""
     smtp_security: str = ""
     email_appearance: EmailAppearance | None = None
+    smtp_allow_insecure: bool = False
 
     def is_complete(self) -> bool:
         if not (self.smtp_host and self.smtp_from and self.smtp_to):
@@ -291,6 +292,13 @@ class EmailConfig:
         if not _EMAIL_ADDRESS_RE.match(self.smtp_from.strip()):
             return False
         if not all(_EMAIL_ADDRESS_RE.match(addr.strip()) for addr in self.smtp_to):
+            return False
+        security = self.smtp_security or (
+            "starttls" if self.smtp_starttls else "none"
+        )
+        if security not in {"starttls", "tls", "none"}:
+            return False
+        if security == "none" and not self.smtp_allow_insecure:
             return False
         return not (
             self.smtp_username and (not self.smtp_password or self.smtp_password_error)
@@ -377,29 +385,8 @@ def _env_secret(env: dict[str, str], key: str) -> tuple[str, str, str]:
 
 
 def smtp_password_path(settings_path: Path) -> Path:
+    """Return the historical sidecar location without making it a runtime secret source."""
     return settings_path.with_name(SMTP_PASSWORD_FILENAME)
-
-
-def _atomic_write_private(path: Path, content: str, mode: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_prefix = path.name if path.name.startswith(".") else f".{path.name}"
-    temporary = path.with_name(
-        f"{temporary_prefix}.tmp-{os.getpid()}-{os.urandom(6).hex()}"
-    )
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-    try:
-        os.fchmod(descriptor, mode)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            descriptor = -1
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        path.chmod(mode)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        temporary.unlink(missing_ok=True)
 
 
 def _default_email_appearance() -> EmailAppearance:
@@ -502,14 +489,25 @@ def validate_smtp_settings(payload: Any, *, source: str = "saved") -> SmtpSettin
     )
 
 
+def _smtp_security_from_env(env: dict[str, str]) -> tuple[str, bool]:
+    """Resolve deployment-owned transport security, with the old boolean as compatibility input."""
+    configured = (env.get("FORTIOS_SMTP_SECURITY") or "").strip().lower()
+    if configured:
+        security = configured if configured in {"starttls", "tls", "none"} else "starttls"
+        return security, _env_bool(env, "FORTIOS_SMTP_ALLOW_INSECURE", False)
+    starttls = _env_bool(env, "FORTIOS_SMTP_STARTTLS", True)
+    # Legacy false explicitly requested plaintext, so preserve that behavior while deployments
+    # migrate to FORTIOS_SMTP_SECURITY/FORTIOS_SMTP_ALLOW_INSECURE.
+    return ("starttls", False) if starttls else ("none", True)
+
+
 def _smtp_settings_from_env(env: dict[str, str]) -> SmtpSettings:
-    starttls_value = (env.get("FORTIOS_SMTP_STARTTLS") or "").strip().lower()
-    starttls = starttls_value not in {"0", "false", "no", "off"}
+    security, allow_insecure = _smtp_security_from_env(env)
     return SmtpSettings(
         host=(env.get("FORTIOS_SMTP_HOST") or "").strip(),
         port=_env_int(env, "FORTIOS_SMTP_PORT", 587),
-        security="starttls" if starttls else "none",
-        allow_insecure=not starttls,
+        security=security,
+        allow_insecure=allow_insecure,
         username=(env.get("FORTIOS_SMTP_USERNAME") or "").strip(),
         sender=(env.get("FORTIOS_SMTP_FROM") or "").strip(),
         app_url=(
@@ -521,27 +519,39 @@ def _smtp_settings_from_env(env: dict[str, str]) -> SmtpSettings:
     )
 
 
+def _saved_email_appearance(path: Path) -> EmailAppearance:
+    """Read only the non-secret appearance sidecar.
+
+    Older releases stored transport fields and a web-managed password beside the appearance.
+    Those fields are deliberately ignored: the deployment environment is the sole SMTP transport
+    authority. A malformed or absent appearance falls back to the safe default without copying
+    unknown fields into a response or a new file.
+    """
+    if not path.is_file():
+        return _default_email_appearance()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return _default_email_appearance()
+    if not isinstance(payload, dict):
+        return _default_email_appearance()
+    appearance_payload = payload.get("emailAppearance", payload)
+    try:
+        return validate_email_appearance(appearance_payload)
+    except (TypeError, ValueError):
+        return _default_email_appearance()
+
+
 def _load_smtp_settings_unlocked(
     path: Path, environment: dict[str, str]
 ) -> SmtpSettings:
-    if not path.exists():
-        return _smtp_settings_from_env(environment)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return validate_smtp_settings(payload)
-    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
-        return SmtpSettings(
-            host="",
-            port=587,
-            security="starttls",
-            allow_insecure=False,
-            username="",
-            sender="",
-            app_url="",
-            timeout=10,
-            email_appearance=_default_email_appearance(),
-            source="saved",
-        )
+    # `path` is an appearance sidecar only. Every transport field remains environment-authoritative
+    # even when a legacy full smtp-settings.json or smtp-password file is still present.
+    return replace(
+        _smtp_settings_from_env(environment),
+        email_appearance=_saved_email_appearance(path),
+        source="environment",
+    )
 
 
 def load_smtp_settings(
@@ -551,91 +561,37 @@ def load_smtp_settings(
 ) -> SmtpSettings:
     environment = dict(os.environ) if env is None else env
     with cross_process_lock(path):
-        _recover_smtp_transaction_unlocked(path)
         return _load_smtp_settings_unlocked(path, environment)
 
 
-def _smtp_transaction_paths(path: Path) -> tuple[Path, Path, Path]:
-    secret_path = smtp_password_path(path)
-    return (
-        path.with_name(f".{path.name}.transaction"),
-        path.with_name(f".{path.name}.transaction-backup"),
-        secret_path.with_name(f".{secret_path.name}.transaction-backup"),
+def _appearance_payload_from_settings(payload: Any) -> Any:
+    if not isinstance(payload, dict) or set(payload) != {"emailAppearance"}:
+        raise ValueError(
+            "Configuration SMTP en lecture seule : seul emailAppearance peut être enregistré."
+        )
+    return payload["emailAppearance"]
+
+
+def save_email_appearance(
+    path: Path,
+    payload: Any,
+    *,
+    env: dict[str, str] | None = None,
+) -> SmtpSettings:
+    """Persist only non-secret email appearance preferences.
+
+    SMTP transport and the password are intentionally not accepted here. The sidecar is kept for
+    the display title/name, introduction, and signature used by previews and real emails.
+    """
+    appearance = validate_email_appearance(payload)
+    environment = dict(os.environ) if env is None else env
+    with cross_process_lock(path):
+        write_json(path, {"emailAppearance": appearance.to_payload()})
+    return replace(
+        _smtp_settings_from_env(environment),
+        email_appearance=appearance,
+        source="environment",
     )
-
-
-def _cleanup_smtp_transaction_unlocked(path: Path) -> None:
-    for transaction_path in _smtp_transaction_paths(path):
-        transaction_path.unlink(missing_ok=True)
-
-
-def _recover_smtp_transaction_unlocked(path: Path) -> None:
-    marker, settings_backup, secret_backup = _smtp_transaction_paths(path)
-    if not marker.exists():
-        settings_backup.unlink(missing_ok=True)
-        secret_backup.unlink(missing_ok=True)
-        return
-    try:
-        transaction = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise OSError("Transaction SMTP invalide; récupération impossible.") from error
-    if (
-        not isinstance(transaction, dict)
-        or set(transaction) != {"settingsExisted", "secretExisted"}
-        or not all(isinstance(value, bool) for value in transaction.values())
-    ):
-        raise OSError("Transaction SMTP invalide; récupération impossible.")
-
-    secret_path = smtp_password_path(path)
-    if transaction["settingsExisted"]:
-        if not settings_backup.is_file():
-            raise OSError("Sauvegarde SMTP manquante; récupération impossible.")
-        _atomic_write_private(
-            path, settings_backup.read_text(encoding="utf-8"), 0o640
-        )
-    else:
-        path.unlink(missing_ok=True)
-    if transaction["secretExisted"]:
-        if not secret_backup.is_file():
-            raise OSError("Sauvegarde du secret SMTP manquante; récupération impossible.")
-        _atomic_write_private(
-            secret_path, secret_backup.read_text(encoding="utf-8"), 0o600
-        )
-    else:
-        secret_path.unlink(missing_ok=True)
-    _cleanup_smtp_transaction_unlocked(path)
-
-
-def _begin_smtp_transaction_unlocked(path: Path) -> None:
-    marker, settings_backup, secret_backup = _smtp_transaction_paths(path)
-    _cleanup_smtp_transaction_unlocked(path)
-    settings_existed = path.is_file()
-    secret_path = smtp_password_path(path)
-    secret_existed = secret_path.is_file()
-    try:
-        if settings_existed:
-            _atomic_write_private(
-                settings_backup, path.read_text(encoding="utf-8"), 0o600
-            )
-        if secret_existed:
-            _atomic_write_private(
-                secret_backup, secret_path.read_text(encoding="utf-8"), 0o600
-            )
-        _atomic_write_private(
-            marker,
-            json.dumps(
-                {
-                    "settingsExisted": settings_existed,
-                    "secretExisted": secret_existed,
-                },
-                separators=(",", ":"),
-            )
-            + "\n",
-            0o600,
-        )
-    except BaseException:
-        _cleanup_smtp_transaction_unlocked(path)
-        raise
 
 
 def save_smtp_settings(
@@ -645,47 +601,28 @@ def save_smtp_settings(
     password: str | None = None,
     env: dict[str, str] | None = None,
 ) -> SmtpSettings:
-    settings = validate_smtp_settings(payload)
-    environment = dict(os.environ) if env is None else env
-    if password and (
-        len(password.encode("utf-8")) > 4096
-        or any(character in password for character in ("\0", "\r", "\n"))
-    ):
-        raise ValueError("Mot de passe SMTP invalide.")
-    with cross_process_lock(path):
-        _recover_smtp_transaction_unlocked(path)
-        password_to_save = password or ""
-        if password:
-            password_to_save = password
-        elif not path.exists() and not smtp_password_path(path).exists():
-            bootstrap_password, _bootstrap_file, bootstrap_error = _env_secret(
-                environment, "FORTIOS_SMTP_PASSWORD"
-            )
-            if bootstrap_password and not bootstrap_error:
-                password_to_save = bootstrap_password
-        serialized = json.dumps(
-            settings.to_payload(), indent=2, ensure_ascii=False
-        ) + "\n"
-        if password_to_save:
-            _begin_smtp_transaction_unlocked(path)
-            try:
-                _atomic_write_private(
-                    smtp_password_path(path), password_to_save, 0o600
-                )
-                _atomic_write_private(path, serialized, 0o640)
-            except BaseException:
-                _recover_smtp_transaction_unlocked(path)
-                raise
-            _cleanup_smtp_transaction_unlocked(path)
-        else:
-            _atomic_write_private(path, serialized, 0o640)
-    return settings
+    """Compatibility-shaped adapter for the appearance-only administration endpoint.
+
+    The endpoint signature remains stable for callers during migration, but all transport fields
+    and every browser-managed password are rejected. SMTP infrastructure is deployment-owned.
+    """
+    if password is not None:
+        raise ValueError(
+            "Le mot de passe SMTP doit provenir de FORTIOS_SMTP_PASSWORD_FILE."
+        )
+    return save_email_appearance(
+        path,
+        _appearance_payload_from_settings(payload),
+        env=env,
+    )
 
 
 def delete_smtp_password(path: Path) -> None:
-    with cross_process_lock(path):
-        _recover_smtp_transaction_unlocked(path)
-        smtp_password_path(path).unlink(missing_ok=True)
+    """Reject the removed web-managed secret operation without changing persisted state."""
+    del path
+    raise ValueError(
+        "Le mot de passe SMTP est géré par FORTIOS_SMTP_PASSWORD_FILE."
+    )
 
 
 def load_smtp_snapshot(
@@ -701,34 +638,27 @@ def load_smtp_snapshot(
         DEFAULT_SMTP_SETTINGS_PATH.name
     )
     with cross_process_lock(smtp_path):
-        _recover_smtp_transaction_unlocked(smtp_path)
         smtp = _load_smtp_settings_unlocked(smtp_path, environment)
-        if smtp.source == "saved":
-            secret_path = smtp_password_path(smtp_path)
-            smtp_password, smtp_password_file, smtp_password_error = _env_secret(
-                {"FORTIOS_SMTP_PASSWORD_FILE": str(secret_path)},
-                "FORTIOS_SMTP_PASSWORD",
-            )
-        else:
-            smtp_password, smtp_password_file, smtp_password_error = _env_secret(
-                environment, "FORTIOS_SMTP_PASSWORD"
-            )
+        smtp_password, smtp_password_file, smtp_password_error = _env_secret(
+            environment, "FORTIOS_SMTP_PASSWORD"
+        )
         config = EmailConfig(
-        enabled=settings.enabled,
-        smtp_host=smtp.host,
-        smtp_port=smtp.port,
-        smtp_username=smtp.username,
-        smtp_password=smtp_password,
-        smtp_from=smtp.sender,
-        smtp_to=settings.recipients,
-        smtp_starttls=smtp.security == "starttls",
-        smtp_timeout=smtp.timeout,
-        app_url=smtp.app_url,
-        smtp_password_file=smtp_password_file,
-        smtp_password_error=smtp_password_error,
-        smtp_security=smtp.security,
-        email_appearance=smtp.email_appearance,
-    )
+            enabled=settings.enabled,
+            smtp_host=smtp.host,
+            smtp_port=smtp.port,
+            smtp_username=smtp.username,
+            smtp_password=smtp_password,
+            smtp_from=smtp.sender,
+            smtp_to=settings.recipients,
+            smtp_starttls=smtp.security == "starttls",
+            smtp_timeout=smtp.timeout,
+            app_url=smtp.app_url,
+            smtp_password_file=smtp_password_file,
+            smtp_password_error=smtp_password_error,
+            smtp_security=smtp.security,
+            smtp_allow_insecure=smtp.allow_insecure,
+            email_appearance=smtp.email_appearance,
+        )
     return smtp, config
 
 

@@ -79,6 +79,30 @@ jusqu'au smoke test externe complet. Le mode à volumes Docker nommés reste en
 validation uniquement : le helper hôte nécessite un bind mount explicite et
 stable vers `/var/lib/fortiupgrade/certificates`.
 
+## Renouvellement Let's Encrypt de l'instance personnelle
+
+Nginx sert `certificates/active/`, pas directement la lignée Certbot. Un timer
+Certbot seul ne suffit donc pas. Installer le hook ciblé
+`deploy/certbot-fortiupgrade-deploy.sh` dans
+`/etc/letsencrypt/renewal-hooks/deploy/fortiupgrade` (root, 0755).
+La commande host-root `cert_helper.py renew` lit `RENEWED_LINEAGE`, reprend le
+validateur et l'activation atomique existants, teste/recharge Nginx et restaure
+la paire précédente en cas d'échec. Aucune nouvelle opération du socket Web
+ni permission d'écriture applicative n'est ajoutée. Le verrou exclusif du compte
+sérialise ce renouvellement avec les activations Web et rotations.
+
+Pour cette lignée, garder l'authentificateur Certbot Nginx mais ne pas utiliser
+son `installer = nginx` : il contournerait la paire gérée. Le deploy hook est
+responsable du rechargement. Le job hôte de renouvellement doit prendre le verrou
+infrastructure partagé pendant toute l'opération Certbot (son authentificateur
+modifie temporairement Nginx), sans second timer. Un `renew --dry-run --cert-name
+fortiupgrade.valdev.me` vérifie le challenge sans remplacer le certificat réel;
+ne jamais activer un certificat ACME staging dans la paire de production.
+
+Conserver configuration de renouvellement et hook précédents au rollback. Une
+PKI entreprise n'utilise pas ce hook personnel : suivre son renouvellement autorisé
+et réimporter par `certctl` / l'interface existante avec les mêmes validations.
+
 ## Tester la page `/cert` sans Docker
 
 Le mode local permet de valider le parcours complet dans un navigateur, tout en

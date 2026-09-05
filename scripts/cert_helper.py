@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hmac
 import os
 import re
@@ -448,6 +449,22 @@ class CertificateHelperServer(socketserver.UnixStreamServer):
         print("Erreur de traitement isolée dans le helper certificat.", file=sys.stderr)
 
 
+def renew_from_lineage(processor: CertificateInstallProcessor, lineage: Path) -> dict[str, Any]:
+    """Activate a Certbot renewal through the same validator and rollback as the UI.
+
+    Called only by the host-root CLI, never exposed as a socket operation. The
+    exclusive account lock serializes renewal with web activation and rotation.
+    """
+    payload = {
+        "certificateBase64": base64.b64encode((lineage / "fullchain.pem").read_bytes()).decode("ascii"),
+        "privateKeyBase64": base64.b64encode((lineage / "privkey.pem").read_bytes()).decode("ascii"),
+        "chainBase64": "",
+        "password": "",
+    }
+    with cert_admin.credential_lock(processor.credentials_file, exclusive=True):
+        return processor.install(payload)
+
+
 def positive_identifier(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
@@ -460,6 +477,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("serve")
     subparsers.add_parser("ping")
+    subparsers.add_parser("renew")
     return parser.parse_args(argv)
 
 
@@ -499,6 +517,12 @@ def main(argv: list[str]) -> int:
                 else None
             ),
         )
+        if args.command == "renew":
+            lineage = os.environ.get("RENEWED_LINEAGE", "")
+            if not lineage or processor.reload_callback is None:
+                raise ValueError("RENEWED_LINEAGE et le rechargement Nginx sont requis.")
+            renew_from_lineage(processor, Path(lineage))
+            return 0
         server = CertificateHelperServer(socket_path, processor, socket_gid=gid)
     except (OSError, ValueError) as error:
         print(f"Configuration du helper certificat invalide: {error}", file=sys.stderr)

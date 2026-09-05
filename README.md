@@ -314,15 +314,16 @@ Affiché dans `/app/` sous le bandeau de briefing : section repliable « État d
 
 Le moteur existant de `scripts/fortios_notify.py` est conservé : SMTP stdlib, déduplication, checkpoint, outbox persistante, retry et isolation complète des erreurs SMTP. Aucun daemon ni scheduler supplémentaire n'est nécessaire ; les notifications sont déclenchées par le diff de chaque collecte PSIRT existante.
 
-La configuration est administrée dans **Administration > Notifications** et séparée en trois fichiers persistants du volume `data/` :
+La configuration sépare préférences fonctionnelles et infrastructure SMTP :
 
 - `notification-settings.json` : activation, produits surveillés et destinataires ;
-- `smtp-settings.json` (`0640`) : serveur, port, sécurité, utilisateur, expéditeur, URL applicative, timeout et apparence des emails, sans secret ;
-- `smtp-password` (`0600`) : mot de passe SMTP seul.
+- `smtp-settings.json` : apparence non secrète (nom/titre, introduction, signature), préservée des installations historiques ;
+- environnement : serveur, port, sécurité, utilisateur, expéditeur, URL et timeout ;
+- `FORTIOS_SMTP_PASSWORD_FILE` : unique source du mot de passe, hors `data/` et montée en lecture seule dans les deux conteneurs.
 
-Ces fichiers sont validés et remplacés sous verrou interprocessus. Lorsqu'une sauvegarde modifie à la fois les paramètres et le secret, une transaction privée conserve la paire précédente jusqu'au commit et la restaure automatiquement après une interruption, afin que le runtime ne charge jamais deux générations différentes. Le navigateur ne reçoit jamais le mot de passe ni son chemin, seulement `passwordConfigured`. Un champ mot de passe vide conserve le secret existant ; son remplacement et sa suppression sont des actions distinctes et explicites.
+Les préférences sont validées et remplacées atomiquement sous verrou. Le navigateur ne reçoit jamais le mot de passe ni son chemin, seulement `passwordConfigured`. La console montre l'infrastructure en lecture seule ; l'apparence, les produits et destinataires restent modifiables.
 
-Les variables `FORTIOS_SMTP_HOST`, `FORTIOS_SMTP_PORT`, `FORTIOS_SMTP_USERNAME`, `FORTIOS_SMTP_PASSWORD_FILE`, `FORTIOS_SMTP_STARTTLS`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_SMTP_FROM` et `FORTIOS_APP_URL` restent un **bootstrap initial**. Dès que `smtp-settings.json` existe, la configuration Web persistée devient autoritative. Au premier enregistrement Web, un secret bootstrap valide peut être migré vers `smtp-password` sans ressaisie. Rollback : conserver le volume `data/`; supprimer volontairement `smtp-settings.json` et `smtp-password` réactive le bootstrap par environnement au prochain démarrage.
+Les variables `FORTIOS_SMTP_HOST`, `FORTIOS_SMTP_PORT`, `FORTIOS_SMTP_USERNAME`, `FORTIOS_SMTP_PASSWORD_FILE`, `FORTIOS_SMTP_SECURITY`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_SMTP_FROM` et `FORTIOS_APP_URL` sont autoritatives, même lorsqu'un ancien `smtp-settings.json` existe. Voir [livraison, migration SMTP et rollback](docs/delivery.md) avant de mettre à jour une ancienne console Web SMTP. Ne pas effacer le checkpoint ou l'outbox.
 
 Format persistant :
 
@@ -477,11 +478,14 @@ journalctl -u fortios-catalog-refresh.service -n 50
 
 ## Déploiement Docker / Portainer
 
+**Procédure de livraison actuelle : [docs/delivery.md](docs/delivery.md)** — Git Stack,
+image SHA/digest, secrets read-only, compatibilité des données et récupération admin.
+
 La stack Docker remplace le serveur systemd et ses deux timers par deux
 conteneurs :
 
 - `web` sert l'interface et l'API sur un listener unique, HTTP ou HTTPS ;
-- `scheduler` lance le rafraîchissement complet à 07:00 Europe/Paris et la
+- `scheduler` lance le rafraîchissement complet à 07:00, le rattrapage à 07:45 et la
   passe CVE à 15:30 Europe/Paris.
 
 Les répertoires `data/`, `docs/` et `certificates/` sont des montages persistants. Ils
@@ -513,11 +517,10 @@ le remettre à `0`.
 ### Migration via l'interface web Portainer
 
 Cette procédure est adaptée à une VM interne avec Portainer Community Edition.
-Elle transporte une image complète et utilise des volumes nommés : aucune copie
-manuelle de `data/` ou de `docs/` n'est nécessaire sur la cible. Le catalogue,
-l'état de santé, l'outbox SMTP, les rapports et les images d'alertes sont copiés
-dans l'image au moment de sa construction, puis persistés dans les volumes à son
-premier démarrage.
+Elle transporte une image applicative et utilise des volumes nommés. L'image ne
+transporte pas les données acquises, préférences, secrets ou l'outbox. Restaurer
+séparément la sauvegarde des volumes sur la cible avant de démarrer une migration.
+Un volume vierge n'est pas une restauration et ne doit pas remplacer un volume existant.
 
 #### 1. Télécharger le fichier de Stack puis préparer l'image sur la machine source
 
@@ -566,7 +569,8 @@ bouton d'import Portainer attend l'archive Docker `.tar` produite par
    FORTIOS_SMTP_HOST=smtp.example.com
    FORTIOS_SMTP_PORT=587
    FORTIOS_SMTP_USERNAME=fortiupgrade@example.com
-   FORTIOS_SMTP_PASSWORD_FILE=/run/secrets/fortios-smtp-password
+   FORTIOS_SECRETS_DIR=/etc/fortiupgrade/secrets
+   FORTIOS_SMTP_PASSWORD_FILE=/run/fortios-secrets/smtp-password
    FORTIOS_SMTP_STARTTLS=true
    FORTIOS_SMTP_TIMEOUT=10
    FORTIOS_SMTP_FROM=fortiupgrade@example.com
@@ -579,7 +583,7 @@ bouton d'import Portainer attend l'archive Docker `.tar` produite par
 
    Monter le même fichier secret dans `web` (test depuis l'interface) et
    `scheduler` (envoi après collecte). Exemple pour un fichier hôte déjà créé en
-   mode `0600`, à ajouter sous chacun des deux services :
+   mode `0640` root:PGID (lisible par le processus non-root), si un montage personnalisé est nécessaire :
 
    ```yaml
    volumes:

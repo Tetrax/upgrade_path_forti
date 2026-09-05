@@ -578,11 +578,10 @@ def test_notifications_admin_exposes_grouped_smtp_and_email_appearance(page, for
         "options => options.map(option => option.value)",
     ) == ["starttls", "tls", "none"]
     expect(page.locator("#smtp-advanced-options")).not_to_have_attribute("open", "")
-    delete_password = page.locator("#delete-smtp-password-button")
-    expect(delete_password).to_have_count(1)
-    expect(delete_password).to_be_hidden()
-    expect(page.locator("#smtp-password")).to_have_attribute("autocomplete", "new-password")
-    expect(page.locator("#smtp-password")).to_have_value("")
+    expect(page.locator("#smtp-host")).to_be_disabled()
+    expect(page.locator("#smtp-password")).to_have_count(0)
+    expect(page.locator("#replace-smtp-password-button")).to_have_count(0)
+    expect(page.locator("#delete-smtp-password-button")).to_have_count(0)
 
 
 def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fortios_server):
@@ -784,24 +783,13 @@ def test_email_preview_ignores_stale_responses_after_rapid_scenario_changes(
     )
 
 
-def test_smtp_admin_persists_replaces_and_deletes_secret_without_returning_it(
+def test_smtp_admin_persists_appearance_without_mutating_infrastructure(
     page, fortios_server
 ):
-    first_secret = secrets.token_urlsafe(24)
-    second_secret = secrets.token_urlsafe(24)
     login_cert_admin(page, fortios_server)
     page.click("#notifications-tab")
-
-    page.fill("#smtp-host", "smtp.e2e.example")
-    page.fill("#smtp-port", "587")
-    page.select_option("#smtp-security", "starttls")
-    page.fill("#smtp-username", "smtp-e2e-user")
-    page.click("#replace-smtp-password-button")
-    page.fill("#smtp-password", first_secret)
-    page.fill("#smtp-from-address", "fortiupgrade-e2e@example.test")
-    page.fill("#smtp-app-url", "https://fortiupgrade.e2e.example/app/")
-    page.click("#smtp-advanced-options summary")
-    page.fill("#smtp-timeout", "12")
+    for field in ("host", "port", "security", "username", "from-address", "app-url", "timeout"):
+        expect(page.locator(f"#smtp-{field}")).to_be_disabled()
     page.fill("#email-display-name", "FortiUpgrade E2E")
     page.fill("#email-introduction", "Introduction E2E")
     page.fill("#email-signature", "Signature E2E")
@@ -812,67 +800,18 @@ def test_smtp_admin_persists_replaces_and_deletes_secret_without_returning_it(
     ) as saved_response:
         page.click("#save-smtp-button")
     saved_payload = saved_response.value.json()
-    assert saved_payload["smtp"]["passwordConfigured"] is True
-    assert first_secret not in json.dumps(saved_payload)
+    assert saved_payload["smtp"]["passwordConfigured"] is False
+    assert set(saved_response.value.request.post_data_json) == {"emailAppearance"}
     expect(page.locator("#smtp-message")).to_have_text(
         "Configuration email enregistrée."
     )
-    expect(page.locator("#smtp-password-status")).to_have_text(
-        "Mot de passe configuré"
-    )
-    expect(page.locator("#smtp-password")).to_have_value("")
-    expect(page.locator("#delete-smtp-password-button")).to_be_visible()
-
-    with page.expect_response(
-        lambda response: response.url.endswith("/api/cert/smtp")
-        and response.request.method == "GET"
-    ) as loaded_response:
-        page.reload()
-    loaded_payload = loaded_response.value.json()
-    assert loaded_payload["smtp"]["passwordConfigured"] is True
-    assert first_secret not in json.dumps(loaded_payload)
+    assert not (fortios_server.data_dir / "smtp-password").exists()
+    page.reload()
     expect(page.locator("#admin-view")).to_be_visible()
     page.click("#notifications-tab")
-    expect(page.locator("#smtp-host")).to_have_value("smtp.e2e.example")
     expect(page.locator("#email-display-name")).to_have_value("FortiUpgrade E2E")
-    expect(page.locator("#smtp-password")).to_have_value("")
-
-    page.fill("#smtp-host", "smtp-preserved.e2e.example")
-    with page.expect_response(
-        lambda response: response.url.endswith("/api/cert/smtp")
-        and response.request.method == "POST"
-    ) as preserved_response:
-        page.click("#save-smtp-button")
-    preserved_payload = preserved_response.value.json()
-    assert preserved_payload["smtp"]["passwordConfigured"] is True
-    assert first_secret not in json.dumps(preserved_payload)
-
-    page.click("#replace-smtp-password-button")
-    page.fill("#smtp-password", second_secret)
-    with page.expect_response(
-        lambda response: response.url.endswith("/api/cert/smtp")
-        and response.request.method == "POST"
-    ) as replaced_response:
-        page.click("#save-smtp-button")
-    replaced_payload = replaced_response.value.json()
-    assert replaced_payload["smtp"]["passwordConfigured"] is True
-    assert second_secret not in json.dumps(replaced_payload)
-    expect(page.locator("#smtp-password")).to_have_value("")
-
-    page.once("dialog", lambda dialog: dialog.accept())
-    with page.expect_response(
-        lambda response: response.url.endswith("/api/cert/smtp/password")
-        and response.request.method == "DELETE"
-    ) as deleted_response:
-        page.click("#delete-smtp-password-button")
-    deleted_payload = deleted_response.value.json()
-    assert deleted_payload["smtp"]["passwordConfigured"] is False
-    assert second_secret not in json.dumps(deleted_payload)
-    expect(page.locator("#smtp-message")).to_have_text(
-        "Mot de passe SMTP supprimé."
-    )
-    expect(page.locator("#smtp-password-status")).to_have_text("Non configuré")
-    expect(page.locator("#delete-smtp-password-button")).to_be_hidden()
+    expect(page.locator("#email-introduction")).to_have_value("Introduction E2E")
+    expect(page.locator("#email-signature")).to_have_value("Signature E2E")
 
 
 def test_smtp_admin_is_labelled_and_has_no_horizontal_overflow(page, fortios_server):
@@ -896,7 +835,7 @@ def test_smtp_admin_is_labelled_and_has_no_horizontal_overflow(page, fortios_ser
         "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
     )
     expect(page.locator("#smtp-host")).to_be_visible()
-    expect(page.locator("#replace-smtp-password-button")).to_be_visible()
+    expect(page.locator("#smtp-password-status")).to_be_visible()
     expect(page.locator("#save-smtp-button")).to_be_visible()
 
 

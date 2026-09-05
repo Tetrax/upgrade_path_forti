@@ -313,15 +313,12 @@ function renderSmtpSettings(payload) {
   byId("email-display-name").value = smtp.emailAppearance?.displayName || "FortiUpgrade";
   byId("email-introduction").value = smtp.emailAppearance?.introduction || "";
   byId("email-signature").value = smtp.emailAppearance?.signature || "";
-  byId("smtp-password").value = "";
-  byId("smtp-password-field").hidden = true;
+  for (const id of ["smtp-host", "smtp-port", "smtp-security", "smtp-allow-insecure", "smtp-username", "smtp-from-address", "smtp-app-url", "smtp-timeout"]) {
+    byId(id).disabled = true;
+  }
   byId("smtp-password-status").textContent = smtp.passwordConfigured
     ? "Mot de passe configuré"
     : "Non configuré";
-  byId("replace-smtp-password-button").textContent = smtp.passwordConfigured
-    ? "Remplacer le mot de passe"
-    : "Définir le mot de passe";
-  byId("delete-smtp-password-button").hidden = !smtp.passwordConfigured;
   const operational = smtp.state === "operational";
   byId("smtp-status-label").textContent = operational ? "Opérationnelle" : "Configuration incomplète";
   byId("smtp-status-dot").className = `status-dot ${operational ? "success" : "failure"}`;
@@ -367,15 +364,6 @@ async function loadSmtpSettings() {
 
 function buildSmtpSettingsPayload() {
   return {
-    host: byId("smtp-host").value.trim(),
-    port: Number(byId("smtp-port").value),
-    security: byId("smtp-security").value,
-    allowInsecure: byId("smtp-allow-insecure").checked,
-    username: byId("smtp-username").value.trim(),
-    password: byId("smtp-password").value,
-    from: byId("smtp-from-address").value.trim(),
-    appUrl: byId("smtp-app-url").value.trim(),
-    timeout: Number(byId("smtp-timeout").value),
     emailAppearance: buildEmailAppearancePayload(),
   };
 }
@@ -786,32 +774,6 @@ byId("send-preview-email-button").addEventListener("click", async () => {
 });
 byId("test-email-recipient").addEventListener("input", renderTestSummary);
 
-byId("replace-smtp-password-button").addEventListener("click", () => {
-  const field = byId("smtp-password-field");
-  field.hidden = !field.hidden;
-  if (field.hidden) {
-    byId("smtp-password").value = "";
-  } else {
-    byId("smtp-password").focus();
-  }
-});
-
-byId("delete-smtp-password-button").addEventListener("click", async () => {
-  if (!window.confirm("Supprimer le mot de passe SMTP enregistré ?")) return;
-  const button = byId("delete-smtp-password-button");
-  button.disabled = true;
-  setMessage("smtp-message", "Suppression du mot de passe…");
-  try {
-    const result = await apiRequest("smtp/password", { method: "DELETE" });
-    renderSmtpSettings(result);
-    setMessage("smtp-message", "Mot de passe SMTP supprimé.", true);
-  } catch (error) {
-    setMessage("smtp-message", error.message);
-  } finally {
-    button.disabled = false;
-  }
-});
-
 smtpForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = byId("save-smtp-button");
@@ -826,7 +788,6 @@ smtpForm.addEventListener("submit", async (event) => {
     renderSmtpSettings(result);
     setMessage("smtp-message", "Configuration email enregistrée.", true);
   } catch (error) {
-    byId("smtp-password").value = "";
     setMessage("smtp-message", error.message);
   } finally {
     button.disabled = false;

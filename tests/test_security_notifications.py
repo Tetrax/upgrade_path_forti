@@ -232,6 +232,113 @@ class NotificationSettingsTests(unittest.TestCase):
         self.assertTrue(config.smtp_password_error)
         self.assertEqual(notify.smtp_public_status(config)["state"], "incomplete")
 
+    def test_saved_transport_and_legacy_secret_never_override_environment(self) -> None:
+        settings = notify.validate_notification_settings(settings_payload())
+        saved_payload = {
+            "host": "smtp.saved.example",
+            "port": 2525,
+            "security": "none",
+            "allowInsecure": True,
+            "username": "saved-user",
+            "from": "saved@example.com",
+            "appUrl": "https://saved.example/app/",
+            "timeout": 7,
+            "emailAppearance": {
+                "displayName": "Saved title",
+                "introduction": "Saved introduction",
+                "signature": "Saved signature",
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings_path = root / "smtp-settings.json"
+            settings_path.write_text(json.dumps(saved_payload), encoding="utf-8")
+            legacy_secret = root / "smtp-password"
+            legacy_secret.write_text("legacy-secret", encoding="utf-8")
+            environment_secret = root / "mounted-smtp-secret"
+            environment_secret.write_text("environment-secret", encoding="utf-8")
+            environment = {
+                "FORTIOS_SMTP_HOST": "smtp.environment.example",
+                "FORTIOS_SMTP_PORT": "465",
+                "FORTIOS_SMTP_USERNAME": "environment-user",
+                "FORTIOS_SMTP_STARTTLS": "false",
+                "FORTIOS_SMTP_FROM": "environment@example.com",
+                "FORTIOS_SMTP_TIMEOUT": "19",
+                "FORTIOS_APP_URL": "https://environment.example/app/",
+                "FORTIOS_SMTP_PASSWORD_FILE": str(environment_secret),
+            }
+
+            smtp, config = notify.load_smtp_snapshot(
+                environment,
+                settings=settings,
+                smtp_settings_path=settings_path,
+            )
+            public = notify.smtp_public_settings(smtp, config)
+
+        self.assertEqual(smtp.source, "environment")
+        self.assertEqual(config.smtp_host, "smtp.environment.example")
+        self.assertEqual(config.smtp_port, 465)
+        self.assertEqual(config.smtp_username, "environment-user")
+        self.assertEqual(config.smtp_from, "environment@example.com")
+        self.assertFalse(config.smtp_starttls)
+        self.assertEqual(config.smtp_timeout, 19)
+        self.assertEqual(config.app_url, "https://environment.example/app/")
+        self.assertEqual(config.smtp_password, "environment-secret")
+        self.assertEqual(config.smtp_password_file, str(environment_secret))
+        self.assertEqual(
+            config.email_appearance,
+            notify.EmailAppearance(
+                display_name="Saved title",
+                introduction="Saved introduction",
+                signature="Saved signature",
+            ),
+        )
+        self.assertTrue(public["passwordConfigured"])
+        self.assertNotIn("environment-secret", json.dumps(public))
+        self.assertNotIn("legacy-secret", json.dumps(public))
+        self.assertNotIn(str(environment_secret), json.dumps(public))
+        self.assertNotIn(str(legacy_secret), json.dumps(public))
+
+    def test_web_password_is_rejected_and_never_written(self) -> None:
+        saved_payload = {
+            "emailAppearance": {
+                "displayName": "FortiUpgrade",
+                "introduction": "",
+                "signature": "",
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaisesRegex(
+            ValueError, "FORTIOS_SMTP_PASSWORD_FILE"
+        ):
+            notify.save_smtp_settings(
+                Path(tmp) / "smtp-settings.json",
+                saved_payload,
+                password="browser-secret",
+            )
+
+        self.assertFalse((Path(tmp) / "smtp-password").exists())
+
+    def test_saving_appearance_persists_no_transport_or_secret_fields(self) -> None:
+        appearance = {
+            "displayName": "FortiUpgrade SOC",
+            "introduction": "Introduction contrôlée",
+            "signature": "Équipe sécurité",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings_path = root / "smtp-settings.json"
+            saved = notify.save_smtp_settings(
+                settings_path, {"emailAppearance": appearance}
+            )
+            persisted = json.loads(settings_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved.email_appearance, notify.validate_email_appearance(appearance))
+        self.assertEqual(persisted, {"emailAppearance": appearance})
+        serialized = json.dumps(persisted)
+        self.assertNotIn("smtp.saved", serialized)
+        self.assertNotIn("password", serialized.lower())
+        self.assertFalse((root / "smtp-password").exists())
+
 
 class HighCriticalDetectionTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -392,6 +499,7 @@ class SecurityEmailRenderingTests(unittest.TestCase):
                 smtp_starttls=False,
                 smtp_timeout=3,
                 app_url="https://upgrade.example/app/",
+                smtp_allow_insecure=True,
             )
             self.assertTrue(notify.send_email(config, subject, text_body, html_body))
         self.assertEqual(len(_SmtpHandler.messages), 1)

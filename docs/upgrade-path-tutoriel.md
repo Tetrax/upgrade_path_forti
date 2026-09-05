@@ -2,6 +2,8 @@
 
 > Déploiement initial, HTTPS, mise à jour et dépannage avec Portainer Repository et l’image GHCR.
 
+> Livraison actuelle, migration de l'ancienne console SMTP et rollback : [delivery.md](delivery.md).
+
 **Sommaire**
 
 1. Prérequis
@@ -92,12 +94,13 @@ FORTIOS_DOCS_DIR=/opt/upgrade_path/docs
 FORTIOS_CERTS_DIR=/opt/upgrade_path/certificates
 ```
 
-Les variables SMTP de Stack sont optionnelles et servent uniquement au bootstrap initial, avec le
-password fourni par `FORTIOS_SMTP_PASSWORD_FILE`. Après le premier démarrage, **Administration >
-Notifications** devient la console autoritative pour le serveur, le port, STARTTLS/TLS implicite,
-l'utilisateur, le secret, l'expéditeur, l'URL, le timeout, l'apparence, l'activation, les produits
-surveillés et les destinataires. Le secret est stocké séparément dans le volume `data/`, n'est jamais
-retourné au navigateur et reste inchangé lorsque le champ mot de passe est laissé vide.
+Les variables SMTP de Stack sont optionnelles pour la collecte, mais restent autoritatives pour
+l'envoi. Le password est fourni exclusivement par `FORTIOS_SMTP_PASSWORD_FILE` dans le répertoire
+`FORTIOS_SECRETS_DIR`, monté en lecture seule à `/run/fortios-secrets` dans les deux services.
+**Administration > Notifications** gère l'apparence, l'activation, les produits et destinataires;
+l'infrastructure est en lecture seule. Avant un upgrade de l'ancienne console, migrer ses paramètres
+vers l'environnement et son secret hors du volume `data/`, en conservant une sauvegarde protégée.
+Épingler `FORTIOS_IMAGE=ghcr.io/tetrax/upgrade_path_forti:<SHA-de-merge>` pour une mise à jour reproductible.
 
 6. Cliquer **Deploy the stack**.
 

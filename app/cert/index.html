@@ -358,6 +358,7 @@
                 <div>
                   <p class="eyebrow">Infrastructure email</p>
                   <h3 class="panel-title">Configuration SMTP</h3>
+                  <p class="panel-copy">Gérée par l’environnement de déploiement. Secret fourni exclusivement par un fichier monté en lecture seule.</p>
                 </div>
                 <p class="smtp-status"><span class="status-dot neutral" id="smtp-status-dot" aria-hidden="true"></span><strong id="smtp-status-label">Chargement…</strong></p>
               </div>
@@ -393,15 +394,6 @@
                     <strong>Mot de passe</strong>
                     <p id="smtp-password-status">Non configuré</p>
                   </div>
-                  <div class="secret-actions">
-                    <button class="btn" id="replace-smtp-password-button" type="button">Définir le mot de passe</button>
-                    <button class="btn recipient-remove" id="delete-smtp-password-button" type="button" hidden>Supprimer le mot de passe</button>
-                  </div>
-                </div>
-                <div class="field" id="smtp-password-field" hidden>
-                  <label for="smtp-password">Nouveau mot de passe SMTP</label>
-                  <input id="smtp-password" type="password" autocomplete="new-password" maxlength="4096">
-                  <span class="field-help">Laisser vide conserve le secret actuel.</span>
                 </div>
                 <div class="field">
                   <label for="smtp-from-address">Expéditeur</label>
