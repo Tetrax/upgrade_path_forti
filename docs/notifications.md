@@ -58,7 +58,7 @@ The public settings response exposes transport metadata and `passwordConfigured`
 Use the repository test interpreter and the focused notification suite:
 
 ```text
-/home/tetrax/workspace/upgrade_path_admin_password_change/.venv-test/bin/python -m pytest -q \
+.venv-test/bin/python -m pytest -q \
   tests/test_security_notifications.py \
   tests/test_email_notifications.py \
   tests/test_notify_outbox.py \

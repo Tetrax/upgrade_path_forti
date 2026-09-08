@@ -2,6 +2,12 @@
 
 Outil interne pour afficher le chemin de mise à niveau FortiOS recommandé par Fortinet, puis ajouter les informations utiles à l'ingénieur : problèmes connus, changements de comportement et actions obligatoires.
 
+La ligne autoritative du produit est **`main`** du dépôt
+`git@github.com:Tetrax/upgrade_path_forti.git`. Les worktrees spécialisés sont des
+archives de travail, pas des variantes à déployer. Certificats, reverse proxy,
+notifications High/Critical et SMTP sont intégrés dans cette même ligne.
+Voir la [cartographie de convergence et les validations](docs/delivery.md#convergence-des-branches).
+
 ## Structure
 
 ```text
@@ -389,9 +395,9 @@ Désactiver les notifications suspend les envois sans supprimer l'outbox ; les �
 
 Chaque collecte réserve («&nbsp;réclame&nbsp;») les entrées de l'outbox qui ne sont pas déjà tenues par une autre exécution encore en cours (`claimedBy`/`claimedAt`, expire après 10&nbsp;minutes — largement au-delà du pire timeout SMTP réaliste — pour qu'une exécution plantée ne bloque pas indéfiniment les tentatives suivantes) : deux collectes qui se chevauchent ne peuvent donc jamais envoyer le même événement en double, la seconde ne réclamant rien de ce que la première tient déjà. Sur un succès d'envoi, les événements réclamés sont retirés de l'outbox et leur clé passe dans `sentKeys` ; sur un échec, la réclamation est simplement relâchée pour la prochaine collecte.
 
-Un fichier `fortios-notify-history.json` corrompu, tronqué ou de structure invalide est traité comme un état vide (jamais une exception), et archivé aside (`fortios-notify-history.json.corrupt-<timestamp>`) pour diagnostic. **Procédure de récupération** en cas de doute sur son intégrité : supprimer ou déplacer le fichier — la prochaine collecte en régénère un vide automatiquement ; au pire, cela ne fait que renvoyer une notification déjà connue une fois de plus (jamais en perdre), puisque les événements eux-mêmes restent dérivés du catalogue et de l'état de santé, pas du fichier de dédoublonnage lui-même.
+Un fichier `fortios-notify-history.json` corrompu, tronqué ou de structure invalide est archivé aside (`fortios-notify-history.json.corrupt-<timestamp>`) pour diagnostic. **Récupération :** suspendre les envois et conserver ce fichier ainsi que la dernière sauvegarde valide. Réconcilier checkpoint, outbox et clés d'envoi avant reprise. Ne pas supprimer l'historique comme remède : un nouvel amorçage est silencieux et ne reconstruit pas les événements en attente perdus ; restaurer un ancien checkpoint sans réconciliation peut aussi rejouer des événements déjà envoyés. Voir [rollback et données persistantes](docs/delivery.md#update--rollback).
 
-L'interface privée `/cert/` expose les onglets **Certificats** et **Notifications** avec la même session administrateur, le même contrôle d'origine et le même jeton CSRF. La section **Configuration SMTP** prend en charge STARTTLS, TLS implicite et le mode clair uniquement après confirmation explicite. Elle permet aussi une introduction, un titre et une signature ; ces champs entourent le contenu de sécurité généré et ne peuvent pas retirer les CVE, produits, versions, avertissements ou liens obligatoires.
+L'interface privée `/cert/` expose les onglets **Certificats** et **Notifications** avec la même session administrateur, le même contrôle d'origine et le même jeton CSRF. La section **Configuration SMTP** affiche en lecture seule le transport fourni par le déploiement : STARTTLS, TLS implicite, ou mode clair explicitement autorisé dans l'environnement. Elle permet de modifier l'apparence (introduction, nom et signature) ; ces champs entourent le contenu de sécurité généré et ne peuvent pas retirer les CVE, produits, versions, avertissements ou liens obligatoires.
 
 Dans **Apparence des emails**, les scénarios fictifs **1 CVE**, **Plusieurs CVE** et **Multi-produits** sont construits uniquement en mémoire par le backend. La route administrateur `/api/cert/notifications/preview` transmet ces événements au renderer autoritatif `fortios_notify.compose_email()` et retourne son vrai sujet, son HTML et son alternative texte ; l'interface n'embarque aucun second template. `/api/cert/notifications/send-preview` recompose les mêmes données et les envoie avec le moteur SMTP existant, même lorsque les notifications sont désactivées. Cet envoi de prévisualisation reste soumis à la session, au contrôle d'origine, au CSRF et au rate limiting des tests SMTP. Il n'écrit ni catalogue, ni paramètres de notification, ni checkpoint, ni outbox, ni `sentKeys`, ni `eolState`. Rollback : retirer ces deux routes et les contrôles d'aperçu ne nécessite aucune migration de données persistantes.
 
