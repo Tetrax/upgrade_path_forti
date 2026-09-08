@@ -1,5 +1,132 @@
 # Portainer/VPS delivery — operational gates
 
+## Convergence des branches
+
+Audit du 2026-09-08 après `git fetch origin` : **`main` est la seule ligne
+autoritative**. Le socle `d2b8f9725c77df18175a8d08e416c199fd5cec1d` contient déjà
+les fonctionnalités des PR #3 à #11 (la PR #9 est remplacée par #10) et correspond au code du runtime personnel. La branche temporaire
+`integration/fortiupgrade-convergence`, worktree
+`/home/tetrax/workspace/upgrade_path_convergence`, part de ce socle, intègre par
+merge les instructions `docs/agent-closeout-coherence@35f743b`, puis clôt les
+incohérences documentaires et protège l'état de notification corrompu contre une
+réinitialisation silencieuse. Elle ne crée pas une seconde ligne de release.
+
+### Cartographie Git initiale
+
+Tous les worktrees appartiennent à `git@github.com:Tetrax/upgrade_path_forti.git`.
+Ancêtre commun des trois worktrees demandés : `13fd5bb3170aa9ed2c42a475de26eb89355866dc`.
+Certificats/CVE partagent ensuite `0ab5c6330ca3223a910d4b73801f17407f379d50`.
+Le stash commun est vide. Avance/retard ci-dessous : état avant cette clôture.
+
+| Worktree / branche | HEAD | Upstream ; avance/retard | Relation à main |
+| --- | --- | --- | --- |
+| `upgrade_path` / `fix/upgrade-path-no-downgrades` | `13fd5bb` | `origin/fix/upgrade-path-no-downgrades` ; 0/10 | ancêtre ; 0/28 |
+| `upgrade_path_cert_proxy` / `fix/cert-admin-reverse-proxy` | `ced3acc` | `origin/fix/upgrade-path-no-downgrades` ; 1/0 | 1/18 ; patch déjà adapté |
+| `upgrade_path_cve_notifications` / `feature/cve-email-alerts` | `91845db` | `origin/feature/cve-email-alerts` ; 0/0 | ancêtre ; 0/13 |
+
+`git range-diff ced3acc^..ced3acc 6355cf0^..6355cf0` ne montre que les
+adaptations de contexte SMTP/imports : le certificat a été repris par `6355cf0`
+dans la PR #4. `git cherry` seul ne reconnaît pas cette équivalence contextualisée.
+Rejouer `ced3acc` ferait inutilement conflit avec le serveur et les Compose intégrés.
+La PR #9 (`8a20432`, rotation du mot de passe) est fermée et remplacée par la
+PR #10 (`c17c995`, compte et sécurité), pas une fonctionnalité abandonnée.
+
+Les autres worktrees actifs ont été vérifiés : compte (`c17c995`), First Run
+(`bd65829`), SMTP (`636ab81`), aperçu (`aa272cd`), CSP (`bad99f7`), livraison
+(`d2b8f97`) et releases détachées sont propres et déjà intégrés. La branche
+historique locale `main@7b6cffd` est obsolète ; la référence distante actualisée
+fait foi. Les anciens worktrees `/opt/data/worktrees/*` signalés prunables et les
+branches shelved/WIP restent conservés, sans nettoyage destructif.
+
+### Matrice fonctionnelle et mécanismes retenus
+
+| Responsabilité | Socle historique `13fd5bb` | Certificats `ced3acc` | CVE `91845db` | main retenue |
+| --- | --- | --- | --- | --- |
+| Serveur/API/UI, collecte Fortinet, catalogue, chemins, guards | présents | conservés | conservés | `fortios_server.py`, `fortios_watch.py`, catalogue commun |
+| Certificats | CLI/TLS direct | helper Nginx + proxy fiable | même helper adapté | `certctl.py` valide ; helper active/recharge/rollback ; renouvellement PR #11 |
+| Notifications historiques | versions/EOL/collecte/outbox | conservées | checkpoint et High/Critical | un seul `fortios_notify.py`, catégories historiques conservées |
+| CVE | règles historiques plus bruyantes | idem | High/Critical et escalades uniquement | règles AGENTS, multi-produits regroupés, backfill silencieux |
+| SMTP | environnement historique | idem | préférences métier séparées | transport environnement + secret read-only ; ancienne console PR #5 remplacée proprement par PR #11 |
+| Persistance | data/docs/certificates | certificats read-only via helper | checkpoint/outbox dans data | mêmes arbres, apparence conservée, aucune migration nouvelle |
+| Interface | chemins/alertes/CVE/état | certificats derrière proxy | onglet notifications | First Run, compte, certificats, notifications, diagnostic SMTP et aperçu unique intégrés |
+
+Le scheduler existant et l'import de compatibilité restent les orchestrateurs
+de leurs étapes, pas des moteurs concurrents. Les modes TLS direct et proxy
+réutilisent le même validateur ; leurs frontières de privilèges restent distinctes.
+
+### Changements locaux historiques préservés
+
+Le worktree `upgrade_path` conserve sans modification 18 fichiers suivis modifiés
+et `AGENTS.md` non suivi. Ils ne doivent ni être committés en masse ni servir de
+source de déploiement :
+
+- First Run/admin : `app/cert/{cert.css,cert.js,index.html}`, `scripts/cert_admin.py`,
+  `scripts/fortios_server.py`, `docker/entrypoint.sh`, `tests/test_cert_admin.py`,
+  `tests/test_cert_web.py`, `tests/e2e/{conftest.py,test_browser_flows.py}` ; les
+  comportements validés sont déjà livrés par les PR #8/#10, avec le proxy et SMTP.
+- Documentation/configuration ancienne : `README.md`, les deux Compose Portainer,
+  `docs/certificates.md`, `docs/upgrade-path-tutoriel.md` et son PDF ; ne pas
+  réintroduire les anciennes instructions SMTP ni les paramètres de site.
+- Données acquises : `data/fortios-data.generated.json`, `docs/last_report.md` ;
+  conserver sur place, sans écraser le catalogue runtime par cet ancien export.
+- `AGENTS.md` : intégré depuis son commit versionné `35f743b`, pas copié entre worktrees.
+
+Ces restes sont un filet historique explicitement non autoritatif, pas une
+divergence de fonctionnalités à merger. Les branches historiques sont conservées.
+
+### Recette de convergence
+
+Baseline locale sur le socle intégré avec les règles fusionnées, avant le
+correctif de conservation des états corrompus :
+
+- `python3 -m unittest discover -s tests` : 512 tests, succès, 1 skip root attendu ;
+  `sudo python3 -m unittest tests.test_certctl -q` : 28 tests réussis, dont le test
+  de transfert de permissions absent de la suite non-root.
+- Node via `tests.test_advisory_matching` : 2 tests réussis ; pas de package npm.
+- Playwright Chromium : 31 tests réussis (API/admin/preview/chemins et UI).
+- Ruff scripts/tests, compilation Python et syntaxe shell : succès.
+- Build Docker `fortiupgrade:convergence-d2b8f97` : succès ; base épinglée par digest.
+- Copie opaque des arbres runtime data/docs/certificates, sans copier SMTP :
+  démarrage TLS candidate, recréation puis rollback vers l'image actuelle ;
+  healthcheck et cinq routes réussis à chaque étape, empreintes de tous les
+  fichiers persistants inchangées (hors locks). Checkpoint, sentKeys, préférences,
+  apparence, credentials et certificats conservés. Une sentinelle d'outbox en
+  attente a été ajoutée uniquement à la copie pour tester le cas non vide.
+- Isolation Docker `--network none`, aucun email possible ; copie supprimée
+  après recette et données vivantes byte-identiques avant/après.
+- Runtime existant : healthcheck réussi, Nginx valide, helper actif, HTTPS `/app/`
+  répond 200. Les parcours authentifiés complets restent validés en isolation,
+  sans réinitialisation du compte personnel ni revendication d'accès entreprise.
+
+Le correctif additionnel interdit de remplacer silencieusement un historique
+notifications invalide par un état vide. Recette finale locale : 514 tests
+unitaires (1 skip non-root), 28 tests certificats root, Ruff et 31 Playwright
+réussis. Image candidate reconstruite ; copie persistante TLS, recréation et
+rollback réussis de nouveau avec empreintes inchangées et outbox non vide.
+
+Le correctif interdit de remplacer silencieusement un historique
+notifications invalide par un état vide. Un fichier absent reste une première
+activation silencieuse ; un fichier existant invalide suspend les notifications
+sans modifier ses octets, tout en laissant la collecte continuer. Il ne modifie
+pas le schéma des états valides. Une récupération manuelle doit réconcilier
+checkpoint/outbox/sentKeys avant reprise ; ne pas supprimer le fichier pour
+faire disparaître l'erreur.
+
+Runtime relevé avant livraison : code `d2b8f97`,
+image `sha256:d6c520363553ddeb2bfdb3c00157cecfdc507987f30f9fae43db1af9096b839f`.
+La release de convergence et le runtime sont volontairement distingués. La
+candidate ajoute la protection des états corrompus ; elle n'est pas déployée
+automatiquement : le login administrateur personnel n'est pas vérifiable avec
+le secret archivé, et aucun accès entreprise actuel n'est disponible. Ces limites
+ne bloquent pas la livraison des sources et de l'image, testées en isolation.
+La bascule attend une recette authentifiée avec le compte actuel, sans reset
+automatique. Utiliser l'image GHCR du SHA de merge de la PR #12 après CI verte,
+sur web et scheduler ; le code du helper n'est pas modifié par cette PR.
+Pour cette bascule, suivre les gates ci-dessous ; conserver l'image et les
+données courantes pour rollback, sans restaurer aveuglément un ancien checkpoint.
+Un ancien binaire ne doit pas être relancé sur un état corrompu sans cette
+réconciliation : son comportement historique pouvait réamorcer un état vide.
+
 ## Source of truth and prerequisites
 
 Use `docker-compose.portainer.yml` as a **Git Stack**, repository

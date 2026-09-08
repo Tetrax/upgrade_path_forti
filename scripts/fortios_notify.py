@@ -33,7 +33,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fortios_watch import (
     cross_process_lock,
     parse_health_timestamp,
-    read_json_tolerant,
     sanitize_health_error,
     utc_now,
     write_json,
@@ -887,20 +886,34 @@ def _empty_notify_state() -> dict[str, Any]:
     return {"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": None}
 
 
+class NotifyStateError(RuntimeError):
+    """The existing notification state cannot be trusted or read safely."""
+
+
 def load_notify_state(path: Path) -> dict[str, Any]:
-    """Tolerant read: corrupt JSON, wrong top-level type, or a malformed outbox/sentKeys/
-    eolState/checkpoint shape is treated as a fresh empty state rather than raised (see
-    fortios_watch.read_json_tolerant()) -- notifications are entirely best-effort and must never
-    break the daily collection they're reporting on. The bad file is archived aside for
-    diagnosis, same as the health-tracking file. A corrupt or absent checkpoint specifically just
-    means the next diff falls back to this run's own before/after snapshot, same as a genuine
-    first activation -- never a crash, and never a spam-the-whole-history event either.
+    """Load notification state without ever rewriting an existing untrusted file.
+
+    Only a genuinely absent file is a first-run empty state. A present file that cannot be read or
+    validated raises ``NotifyStateError`` so callers can isolate notifications without discarding
+    a valid outbox or advancing a checkpoint from a fabricated empty state.
     """
-    state = read_json_tolerant(
-        path, None, validate=_is_valid_notify_state, archive_suffix="corrupt"
-    )
-    if state is None:
-        return _empty_notify_state()
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            state = json.load(handle)
+    except FileNotFoundError as error:
+        # A missing path is the only first-run case. lexists() keeps a dangling symlink (an
+        # existing but unreadable state entry) fail-closed instead of silently resetting it.
+        if not os.path.lexists(path):
+            return _empty_notify_state()
+        raise NotifyStateError(
+            f"État des notifications illisible ({type(error).__name__})."
+        ) from error
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        raise NotifyStateError(
+            f"État des notifications illisible ({type(error).__name__})."
+        ) from error
+    if not _is_valid_notify_state(state):
+        raise NotifyStateError("État des notifications invalide.")
     return {
         "sentKeys": dict(state.get("sentKeys", {})),
         "outbox": [dict(entry) for entry in state.get("outbox", [])],

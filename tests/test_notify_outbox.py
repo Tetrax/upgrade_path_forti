@@ -141,22 +141,25 @@ class OutboxLifecycleTests(unittest.TestCase):
             claimed_counts = sorted(count for _, count in results)
             self.assertEqual(claimed_counts, [0, 1], "exactly one process must claim the event, the other must get nothing")
 
-    def test_recovery_from_corrupt_outbox_file(self):
+    def test_corrupt_outbox_file_is_preserved_and_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             path.write_text('{"outbox": "not-a-list", "sentKeys": {}}', encoding="utf-8")
-            event = notify.NotificationEvent(category="DAILY", dedup_key="k1", summary="x")
-            claimed = notify.enqueue_and_claim(path, [event], claimant="run-1")
-            self.assertEqual(len(claimed), 1, "a corrupt state file must be treated as empty, not raise")
+            raw = path.read_bytes()
+            with self.assertRaises(notify.NotifyStateError):
+                notify.load_notify_state(path)
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertEqual(list(Path(tmp).glob("notify.json.corrupt-*")), [])
 
-    def test_recovery_from_truncated_history_file(self):
+    def test_truncated_history_file_is_preserved_and_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             path.write_text('{"sentKeys": {"k0": "2026-07-01', encoding="utf-8")  # truncated mid-value
-            state = notify.load_notify_state(path)
-            self.assertEqual(state, {"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": None})
-            archived = list(Path(tmp).glob("notify.json.corrupt-*"))
-            self.assertEqual(len(archived), 1)
+            raw = path.read_bytes()
+            with self.assertRaises(notify.NotifyStateError):
+                notify.load_notify_state(path)
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertEqual(list(Path(tmp).glob("notify.json.corrupt-*")), [])
 
     def test_record_sent_events_is_still_the_public_name(self):
         """Backward-compat: existing callers/tests refer to this as record_sent_events()."""
@@ -174,21 +177,25 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
     since the bad entry would keep being re-read and re-crashing every single run.
     """
 
+    def _assert_rejected_without_mutation(self, path):
+        raw = path.read_bytes()
+        with self.assertRaises(notify.NotifyStateError):
+            notify.load_notify_state(path)
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(list(path.parent.glob(f"{path.name}.corrupt-*")), [])
+
     def test_outbox_entry_missing_category_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [{"dedupKey": "k1"}], "eolState": {}}), encoding="utf-8")
-            state = notify.load_notify_state(path)
-            self.assertEqual(state, {"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": None})
-            archived = list(Path(tmp).glob("notify.json.corrupt-*"))
-            self.assertEqual(len(archived), 1)
+            self._assert_rejected_without_mutation(path)
 
     def test_outbox_entry_missing_summary_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             entry = {"category": "DAILY", "dedupKey": "k1", "queuedAt": "2026-07-17T07:00:00Z", "claimedBy": None, "claimedAt": None}
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_outbox_entry_missing_claimed_by_key_is_rejected(self):
         """claimedBy/claimedAt must be PRESENT as keys (even if their value is null) -- not just
@@ -197,7 +204,7 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
             path = Path(tmp) / "notify.json"
             entry = {"category": "DAILY", "dedupKey": "k1", "summary": "x", "queuedAt": "2026-07-17T07:00:00Z", "claimedAt": None}
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_outbox_entry_with_wrong_type_category_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -207,7 +214,7 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
                 "queuedAt": "2026-07-17T07:00:00Z", "claimedBy": None, "claimedAt": None,
             }
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_outbox_entry_with_wrong_type_claimed_by_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,7 +224,7 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
                 "queuedAt": "2026-07-17T07:00:00Z", "claimedBy": 42, "claimedAt": None,
             }
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_outbox_entry_with_empty_dedup_key_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -227,7 +234,7 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
                 "queuedAt": "2026-07-17T07:00:00Z", "claimedBy": None, "claimedAt": None,
             }
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_a_fully_valid_outbox_entry_still_passes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -255,42 +262,42 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(claimedBy="dead-run", claimedAt=None)
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_claimed_at_set_with_claimed_by_null_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(claimedBy=None, claimedAt="2026-07-17T07:00:00Z")
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_invalid_claimed_at_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(claimedBy="run-1", claimedAt="not-a-date")
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_naive_claimed_at_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(claimedBy="run-1", claimedAt="2026-07-17T07:00:00")
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_invalid_queued_at_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(queuedAt="not-a-date")
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_naive_queued_at_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(queuedAt="2026-07-17T07:00:00")
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_unknown_category_is_rejected(self):
         """The literal bug report: an unrecognized category would silently vanish from
@@ -300,28 +307,28 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(category="TYPO")
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_empty_category_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(category="")
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_whitespace_only_dedup_key_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(dedupKey="   ")
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_whitespace_only_summary_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             entry = self._base_entry(summary="   ")
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["outbox"], [])
+            self._assert_rejected_without_mutation(path)
 
     def test_a_valid_unclaimed_entry_is_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -337,16 +344,15 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
             self.assertEqual(len(notify.load_notify_state(path)["outbox"]), 1)
 
-    def test_main_recovers_automatically_from_an_unexpirable_reservation(self):
-        """End-to-end: a notify-history file whose only outbox entry is claimed forever (no
-        claimedAt to ever expire it) must self-heal to an empty outbox rather than leaving the
-        notification pipeline permanently stuck."""
+    def test_main_preserves_an_unexpirable_reservation_and_returns_success(self):
+        """End-to-end: a corrupt notify-history file must not be reset by the collection path."""
         with tempfile.TemporaryDirectory() as tmp:
             base_path = Path(tmp) / "state.json"
             fw.write_json(base_path, fw.normalize_state({}))
             history_path = Path(tmp) / "notify-history.json"
             entry = self._base_entry(claimedBy="dead-run", claimedAt=None)
             history_path.write_text(json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}), encoding="utf-8")
+            raw = history_path.read_bytes()
 
             env = {
                 "FORTIOS_EMAIL_ENABLED": "true", "FORTIOS_SMTP_HOST": "smtp.example.com",
@@ -360,14 +366,14 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
                     "--notify-history-output", str(history_path),
                 ])
             self.assertEqual(exit_code, 0)
-            state = notify.load_notify_state(history_path)
-            self.assertEqual(state["outbox"], [], "the unexpirable reservation must be dropped, not left stuck forever")
+            self.assertEqual(history_path.read_bytes(), raw)
+            self.assertEqual(list(Path(tmp).glob("notify-history.json.corrupt-*")), [])
 
     def test_eol_state_non_boolean_value_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [], "eolState": {"7.6": "true"}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["eolState"], {})
+            self._assert_rejected_without_mutation(path)
 
     def test_eol_state_int_value_is_rejected(self):
         """bool is a subclass of int, but the reverse isn't true -- 1/0 must not be accepted as
@@ -375,23 +381,23 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             path.write_text(json.dumps({"sentKeys": {}, "outbox": [], "eolState": {"7.6": 1}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["eolState"], {})
+            self._assert_rejected_without_mutation(path)
 
     def test_sent_keys_wrong_value_type_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             path.write_text(json.dumps({"sentKeys": {"k1": 12345}, "outbox": [], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path)["sentKeys"], {})
+            self._assert_rejected_without_mutation(path)
 
     def test_sent_keys_wrong_top_level_type_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
             path.write_text(json.dumps({"sentKeys": ["k1", "k2"], "outbox": [], "eolState": {}}), encoding="utf-8")
-            self.assertEqual(notify.load_notify_state(path), {"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": None})
+            self._assert_rejected_without_mutation(path)
 
-    def test_main_completes_despite_a_malformed_outbox_entry(self):
+    def test_main_completes_without_mutating_a_malformed_outbox_entry(self):
         """End-to-end: a notify-history file with a partial outbox entry must never crash main()
-        or leave notifications permanently stuck -- it self-heals to an empty state instead.
+        or reset the state.
         Email must be enabled for this run, otherwise main() never touches the notify-history
         file at all and the test would prove nothing.
         """
@@ -400,6 +406,7 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
             fw.write_json(base_path, fw.normalize_state({}))
             history_path = Path(tmp) / "notify-history.json"
             history_path.write_text(json.dumps({"sentKeys": {}, "outbox": [{"dedupKey": "k1"}], "eolState": {}}), encoding="utf-8")
+            raw = history_path.read_bytes()
 
             env = {
                 "FORTIOS_EMAIL_ENABLED": "true", "FORTIOS_SMTP_HOST": "smtp.example.com",
@@ -413,8 +420,8 @@ class NotifyStateDeepValidationTests(unittest.TestCase):
                     "--notify-history-output", str(history_path),
                 ])
             self.assertEqual(exit_code, 0)
-            state = notify.load_notify_state(history_path)
-            self.assertEqual(state["outbox"], [], "the malformed entry must be dropped, not crash the run")
+            self.assertEqual(history_path.read_bytes(), raw)
+            self.assertEqual(list(Path(tmp).glob("notify-history.json.corrupt-*")), [])
 
 
 class EolEventDerivationTests(unittest.TestCase):
@@ -623,17 +630,44 @@ class CommitEventsWithCheckpointTests(unittest.TestCase):
             claimed_counts = sorted(count for _, count in results)
             self.assertEqual(claimed_counts, [0, 1], "exactly one process must claim the event, the other must get nothing")
 
-    def test_corrupt_checkpoint_is_treated_as_absent(self):
+    def test_corrupt_checkpoint_is_rejected_without_resetting_valid_outbox(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "notify.json"
-            path.write_text(
-                json.dumps({"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": {"versionsByProduct": "not-a-dict"}}),
-                encoding="utf-8",
-            )
-            state = notify.load_notify_state(path)
-            self.assertIsNone(state["checkpoint"])
-            archived = list(Path(tmp).glob("notify.json.corrupt-*"))
-            self.assertEqual(len(archived), 1)
+            payload = {
+                "sentKeys": {},
+                "outbox": [{
+                    "category": "DAILY", "dedupKey": "k1", "summary": "x",
+                    "queuedAt": "2026-07-17T07:00:00Z", "claimedBy": None, "claimedAt": None,
+                }],
+                "eolState": {},
+                "checkpoint": {"versionsByProduct": "not-a-dict"},
+            }
+            raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            path.write_bytes(raw)
+
+            with self.assertRaises(notify.NotifyStateError):
+                notify.load_notify_state(path)
+
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertEqual(list(Path(tmp).glob("notify.json.corrupt-*")), [])
+
+    def test_unreadable_existing_state_is_rejected_without_replacing_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify.json"
+            raw = b'{"sentKeys":{},"outbox":[],"eolState":{}}\n'
+            path.write_bytes(raw)
+            original_open = Path.open
+
+            def deny_target(self_path, *args, **kwargs):
+                if self_path == path:
+                    raise PermissionError(f"permission denied: {path}")
+                return original_open(self_path, *args, **kwargs)
+
+            with patch.object(Path, "open", deny_target), self.assertRaises(notify.NotifyStateError):
+                notify.load_notify_state(path)
+
+            self.assertEqual(path.read_bytes(), raw)
+            self.assertEqual(list(Path(tmp).glob("notify.json.corrupt-*")), [])
 
     def test_missing_checkpoint_key_defaults_to_none(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -667,6 +701,40 @@ class NotifyCheckpointMainIntegrationTests(unittest.TestCase):
             "--advisories-csv", str(tmp / "no-advisories.csv"),
             "--upgrade-exports", str(tmp / "no-upgrade-exports"),
         ])
+
+    def test_corrupt_notification_state_does_not_fail_collection_or_mutate_on_retries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            settings_path = tmp / "notification-settings.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            payload = {
+                "sentKeys": {},
+                "outbox": [{
+                    "category": "DAILY", "dedupKey": "k1", "summary": "x",
+                    "queuedAt": "2026-07-17T07:00:00Z", "claimedBy": None, "claimedAt": None,
+                }],
+                "eolState": {},
+                "checkpoint": {"versionsByProduct": "not-a-dict"},
+            }
+            raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            history_path.write_bytes(raw)
+
+            arguments = [
+                "--skip-network",
+                "--base", str(base_path), "--output", str(base_path),
+                "--report", str(tmp / "report.md"), "--health-output", str(health_path),
+                "--notify-history-output", str(history_path),
+                "--notification-settings-output", str(settings_path),
+            ]
+            with patch.dict(os.environ, self.ENV, clear=False), patch("smtplib.SMTP") as smtp:
+                for _ in range(3):
+                    self.assertEqual(fw.main(arguments), 0)
+                    self.assertEqual(history_path.read_bytes(), raw)
+                    self.assertEqual(list(tmp.glob("notify-history.json.corrupt-*")), [])
+            smtp.assert_not_called()
 
     def test_crash_between_catalog_write_and_outbox_write_does_not_lose_the_event(self):
         with tempfile.TemporaryDirectory() as tmp:
