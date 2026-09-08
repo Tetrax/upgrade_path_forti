@@ -204,10 +204,10 @@ def _notify_compatibility_transition(*, root: Path) -> None:
     config = fortios_notify.load_email_config(
         settings_path=settings_path
     )
-    if not config.enabled and not settings_path.exists():
+    history_path = root / DEFAULT_NOTIFY_HISTORY_PATH
+    if not config.enabled and not settings_path.exists() and not history_path.exists():
         return
     health_after = read_health_state(root / DEFAULT_HEALTH_PATH).get("sources", {})
-    history_path = root / DEFAULT_NOTIFY_HISTORY_PATH
     checkpoint = fortios_notify.ensure_checkpoint(
         history_path,
         {
@@ -239,7 +239,10 @@ def _notify_compatibility_transition(*, root: Path) -> None:
         claimant=claimant,
     )
     composed = fortios_notify.compose_email(
-        pending, app_url=config.app_url, run_timestamp=utc_now()
+        pending,
+        app_url=config.app_url,
+        run_timestamp=utc_now(),
+        appearance=config.email_appearance,
     )
     if not composed:
         return
