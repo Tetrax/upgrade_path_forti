@@ -867,6 +867,114 @@ class NotifyCheckpointMainIntegrationTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertFalse(client.send_message.called, "pre-existing history must never be reported as new on first activation")
 
+    def test_env_only_disable_advances_checkpoint_without_replaying_disabled_collections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            base_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            settings_path = tmp / "notification-settings.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+
+            def make_cve(number: int) -> dict:
+                cve_id = f"CVE-2026-{number:05d}"
+                return {
+                    "id": cve_id,
+                    "advisoryId": f"FG-IR-26-{number}",
+                    "title": f"Résumé {cve_id}",
+                    "severity": "critical",
+                    "affected": [{"product": "fortigate-fortios", "branch": "7.4"}],
+                    "publishedAt": "2026-07-17",
+                    "updatedAt": "2026-07-17",
+                }
+
+            cves = [make_cve(number) for number in range(301, 305)]
+            arguments = [
+                "--cve-catalog",
+                "--base", str(base_path),
+                "--output", str(base_path),
+                "--report", str(tmp / "report.md"),
+                "--health-output", str(health_path),
+                "--notify-history-output", str(history_path),
+                "--notification-settings-output", str(settings_path),
+                "--official-paths-csv", str(tmp / "no-official-paths.csv"),
+                "--advisories-csv", str(tmp / "no-advisories.csv"),
+                "--upgrade-exports", str(tmp / "no-upgrade-exports"),
+            ]
+
+            original_collect = fw.collect_cve_catalog
+            original_psirt_versions = fw.fetch_psirt_versions
+
+            def run_collection(selected_cves, *, enabled: bool, send_result: bool):
+                fw.collect_cve_catalog = lambda *args, **kwargs: (
+                    {"FG-IR-26-301": list(selected_cves)}, []
+                )
+                environment = {
+                    **self.ENV,
+                    "FORTIOS_EMAIL_ENABLED": "true" if enabled else "false",
+                }
+                with (
+                    patch.dict(os.environ, environment, clear=False),
+                    patch.object(notify, "send_email", return_value=send_result) as send,
+                ):
+                    exit_code = fw.main(arguments)
+                return exit_code, send
+
+            fw.fetch_psirt_versions = lambda *args, **kwargs: set()
+            try:
+                # Enabled first run queues an older event, but its mocked delivery fails.
+                exit_code, send = run_collection(cves[:1], enabled=True, send_result=False)
+                self.assertEqual(exit_code, 0)
+                send.assert_called_once()
+
+                first_state = notify.load_notify_state(history_path)
+                self.assertEqual(
+                    [entry["dedupKey"] for entry in first_state["outbox"]],
+                    [f"new-cve|psirt|{cves[0]['id']}|critical"],
+                )
+
+                # Two env-only disabled collections must move the reference forward silently.
+                for selected_cves in (cves[:2], cves[:3]):
+                    exit_code, send = run_collection(
+                        selected_cves, enabled=False, send_result=False
+                    )
+                    self.assertEqual(exit_code, 0)
+                    send.assert_not_called()
+
+                disabled_state = notify.load_notify_state(history_path)
+                self.assertEqual(
+                    set(disabled_state["checkpoint"]["cvesById"]),
+                    {cve["id"] for cve in cves[:3]},
+                )
+                self.assertEqual(
+                    [entry["dedupKey"] for entry in disabled_state["outbox"]],
+                    [f"new-cve|psirt|{cves[0]['id']}|critical"],
+                )
+
+                # Re-enabling sends the old pending event plus only the new post-reactivation CVE.
+                exit_code, send = run_collection(cves, enabled=True, send_result=True)
+                self.assertEqual(exit_code, 0)
+                send.assert_called_once()
+                text_body = send.call_args.args[2]
+                self.assertIn(cves[0]["id"], text_body)
+                self.assertIn(cves[3]["id"], text_body)
+                self.assertNotIn(cves[1]["id"], text_body)
+                self.assertNotIn(cves[2]["id"], text_body)
+
+                final_state = notify.load_notify_state(history_path)
+                self.assertEqual(final_state["outbox"], [])
+                self.assertIn(
+                    f"new-cve|psirt|{cves[0]['id']}|critical",
+                    final_state["sentKeys"],
+                )
+                self.assertIn(
+                    f"new-cve|psirt|{cves[3]['id']}|critical",
+                    final_state["sentKeys"],
+                )
+            finally:
+                fw.collect_cve_catalog = original_collect
+                fw.fetch_psirt_versions = original_psirt_versions
+
 
 if __name__ == "__main__":
     unittest.main()

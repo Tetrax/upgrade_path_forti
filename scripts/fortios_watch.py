@@ -2406,7 +2406,11 @@ def main(argv: list[str]) -> int:
         notification_settings = fortios_notify.load_notification_settings(
             args.notification_settings_output
         )
-        if notification_settings.enabled or args.notification_settings_output.exists():
+        if (
+            notification_settings.enabled
+            or args.notification_settings_output.exists()
+            or args.notify_history_output.exists()
+        ):
             notify_checkpoint = fortios_notify.ensure_checkpoint(
                 args.notify_history_output,
                 {

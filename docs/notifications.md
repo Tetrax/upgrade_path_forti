@@ -38,6 +38,12 @@ Functional notification preferences and recipients remain in `data/notification-
 
 A POST to the appearance endpoint must contain exactly that `emailAppearance` object. Any transport field or password mutation is rejected. Existing legacy transport fields are ignored while the four user-visible concerns remain intact: display name, generated message title/subject, introduction, and signature. The generated security facts and links remain engine-owned and are escaped before rendering.
 
+The compatibility-only recovery path passes the same configured appearance to
+`compose_email()` as the main collector, including when retrying an existing
+outbox. Display name, introduction and signature are preserved; an absent
+appearance keeps the existing default rendering. No separate recovery template
+or SMTP engine is used.
+
 ## Incomplete environments
 
 The absence of SMTP variables is not a read or rendering error. `load_smtp_settings` returns environment-backed defaults with `state: incomplete`, so the authenticated SMTP page, previews, and recovery-link composition can still render. Actual delivery and recovery sends require a complete, valid transport; an incomplete configuration must not fail collection or mutate notification state.
@@ -50,6 +56,7 @@ The public settings response exposes transport metadata and `passwordConfigured`
 - A modified CVE notifies only when its severity crosses into `high` or `critical`. Re-publication, wording/CVSS edits, and unchanged monitored severity are quiet.
 - A CVE affecting several selected products is one event with one deduplication key and an aggregated affected-product section, not one email per product.
 - Initial checkpoint/bootstrap and catalog backfill are quiet. Incomplete or malformed snapshots do not invent a baseline event; a valid later snapshot can produce the real transition.
+- Disabling delivery continues to advance an existing notification reference without creating retroactive events, including legacy environment-only configuration (`FORTIOS_EMAIL_ENABLED=false` without `notification-settings.json`) and compatibility-only recovery. Pending outbox entries are retained, never sent while disabled, and remain eligible for retry after reactivation. Persisted functional settings, when present, remain authoritative and are not rewritten by this fallback.
 - EOL transitions bootstrap silently on first sight and notify once on a later `False -> True` transition.
 - Outbox claims are durable and reclaimable after a stale worker claim. Failed sends remain pending for a later run; successful sends are protected by sent-key deduplication. Concurrent collectors cannot claim or send the same event twice.
 

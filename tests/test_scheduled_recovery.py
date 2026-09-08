@@ -426,7 +426,11 @@ class CompatibilityNotificationTests(unittest.TestCase):
                     "health": {refresh.SOURCE_COMPAT_MATRIX: before},
                 },
             }), encoding="utf-8")
-            config = MagicMock(enabled=True, app_url="https://example.test/app/")
+            config = MagicMock(
+                enabled=True,
+                app_url="https://example.test/app/",
+                email_appearance=None,
+            )
 
             with (
                 patch.object(refresh.fortios_notify, "load_email_config", return_value=config),
@@ -440,6 +444,95 @@ class CompatibilityNotificationTests(unittest.TestCase):
         checkpoint_record = notify_state["checkpoint"]["health"][refresh.SOURCE_COMPAT_MATRIX]
         self.assertEqual(checkpoint_record["consecutiveFailures"], 2)
         self.assertTrue(notify_state["sentKeys"])
+        text_body = send.call_args.args[2]
+        html_body = send.call_args.args[3]
+        self.assertIn("Collecte Matrice de compatibilité EMS/FortiClient", text_body)
+        self.assertIn("Collecte Matrice de compatibilité EMS/FortiClient", html_body)
+
+    def test_compatibility_transition_uses_appearance_and_retries_existing_outbox(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            health_path = root / refresh.DEFAULT_HEALTH_PATH
+            history_path = root / refresh.DEFAULT_NOTIFY_HISTORY_PATH
+            before = {"status": "error", "consecutiveFailures": 1}
+            after = {"status": "error", "consecutiveFailures": 2}
+            _write_health(health_path, {refresh.SOURCE_COMPAT_MATRIX: after})
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            history_path.write_text(
+                json.dumps(
+                    {
+                        "sentKeys": {},
+                        "outbox": [
+                            {
+                                "category": "DAILY",
+                                "dedupKey": "old-event",
+                                "summary": "Ancienne alerte à reprendre",
+                                "queuedAt": "2026-09-02T10:00:00Z",
+                                "claimedBy": None,
+                                "claimedAt": None,
+                            }
+                        ],
+                        "eolState": {},
+                        "checkpoint": {
+                            "versionsByProduct": {},
+                            "cvesById": {},
+                            "health": {refresh.SOURCE_COMPAT_MATRIX: before},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            appearance = refresh.fortios_notify.EmailAppearance(
+                display_name="FortiUpgrade SOC",
+                introduction="Introduction planifiée.",
+                signature="Signature planifiée.",
+            )
+            config = MagicMock(
+                enabled=True,
+                app_url="https://example.test/app/",
+                email_appearance=appearance,
+            )
+
+            with (
+                patch.object(
+                    refresh.fortios_notify, "load_email_config", return_value=config
+                ),
+                patch.object(
+                    refresh.fortios_notify,
+                    "send_email",
+                    side_effect=[False, True],
+                ) as send,
+            ):
+                refresh._notify_compatibility_transition(root=root)
+                failed_state = refresh.fortios_notify.load_notify_state(history_path)
+                refresh._notify_compatibility_transition(root=root)
+
+            for call in send.call_args_list:
+                for body in (call.args[2], call.args[3]):
+                    self.assertIn("FortiUpgrade SOC", body)
+                    self.assertIn("Introduction planifiée.", body)
+                    self.assertIn("Signature planifiée.", body)
+                    self.assertIn("Ancienne alerte à reprendre", body)
+                    self.assertIn(
+                        "Collecte Matrice de compatibilité EMS/FortiClient", body
+                    )
+
+            final_state = refresh.fortios_notify.load_notify_state(history_path)
+
+        self.assertEqual(send.call_count, 2)
+        self.assertEqual(
+            [entry["dedupKey"] for entry in failed_state["outbox"]],
+            [
+                "old-event",
+                "source-failure|compat-matrix|consecutive|2",
+            ],
+        )
+        self.assertTrue(
+            all(entry["claimedBy"] is None for entry in failed_state["outbox"])
+        )
+        self.assertEqual(final_state["outbox"], [])
+        self.assertIn("old-event", final_state["sentKeys"])
+        self.assertIn("source-failure|compat-matrix|consecutive|2", final_state["sentKeys"])
 
     def test_disabled_settings_advance_compatibility_checkpoint_without_sending(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -467,6 +560,49 @@ class CompatibilityNotificationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             settings_path.write_text("{}", encoding="utf-8")
+            config = MagicMock(enabled=False)
+
+            with (
+                patch.object(
+                    refresh.fortios_notify, "load_email_config", return_value=config
+                ),
+                patch.object(refresh.fortios_notify, "send_email") as send,
+            ):
+                refresh._notify_compatibility_transition(root=root)
+
+            notify_state = refresh.fortios_notify.load_notify_state(history_path)
+
+        send.assert_not_called()
+        checkpoint_record = notify_state["checkpoint"]["health"][
+            refresh.SOURCE_COMPAT_MATRIX
+        ]
+        self.assertEqual(checkpoint_record["consecutiveFailures"], 2)
+        self.assertEqual(notify_state["outbox"], [])
+
+    def test_env_only_disabled_compatibility_checkpoint_advances_without_sending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            health_path = root / refresh.DEFAULT_HEALTH_PATH
+            history_path = root / refresh.DEFAULT_NOTIFY_HISTORY_PATH
+            before = {"status": "error", "consecutiveFailures": 1}
+            after = {"status": "error", "consecutiveFailures": 2}
+            _write_health(health_path, {refresh.SOURCE_COMPAT_MATRIX: after})
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            history_path.write_text(
+                json.dumps(
+                    {
+                        "sentKeys": {},
+                        "outbox": [],
+                        "eolState": {},
+                        "checkpoint": {
+                            "versionsByProduct": {},
+                            "cvesById": {},
+                            "health": {refresh.SOURCE_COMPAT_MATRIX: before},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
             config = MagicMock(enabled=False)
 
             with (
