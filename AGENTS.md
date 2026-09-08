@@ -132,6 +132,8 @@ Désactiver les notifications suspend les envois sans effacer l’outbox existan
 
 L’état persistant des notifications conserve de manière cohérente le checkpoint, l’outbox, l’historique de déduplication et les autres états nécessaires aux transitions. Toute évolution de ce schéma doit préserver la reprise après redémarrage et la compatibilité des données existantes, ou fournir une migration explicite.
 
+Un fichier d'état existant mais invalide ou illisible n'est pas une première activation : conserver ses octets et suspendre les notifications avec un diagnostic nettoyé, sans bloquer la collecte. Ne pas réinitialiser silencieusement l'ensemble de l'état à cause d'une corruption partielle du checkpoint ou d'un autre champ ; la récupération réconcilie explicitement checkpoint, outbox et clés d'envoi.
+
 ### Indépendance entre collecte et notification
 
 La collecte et la mise à jour du catalogue restent fonctionnelles même si la configuration SMTP est absente, invalide ou temporairement indisponible.

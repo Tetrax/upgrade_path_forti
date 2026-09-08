@@ -4,11 +4,12 @@
 
 Audit du 2026-09-08 après `git fetch origin` : **`main` est la seule ligne
 autoritative**. Le socle `d2b8f9725c77df18175a8d08e416c199fd5cec1d` contient déjà
-les PR #3 à #11 et correspond au code du runtime personnel. La branche temporaire
+les fonctionnalités des PR #3 à #11 (la PR #9 est remplacée par #10) et correspond au code du runtime personnel. La branche temporaire
 `integration/fortiupgrade-convergence`, worktree
 `/home/tetrax/workspace/upgrade_path_convergence`, part de ce socle, intègre par
 merge les instructions `docs/agent-closeout-coherence@35f743b`, puis clôt les
-incohérences documentaires. Elle ne crée pas une seconde ligne de release.
+incohérences documentaires et protège l'état de notification corrompu contre une
+réinitialisation silencieuse. Elle ne crée pas une seconde ligne de release.
 
 ### Cartographie Git initiale
 
@@ -75,7 +76,8 @@ divergence de fonctionnalités à merger. Les branches historiques sont conserv�
 
 ### Recette de convergence
 
-Exécution locale sur le socle intégré avec les règles fusionnées :
+Baseline locale sur le socle intégré avec les règles fusionnées, avant le
+correctif de conservation des états corrompus :
 
 - `python3 -m unittest discover -s tests` : 512 tests, succès, 1 skip root attendu ;
   `sudo python3 -m unittest tests.test_certctl -q` : 28 tests réussis, dont le test
@@ -96,12 +98,34 @@ Exécution locale sur le socle intégré avec les règles fusionnées :
   répond 200. Les parcours authentifiés complets restent validés en isolation,
   sans réinitialisation du compte personnel ni revendication d'accès entreprise.
 
-Aucun changement applicatif ni migration supplémentaire n'est nécessaire à cette
-clôture. Pas de redéploiement gratuit : le runtime reste sur le code `d2b8f97`,
+Le correctif additionnel interdit de remplacer silencieusement un historique
+notifications invalide par un état vide. Recette finale locale : 514 tests
+unitaires (1 skip non-root), 28 tests certificats root, Ruff et 31 Playwright
+réussis. Image candidate reconstruite ; copie persistante TLS, recréation et
+rollback réussis de nouveau avec empreintes inchangées et outbox non vide.
+
+Le correctif interdit de remplacer silencieusement un historique
+notifications invalide par un état vide. Un fichier absent reste une première
+activation silencieuse ; un fichier existant invalide suspend les notifications
+sans modifier ses octets, tout en laissant la collecte continuer. Il ne modifie
+pas le schéma des états valides. Une récupération manuelle doit réconcilier
+checkpoint/outbox/sentKeys avant reprise ; ne pas supprimer le fichier pour
+faire disparaître l'erreur.
+
+Runtime relevé avant livraison : code `d2b8f97`,
 image `sha256:d6c520363553ddeb2bfdb3c00157cecfdc507987f30f9fae43db1af9096b839f`.
-La publication documentaire et le runtime sont volontairement distingués.
-Pour une future bascule, suivre les gates ci-dessous ; conserver l'image et les
+La release de convergence et le runtime sont volontairement distingués. La
+candidate ajoute la protection des états corrompus ; elle n'est pas déployée
+automatiquement : le login administrateur personnel n'est pas vérifiable avec
+le secret archivé, et aucun accès entreprise actuel n'est disponible. Ces limites
+ne bloquent pas la livraison des sources et de l'image, testées en isolation.
+La bascule attend une recette authentifiée avec le compte actuel, sans reset
+automatique. Utiliser l'image GHCR du SHA de merge de la PR #12 après CI verte,
+sur web et scheduler ; le code du helper n'est pas modifié par cette PR.
+Pour cette bascule, suivre les gates ci-dessous ; conserver l'image et les
 données courantes pour rollback, sans restaurer aveuglément un ancien checkpoint.
+Un ancien binaire ne doit pas être relancé sur un état corrompu sans cette
+réconciliation : son comportement historique pouvait réamorcer un état vide.
 
 ## Source of truth and prerequisites
 

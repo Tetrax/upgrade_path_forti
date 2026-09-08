@@ -53,6 +53,14 @@ The public settings response exposes transport metadata and `passwordConfigured`
 - EOL transitions bootstrap silently on first sight and notify once on a later `False -> True` transition.
 - Outbox claims are durable and reclaimable after a stale worker claim. Failed sends remain pending for a later run; successful sends are protected by sent-key deduplication. Concurrent collectors cannot claim or send the same event twice.
 
+An existing unreadable or invalid notification history is not an initial activation.
+It is retained byte-for-byte and notification processing fails closed, without
+resetting its checkpoint, discarding pending events, or interrupting collection.
+Restore/reconcile a verified history before resuming; do not delete it to silence
+the diagnostic. This replaces the historical archive-and-empty recovery, which
+could abandon a valid outbox when only another field was malformed. Valid legacy
+states without a checkpoint remain supported; no data-schema migration is required.
+
 ## Local verification
 
 Use the repository test interpreter and the focused notification suite:
