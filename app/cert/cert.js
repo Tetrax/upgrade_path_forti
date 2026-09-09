@@ -396,6 +396,8 @@ function renderMicrosoft365SecretStatus(payload) {
   byId("m365-secret-storage-status").textContent = clientSecretStorageState === "available"
     ? "Stockage disponible"
     : "storage-unavailable — enregistrement indisponible";
+  byId("m365-secret-storage-status").hidden = clientSecretStorageState === "available";
+  byId("m365-client-secret").placeholder = microsoft365.clientSecretConfigured ? "Déjà configuré" : "";
   byId("m365-client-secret").value = "";
   updateEmailTransportUI();
   updatePreviewSendAvailability();
