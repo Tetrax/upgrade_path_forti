@@ -67,6 +67,7 @@ class FortiosTestServer:
     process: subprocess.Popen
     admin_username: str
     admin_password: str
+    microsoft365_secret_path: Path
 
     def set_mock_path_response(self, hops: list[str]) -> None:
         """Next official-path request(s) will simulate a successful Fortinet fetch returning
@@ -121,6 +122,10 @@ def fortios_server(tmp_path: Path):
         ):
             env.pop(key, None)
 
+    microsoft365_secret_path = tmp_path / "microsoft365-secrets" / "client-secret"
+    microsoft365_secret_path.parent.mkdir(mode=0o700)
+    env["FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE"] = str(microsoft365_secret_path)
+
     process = subprocess.Popen(
         [sys.executable, str(REPO_ROOT / "scripts" / "fortios_server.py"), "--host", "127.0.0.1", "--port", str(port)],
         cwd=REPO_ROOT,
@@ -140,6 +145,7 @@ def fortios_server(tmp_path: Path):
             process=process,
             admin_username=E2E_ADMIN_USERNAME,
             admin_password=admin_password,
+            microsoft365_secret_path=microsoft365_secret_path,
         )
     finally:
         process.terminate()

@@ -327,9 +327,19 @@ La configuration sépare préférences, choix du transport et credentials :
 - `email-transport-settings.json` : choix SMTP/Microsoft 365 et paramètres Microsoft non secrets ;
 - environnement : serveur, port, sécurité, utilisateur, expéditeur, URL et timeout ;
 - `FORTIOS_SMTP_PASSWORD_FILE` : unique source du mot de passe, hors `data/` et montée en lecture seule dans les deux conteneurs.
-- `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE` : unique source du secret Entra, protégée par le même montage en lecture seule.
+- `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE` : unique fichier du secret Entra dans un volume privé dédié, inscriptible par le web et monté en lecture seule par le scheduler.
 
 Les préférences et le choix du transport sont validés et remplacés atomiquement sous verrou dans leurs fichiers respectifs. Le navigateur ne reçoit jamais les secrets ni leurs chemins, seulement leur disponibilité. La console montre l'infrastructure SMTP en lecture seule ; le choix du transport, les identifiants Microsoft non secrets, l'apparence, les produits et destinataires sont modifiables.
+
+Le **Client Secret Microsoft 365 peut être saisi ou remplacé dans la GUI HTTPS** :
+champ masqué, contrôle administrateur/CSRF, écriture atomique, jamais de relecture
+de la valeur enregistrée. Son enregistrement n'envoie pas de mail et ne change
+pas le transport. Les Compose local/Portainer/import partagent le même volume
+`fortios-microsoft365-secrets`, sans helper supplémentaire propre au VPS : ce
+fonctionnement est portable en VM entreprise et en TLS direct. Mettre à jour
+l'image **et le Stack** pour une ancienne installation ; conserver les autres
+volumes et les montages secrets SMTP/certificats protégés. Voir la migration et
+les sauvegardes dans le [guide Microsoft 365](docs/microsoft365.md#5-saisir-ou-remplacer-le-secret-dans-linterface).
 
 Pour Microsoft 365, **Tester la connexion** obtient un token puis envoie un mail
 de test depuis la boîte configurée. `202 Accepted` confirme la soumission Graph,

@@ -65,7 +65,8 @@ Ne jamais la coller dans un ticket, une PR, Git, un fichier Compose, une variabl
 d'environnement en clair, `notification-settings.json` ou une capture d'écran.
 Ne pas exécuter une commande `curl` contenant le secret dans ses arguments.
 
-Cette V1 utilise un **client secret monté comme fichier en lecture seule**.
+Cette V1 utilise un **client secret stocké dans un fichier privé persistant**,
+saisissable dans l'administration HTTPS. Le scheduler le monte en lecture seule.
 Microsoft recommande certificat ou identité fédérée pour un niveau d'assurance
 supérieur ; ces méthodes ne sont pas activées dans cette V1. Elles pourront
 remplacer l'acquisition du token sans remplacer le moteur de notifications.
@@ -160,38 +161,73 @@ de ce guide. L'application n'a besoin ni de `Mail.Read`, ni de `Mail.ReadWrite`,
 de `User.Read.All`, ni de `Mail.Send.Shared`, ni de `SMTP.SendAsApp`. Aucun rôle
 Azure sur une souscription ou un resource group n'est nécessaire à l'envoi Graph.
 
-## 5. Fournir le secret au déploiement
+## 5. Saisir ou remplacer le secret dans l'interface
 
-Le même fichier doit être lisible par le compte applicatif de **web et
-scheduler**, dans le montage de secrets existant, en dehors du catalogue et des
-certificats :
+Dans **Administration → Notifications → Microsoft 365 / Azure**, saisir la
+**Value** du client secret dans le champ masqué et utiliser son bouton
+d'enregistrement. Cette action ne change pas le transport sélectionné, ne modifie
+pas les paramètres métier et n'envoie aucun email. Le champ est vidé après la
+soumission ; le secret enregistré n'est jamais prérempli ni retourné par l'API.
+Une saisie vide ne supprime pas l'ancien secret.
+
+Le serveur existant authentifie l'administrateur, vérifie HTTPS/Origin/CSRF et
+écrit atomiquement le fichier configuré. Le fichier est l'unique source du
+credential pour le moteur Microsoft Graph : ni JSON de configuration, ni cache
+secret concurrent, ni dépendance à un helper propre au VPS.
+
+### Stockage portable fourni avec Docker et Portainer
+
+Tous les modèles Compose définissent le même stockage dédié :
 
 ```text
-Hote :      <FORTIOS_SECRETS_DIR>/microsoft365-client-secret
-Conteneur : /run/fortios-secrets/microsoft365-client-secret
-Variable :  FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE=/run/fortios-secrets/microsoft365-client-secret
+Volume Compose : fortios-microsoft365-secrets (préfixé par le nom du Stack)
+Conteneur :      /opt/fortios/microsoft365-secrets/client-secret
+Variable :       FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE
+Web :            volume rw, répertoire privé 0700, fichier 0600
+Scheduler :      le même volume ro, mêmes PUID/PGID que web
 ```
 
-Provisionner la valeur avec le gestionnaire de secrets ou un éditeur sécurisé
-côté hôte. Respecter les permissions de [delivery.md](delivery.md) : fichier
-`root:PGID` en `0640`, répertoire `root:PGID` en `0750`, montage `:ro`. Ne pas mettre
-le secret dans l'image ; ne pas rendre le volume de secrets inscriptible pour
-permettre une saisie navigateur. Les paramètres du déploiement ne contiennent
-que **le chemin**, jamais la valeur.
+Le volume est initialisé par l'entrypoint et reste vide tant qu'aucun vrai secret
+n'est fourni. Le démarrage et SMTP restent fonctionnels. **Ne pas rendre
+`/run/fortios-secrets` inscriptible** : le secret SMTP et les autres secrets
+externes y conservent leur montage lecture seule. Les certificats et leur helper
+ne changent pas de frontière de privilèges.
 
-Les Compose fournis transmettent cette référence aux deux services. Configurer
-la variable du Stack, puis recréer les deux services selon le workflow de
-livraison du site. Conserver leurs volumes data/docs/certificates et le nom du
-Stack existant. L'interface affiche seulement si le secret est disponible ; elle
-ne le retourne pas et ne permet pas de le relire.
+| Environnement | Mécanisme |
+| --- | --- |
+| Compose local ou VPS derrière reverse proxy | Même volume dédié ; aucun helper supplémentaire. |
+| Portainer Git Stack | `docker-compose.portainer.yml`, volume partagé web/scheduler. |
+| Portainer import d'image / VM entreprise / TLS direct | `docker-compose.portainer-import.yml`, même volume ; aucun chemin hôte VPS requis pour le secret Microsoft. |
+| Installation Python native | Configurer la même variable vers un fichier dans un répertoire privé persistant 0700 appartenant au compte web ; scheduler sous le même compte. Ne jamais choisir un chemin servi par HTTP ou versionné. |
 
-**Rotation :** créer un second secret dans Entra avant expiration, le placer dans
-un fichier temporaire protégé dans ce même répertoire, remplacer atomiquement le
-fichier actif, puis tester. Avec le montage du répertoire, le fichier remplacé
-reste visible sans incorporer le secret à l'image. Ne révoquer l'ancien secret
-qu'après validation. Si le site monte un fichier individuel au lieu du
-répertoire, recréer les conteneurs pour prendre en compte un remplacement par
-renommage. Ne jamais remplacer l'outbox ou le checkpoint pendant cette opération.
+### Mise à niveau d'une installation existante
+
+Mettre à jour **l'image et la définition du Stack**, pas seulement l'image.
+Conserver le nom du Stack et tous les volumes data/docs/certificates existants ;
+ajouter seulement le volume Microsoft dédié et la référence identique dans web
+et scheduler. Dans Portainer, retirer un éventuel ancien override de la variable
+qui pointe vers `/run/fortios-secrets/microsoft365-client-secret`, ou le remplacer
+par le nouveau chemin. Le même nom de Stack garantit la réutilisation du volume.
+
+Si un vrai secret était déjà configuré dans un fichier externe, sauvegarder ce
+fichier et copier sa valeur de façon protégée dans le nouveau stockage **avant**
+de changer la référence ; préserver l'ancien fichier pour rollback. Si aucun
+secret n'existe encore, ne copier aucune valeur fictive : le saisir ensuite dans
+la GUI. Une référence externe en lecture seule reste utilisable pour l'envoi,
+mais l'interface indique que son stockage n'est pas modifiable. Il n'y a pas de
+fallback silencieux vers un second fichier.
+
+Sauvegarder également le nouveau volume de secrets, de façon chiffrée ou
+root-only, sans l'exporter avec le catalogue ni l'image. Pour rollback, conserver
+le volume courant et la valeur la plus récente ; l'ancien connecteur sait lire
+le même fichier via la même variable. Ne pas restaurer aveuglément un ancien
+checkpoint/outbox ni supprimer les volumes (`down -v`).
+
+**Rotation :** créer un nouveau secret dans Entra, le remplacer dans la GUI,
+vérifier ensuite le véritable envoi/réception, puis révoquer l'ancien dans Entra.
+Le prochain chargement du moteur web ou scheduler lit le nouveau fichier, sans
+rebuild d'image. Un remplacement de secret ne valide pas à lui seul les droits
+Microsoft ni la réception finale.
 
 ## Recette isolée sur ce VPS, sans toucher au runtime permanent
 
@@ -239,22 +275,11 @@ de recette dans **Première configuration** (mot de passe personnel, au moins
 12 octets), puis ouvrir **Notifications**. Aucun compte admin par défaut n'est
 fourni et aucun credential Microsoft n'est inventé.
 
-Après création du véritable secret Entra, créer le fichier protégé et utiliser
-un éditeur pour y coller uniquement la **Value**, sans la mettre dans une commande :
-
-```bash
-if ! sudo test -e /var/lib/fortiupgrade-m365-test/secrets/microsoft365-client-secret; then
-  sudo install -m 0640 -o root -g 1000 /dev/null \
-    /var/lib/fortiupgrade-m365-test/secrets/microsoft365-client-secret
-fi
-sudoedit /var/lib/fortiupgrade-m365-test/secrets/microsoft365-client-secret
-```
-
-Le Compose configure déjà
-`FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE=/run/fortios-secrets/microsoft365-client-secret`.
-Le fichier est lu au prochain chargement/test ; recharger le formulaire. Ne pas
-le créer avec une valeur fictive pour rendre le voyant vert. Les deux services
-partagent ce montage en lecture seule, même si le scheduler reste arrêté.
+Après création du véritable secret Entra, saisir sa **Value** dans la GUI comme
+sur l'instance habituelle. Le Compose de recette configure le volume dédié
+`candidate-microsoft365-secrets`, web en écriture et scheduler en lecture seule.
+Ne pas créer de valeur fictive pour rendre le voyant vert. Le répertoire hôte
+de recette ne contient désormais que les éléments TLS nécessaires à ce test.
 
 Arrêter uniquement la recette, en conservant ses paramètres pour la prochaine fois :
 

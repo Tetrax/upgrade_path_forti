@@ -18,6 +18,9 @@
   <h1>Comment configurer Microsoft 365 ?</h1>
   <p>FortiUpgrade peut envoyer les notifications sans serveur SMTP, depuis une boîte Microsoft 365 autorisée.</p>
   <p class="note">Le bouton de test envoie réellement un message avec la configuration enregistrée. Une réponse HTTP 202 confirme l’acceptation par Microsoft Graph, pas la remise dans la boîte du destinataire.</p>
+  <h2>Saisir ou remplacer le Client Secret</h2>
+  <p>Dans <strong>Administration → Notifications → Microsoft 365 / Azure</strong>, collez la <strong>Value</strong> du secret Entra (pas son Secret ID) dans le champ masqué, puis cliquez sur <strong>Enregistrer / remplacer le secret</strong>. La valeur reste dans un fichier privé persistant : elle n’est jamais renvoyée à l’interface. Cette action ne change pas le transport et n’envoie pas de mail.</p>
+  <p>Si le stockage est indisponible, mettez à jour l’image et le Stack comme indiqué dans le guide. Les installations Docker/Portainer, dont les VM avec image importée, utilisent le même volume privé dédié ; aucun helper spécifique au VPS n’est nécessaire.</p>
   <h2>Guide complet</h2>
   <p>Consultez le guide opératoire du dépôt : <a href="./microsoft365-guide.md">microsoft365-guide.md</a>. Il couvre Azure, les permissions, le RBAC Exchange, la rotation du secret et le dépannage.</p>
   <h2>Documentation Microsoft</h2>

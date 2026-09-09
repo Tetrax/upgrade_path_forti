@@ -92,13 +92,19 @@ Compose files:
 | `FORTIOS_MICROSOFT365_FROM` | Bootstrap sender SMTP address. |
 | `FORTIOS_MICROSOFT365_DISPLAY_NAME` | Bootstrap display name. |
 | `FORTIOS_MICROSOFT365_MAILBOX_IDENTITY` | Optional bootstrap mailbox object GUID or UPN. |
-| `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE` | Sole credential source; e.g. `/run/fortios-secrets/microsoft365-client-secret`. |
+| `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE` | Sole credential source; Compose defaults to `/opt/fortios/microsoft365-secrets/client-secret`. |
 | `FORTIOS_MICROSOFT365_TIMEOUT` | Network timeout per request, 1–120 seconds; Compose defaults to 10. |
 
-The secret is provisioned outside Git/data/image and mounted read-only using the
-existing `FORTIOS_SECRETS_DIR`. The API reports only `clientSecretConfigured` and
-its source category, never contents or a file path. Plain environment secret
-values and browser secret writes are not accepted. No access token is persisted.
+The secret is stored outside Git/data/image in a dedicated persistent volume:
+web may set/replace it through the authenticated, same-origin, CSRF-protected
+GUI endpoint; scheduler reads the same file through a read-only mount. The
+existing SMTP secret directory remains read-only. The settings API reports
+readiness and safe write capability, never the secret or its path. A blank
+submission cannot delete the old credential; the input is cleared after submit
+and never prefilled. No transport, checkpoint or outbox change accompanies a
+secret rotation. Plain environment secret values are not accepted. Existing
+read-only external files remain valid for delivery, with GUI writes unavailable.
+No access token is persisted.
 The confidential request targets are fixed Microsoft public-cloud HTTPS
 endpoints; TLS verification is enabled and HTTP redirects are rejected. The V1
 uses a client secret, not delegated user login; certificate/federated credentials

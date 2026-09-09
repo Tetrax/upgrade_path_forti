@@ -437,12 +437,19 @@
                       <label for="m365-client-id">Application (client) ID</label>
                       <input id="m365-client-id" maxlength="36" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off">
                     </div>
-                    <div class="secret-control field-wide">
+                    <div class="secret-control m365-secret-control field-wide">
                       <div>
                         <strong>Client secret</strong>
                         <p id="m365-secret-status">Non configuré</p>
+                        <p class="field-help" id="m365-secret-storage-status" aria-live="polite">storage-unavailable</p>
                       </div>
-                      <span class="field-help">FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE — jamais affiché ni enregistré.</span>
+                      <div class="secret-actions">
+                        <label class="sr-only" for="m365-client-secret">Nouveau client secret Microsoft 365</label>
+                        <input id="m365-client-secret" type="password" autocomplete="new-password" maxlength="4096" spellcheck="false">
+                        <button class="btn" id="save-m365-secret-button" type="button">Enregistrer / remplacer le secret</button>
+                      </div>
+                      <span class="field-help">Le secret est écrit uniquement dans le fichier défini par FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE. Il n’est jamais relu dans l’interface.</span>
+                      <p class="form-message" id="m365-secret-message" role="alert"></p>
                     </div>
                     <div class="field">
                       <label for="m365-from-address">Adresse d’envoi</label>

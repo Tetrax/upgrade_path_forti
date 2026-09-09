@@ -6,6 +6,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeliveryStackTests(unittest.TestCase):
+    def test_gui_secret_storage_is_portable_and_scheduler_read_only(self):
+        for name in ('docker-compose.yml', 'docker-compose.portainer.yml', 'docker-compose.portainer-import.yml'):
+            with self.subTest(name=name):
+                text = (ROOT / name).read_text()
+                self.assertEqual(text.count('fortios-microsoft365-secrets:/opt/fortios/microsoft365-secrets:rw'), 1)
+                self.assertEqual(text.count('fortios-microsoft365-secrets:/opt/fortios/microsoft365-secrets:ro'), 1)
+                self.assertIn('  fortios-microsoft365-secrets:', text)
+                self.assertEqual(text.count('FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: ${FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE:-/opt/fortios/microsoft365-secrets/client-secret}'), 2)
+
     def test_images_exclude_live_settings_secrets_and_outbox(self):
         text = (ROOT / '.dockerignore').read_text()
         for pattern in (
@@ -33,7 +42,7 @@ class DeliveryStackTests(unittest.TestCase):
 
     def test_every_stack_passes_microsoft365_configuration_to_both_workers(self):
         fields = (
-            'TENANT_ID', 'CLIENT_ID', 'CLIENT_SECRET_FILE', 'FROM',
+            'TENANT_ID', 'CLIENT_ID', 'FROM',
             'DISPLAY_NAME', 'MAILBOX_IDENTITY',
         )
         for name in ('docker-compose.yml', 'docker-compose.portainer.yml', 'docker-compose.portainer-import.yml'):

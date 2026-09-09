@@ -13,6 +13,7 @@ const MAX_CERTIFICATE_BYTES = 16 * 1024 * 1024;
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024 * 1024;
 const MAX_CHAIN_BYTES = 16 * 1024 * 1024;
 const MAX_PASSWORD_BYTES = 1024;
+const MAX_MICROSOFT365_SECRET_BYTES = 4096;
 const MIN_ADMIN_PASSWORD_BYTES = 12;
 const PUBLIC_CERT_ENDPOINTS = new Set([
   "login",
@@ -110,6 +111,8 @@ function resetPrivateState() {
   certificateForm.reset();
   notificationsForm.reset();
   smtpForm.reset();
+  byId("m365-client-secret").value = "";
+  setMessage("m365-secret-message", "");
   savedSmtpSettings = null;
   currentEmailPreview = null;
   emailPreviewRequestGeneration += 1;
@@ -301,6 +304,12 @@ function updateEmailTransportUI() {
   const mailboxIdentity = byId("m365-mailbox-identity");
   mailboxIdentity.disabled = !microsoft365Selected;
   mailboxIdentity.required = false;
+  const clientSecretInput = byId("m365-client-secret");
+  const saveClientSecretButton = byId("save-m365-secret-button");
+  const canSetClientSecret = Boolean(savedSmtpSettings?.microsoft365?.canSetClientSecret);
+  clientSecretInput.disabled = !(microsoft365Selected && canSetClientSecret);
+  saveClientSecretButton.disabled = !(microsoft365Selected && canSetClientSecret);
+  if (!microsoft365Selected) clientSecretInput.value = "";
   byId("test-email-transport").textContent = microsoft365Selected
     ? "Microsoft 365"
     : "SMTP";
@@ -368,6 +377,31 @@ function renderTestSummary() {
   byId("test-smtp-recipient").textContent = byId("test-email-recipient").value.trim() || "—";
 }
 
+function renderMicrosoft365SecretStatus(payload) {
+  const responseSmtp = payload?.smtp || {};
+  const previousSmtp = savedSmtpSettings || {};
+  savedSmtpSettings = {
+    ...previousSmtp,
+    ...responseSmtp,
+    microsoft365: {
+      ...(previousSmtp.microsoft365 || {}),
+      ...(responseSmtp.microsoft365 || {}),
+    },
+  };
+  const microsoft365 = savedSmtpSettings.microsoft365 || {};
+  const clientSecretStorageState = microsoft365.clientSecretStorageState || "storage-unavailable";
+  byId("m365-secret-status").textContent = microsoft365.clientSecretConfigured
+    ? "Secret configuré"
+    : "Secret non configuré";
+  byId("m365-secret-storage-status").textContent = clientSecretStorageState === "available"
+    ? "Stockage disponible"
+    : "storage-unavailable — enregistrement indisponible";
+  byId("m365-client-secret").value = "";
+  updateEmailTransportUI();
+  updatePreviewSendAvailability();
+  renderTestSummary();
+}
+
 function renderSmtpSettings(payload) {
   const smtp = payload.smtp;
   savedSmtpSettings = smtp;
@@ -386,9 +420,7 @@ function renderSmtpSettings(payload) {
   byId("m365-from-address").value = microsoft365.from || "";
   byId("m365-display-name").value = microsoft365.displayName || "";
   byId("m365-mailbox-identity").value = microsoft365.mailboxIdentity || "";
-  byId("m365-secret-status").textContent = microsoft365.clientSecretConfigured
-    ? "Secret monté et lisible"
-    : "Secret non configuré ou illisible";
+  renderMicrosoft365SecretStatus(payload);
   byId("email-display-name").value = smtp.emailAppearance?.displayName || "FortiUpgrade";
   byId("email-introduction").value = smtp.emailAppearance?.introduction || "";
   byId("email-signature").value = smtp.emailAppearance?.signature || "";
@@ -869,6 +901,39 @@ byId("send-preview-email-button").addEventListener("click", async () => {
   }
 });
 byId("test-email-recipient").addEventListener("input", renderTestSummary);
+
+async function saveMicrosoft365ClientSecret() {
+  const button = byId("save-m365-secret-button");
+  const input = byId("m365-client-secret");
+  button.disabled = true;
+  setMessage("m365-secret-message", "Enregistrement du secret en cours…");
+  try {
+    const clientSecret = input.value;
+    const secretBytes = new TextEncoder().encode(clientSecret).length;
+    if (!clientSecret || secretBytes > MAX_MICROSOFT365_SECRET_BYTES) {
+      throw new Error("Le client secret doit contenir entre 1 et 4 096 octets UTF-8.");
+    }
+    const result = await apiRequest("microsoft365/client-secret", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clientSecret }),
+    });
+    renderMicrosoft365SecretStatus(result);
+    setMessage("m365-secret-message", "Client secret enregistré.", true);
+  } catch (error) {
+    setMessage("m365-secret-message", error.message);
+  } finally {
+    input.value = "";
+    button.disabled = !(
+      byId("email-transport").value === "microsoft365"
+      && savedSmtpSettings?.microsoft365?.canSetClientSecret
+    );
+  }
+}
+
+byId("save-m365-secret-button").addEventListener("click", () => {
+  void saveMicrosoft365ClientSecret();
+});
 
 smtpForm.addEventListener("submit", async (event) => {
   event.preventDefault();

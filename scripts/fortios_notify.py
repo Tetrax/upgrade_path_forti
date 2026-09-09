@@ -16,17 +16,22 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import fcntl
 import html
 import json
 import os
 import re
+import secrets
 import smtplib
 import ssl
+import stat
 import sys
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from email.message import EmailMessage
 from email.utils import formataddr, parsedate_to_datetime
@@ -89,6 +94,10 @@ DEFAULT_NOTIFICATION_SETTINGS_PATH = Path("data/notification-settings.json")
 DEFAULT_SMTP_SETTINGS_PATH = Path("data/smtp-settings.json")
 DEFAULT_EMAIL_TRANSPORT_SETTINGS_PATH = Path("data/email-transport-settings.json")
 SMTP_PASSWORD_FILENAME = "smtp-password"
+MICROSOFT365_CLIENT_SECRET_ENV = "FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE"
+MICROSOFT365_SECRET_STORAGE_AVAILABLE = "available"
+MICROSOFT365_SECRET_STORAGE_UNAVAILABLE = "storage-unavailable"
+MAX_MICROSOFT365_CLIENT_SECRET_BYTES = 4096
 _SETTINGS_PRODUCT_KEYS = (
     "fortigate-fortios",
     "fortimanager",
@@ -323,6 +332,8 @@ class EmailConfig:
     graph_client_secret: str = field(default="", repr=False)
     graph_client_secret_file: str = ""
     graph_client_secret_error: str = ""
+    graph_client_secret_storage_state: str = MICROSOFT365_SECRET_STORAGE_UNAVAILABLE
+    graph_client_secret_write_available: bool = False
     graph_sender: str = ""
     graph_display_name: str = ""
     graph_mailbox_identity: str = ""
@@ -528,6 +539,431 @@ def _env_secret_from_keys(
             return "", secret_file, f"Le fichier secret {label} est vide."
         return value, secret_file, ""
     return "", "", ""
+
+
+class Microsoft365SecretValidationError(ValueError):
+    """A submitted client secret is empty, malformed, or outside the byte limit."""
+
+
+class Microsoft365SecretStorageError(OSError):
+    """The environment-selected client-secret storage cannot be safely written."""
+
+
+@dataclass(frozen=True)
+class Microsoft365SecretStorageStatus:
+    state: str
+    can_write: bool
+    configured: bool
+
+
+def _microsoft365_secret_path(environment: dict[str, str]) -> Path | None:
+    configured = (environment.get(MICROSOFT365_CLIENT_SECRET_ENV) or "").strip()
+    if not configured or "\0" in configured:
+        return None
+    try:
+        return Path(configured).absolute()
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _secret_parent_open_flags() -> int:
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
+def _open_microsoft365_secret_parent(path: Path) -> int:
+    """Open the configured parent by descriptor, rejecting symlinked components."""
+    if not path.is_absolute() or not path.name or path.name in {".", ".."}:
+        raise OSError("invalid Microsoft 365 secret path")
+    parent_fd = os.open(os.sep, _secret_parent_open_flags())
+    try:
+        for component in path.parent.parts[1:]:
+            child_fd = os.open(
+                component,
+                _secret_parent_open_flags(),
+                dir_fd=parent_fd,
+            )
+            os.close(parent_fd)
+            parent_fd = child_fd
+        return parent_fd
+    except BaseException:
+        os.close(parent_fd)
+        raise
+
+
+def _secret_parent_is_safe(path: Path) -> bool:
+    """Require every parent entry to be a real directory, never a symlink."""
+    try:
+        parent_fd = _open_microsoft365_secret_parent(path)
+    except (OSError, ValueError):
+        return False
+    os.close(parent_fd)
+    return True
+
+
+def _secret_entry_kind_at(parent_fd: int, name: str) -> str:
+    try:
+        entry_stat = os.lstat(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "unavailable"
+    if stat.S_ISLNK(entry_stat.st_mode):
+        return "symlink"
+    if not stat.S_ISREG(entry_stat.st_mode):
+        return "nonregular"
+    return "regular"
+
+
+def _secret_target_kind(path: Path) -> str:
+    parent_fd = -1
+    try:
+        parent_fd = _open_microsoft365_secret_parent(path)
+        return _secret_entry_kind_at(parent_fd, path.name)
+    except (OSError, ValueError):
+        return "unavailable"
+    finally:
+        if parent_fd != -1:
+            os.close(parent_fd)
+
+
+def _secret_lock_is_safe(path: Path) -> bool:
+    parent_fd = -1
+    try:
+        parent_fd = _open_microsoft365_secret_parent(path)
+        return _secret_entry_kind_at(parent_fd, f"{path.name}.lock") in {
+            "missing",
+            "regular",
+        }
+    except (OSError, ValueError):
+        return False
+    finally:
+        if parent_fd != -1:
+            os.close(parent_fd)
+
+
+def _secret_parent_is_writable(parent_fd: int) -> bool:
+    try:
+        if os.fstatvfs(parent_fd).f_flag & getattr(os, "ST_RDONLY", 1):
+            return False
+    except OSError:
+        return False
+    return os.access(
+        ".",
+        os.W_OK | os.X_OK,
+        dir_fd=parent_fd,
+        follow_symlinks=False,
+    )
+
+
+def _secret_entry_is_writable(parent_fd: int, name: str, *, target_kind: str) -> bool:
+    if not _secret_parent_is_writable(parent_fd):
+        return False
+    return target_kind == "missing" or os.access(
+        name,
+        os.W_OK,
+        dir_fd=parent_fd,
+        follow_symlinks=False,
+    )
+
+
+def _secret_path_is_writable(path: Path, *, target_kind: str) -> bool:
+    parent_fd = -1
+    try:
+        parent_fd = _open_microsoft365_secret_parent(path)
+        return _secret_entry_is_writable(
+            parent_fd,
+            path.name,
+            target_kind=target_kind,
+        )
+    except (OSError, ValueError):
+        return False
+    finally:
+        if parent_fd != -1:
+            os.close(parent_fd)
+
+
+@contextmanager
+def _microsoft365_secret_lock(path: Path):
+    """Serialize secret writers through a pinned, non-symlinked parent descriptor."""
+    parent_fd = _open_microsoft365_secret_parent(path)
+    lock_fd = -1
+    locked = False
+    try:
+        if not _secret_entry_is_writable(parent_fd, ".", target_kind="regular"):
+            raise OSError("secret parent is not writable")
+        lock_flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        lock_fd = os.open(
+            f"{path.name}.lock",
+            lock_flags,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+            raise OSError("secret lock is not a regular file")
+        if not os.access(
+            f"{path.name}.lock",
+            os.W_OK,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        ):
+            raise OSError("secret lock is not writable")
+        os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        locked = True
+        yield parent_fd
+    finally:
+        if locked:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        if lock_fd != -1:
+            os.close(lock_fd)
+        os.close(parent_fd)
+
+
+def _inspect_microsoft365_secret_storage(
+    path: Path | None,
+) -> Microsoft365SecretStorageStatus:
+    if path is None:
+        return Microsoft365SecretStorageStatus(
+            MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
+            False,
+            False,
+        )
+    parent_fd = -1
+    try:
+        parent_fd = _open_microsoft365_secret_parent(path)
+        target_kind = _secret_entry_kind_at(parent_fd, path.name)
+        lock_kind = _secret_entry_kind_at(parent_fd, f"{path.name}.lock")
+        if target_kind not in {"missing", "regular"} or lock_kind not in {
+            "missing",
+            "regular",
+        }:
+            return Microsoft365SecretStorageStatus(
+                MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
+                False,
+                target_kind == "regular",
+            )
+        if lock_kind == "regular" and not os.access(
+            f"{path.name}.lock",
+            os.W_OK,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        ):
+            return Microsoft365SecretStorageStatus(
+                MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
+                False,
+                target_kind == "regular",
+            )
+        can_write = _secret_entry_is_writable(
+            parent_fd,
+            path.name,
+            target_kind=target_kind,
+        )
+        return Microsoft365SecretStorageStatus(
+            MICROSOFT365_SECRET_STORAGE_AVAILABLE
+            if can_write
+            else MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
+            can_write,
+            target_kind == "regular",
+        )
+    except (OSError, ValueError):
+        return Microsoft365SecretStorageStatus(
+            MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
+            False,
+            False,
+        )
+    finally:
+        if parent_fd != -1:
+            os.close(parent_fd)
+
+
+def _microsoft365_storage_error() -> Microsoft365SecretStorageError:
+    return Microsoft365SecretStorageError(
+        "Stockage du secret Microsoft 365 indisponible."
+    )
+
+
+def _validate_microsoft365_client_secret(value: object) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise Microsoft365SecretValidationError("Secret client Microsoft 365 invalide.")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise Microsoft365SecretValidationError(
+            "Secret client Microsoft 365 invalide."
+        ) from error
+    if not encoded or len(encoded) > MAX_MICROSOFT365_CLIENT_SECRET_BYTES:
+        raise Microsoft365SecretValidationError("Secret client Microsoft 365 invalide.")
+    if all(
+        character.isspace() or unicodedata.category(character).startswith("C")
+        for character in value
+    ):
+        raise Microsoft365SecretValidationError("Secret client Microsoft 365 invalide.")
+    return encoded
+
+
+def save_microsoft365_client_secret(
+    value: object,
+    *,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Atomically replace the environment-selected Graph secret without accepting a path."""
+    encoded = _validate_microsoft365_client_secret(value)
+    environment = dict(os.environ) if env is None else env
+    path = _microsoft365_secret_path(environment)
+    status = _inspect_microsoft365_secret_storage(path)
+    if path is None or not status.can_write:
+        raise _microsoft365_storage_error()
+
+    try:
+        with _microsoft365_secret_lock(path) as parent_fd:
+            target_kind = _secret_entry_kind_at(parent_fd, path.name)
+            if target_kind not in {"missing", "regular"}:
+                raise _microsoft365_storage_error()
+            if not _secret_entry_is_writable(
+                parent_fd,
+                path.name,
+                target_kind=target_kind,
+            ):
+                raise _microsoft365_storage_error()
+
+            temporary_name = (
+                f".{path.name}.tmp-{os.getpid()}-{secrets.token_hex(8)}"
+            )
+            try:
+                flags = (
+                    os.O_WRONLY
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                descriptor = os.open(
+                    temporary_name,
+                    flags,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+                try:
+                    with os.fdopen(descriptor, "wb") as handle:
+                        descriptor = -1
+                        os.fchmod(handle.fileno(), 0o600)
+                        handle.write(encoded)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                finally:
+                    if descriptor != -1:
+                        os.close(descriptor)
+
+                # Recheck the destination through the pinned parent immediately before rename.
+                target_kind = _secret_entry_kind_at(parent_fd, path.name)
+                if target_kind not in {"missing", "regular"} or not _secret_entry_is_writable(
+                    parent_fd,
+                    path.name,
+                    target_kind=target_kind,
+                ):
+                    raise _microsoft365_storage_error()
+                os.replace(
+                    temporary_name,
+                    path.name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                temporary_name = ""
+                try:
+                    os.fsync(parent_fd)
+                except OSError:
+                    # The rename already completed atomically; do not report an error after
+                    # mutating the destination and thereby imply that the old value survived.
+                    pass
+            finally:
+                if temporary_name:
+                    try:
+                        os.unlink(temporary_name, dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        pass
+            return MICROSOFT365_SECRET_STORAGE_AVAILABLE
+    except Microsoft365SecretStorageError:
+        raise
+    except (OSError, UnicodeError, ValueError) as error:
+        raise _microsoft365_storage_error() from error
+
+
+def _load_microsoft365_client_secret(
+    environment: dict[str, str],
+) -> tuple[str, str, str, Microsoft365SecretStorageStatus]:
+    path = _microsoft365_secret_path(environment)
+    status = _inspect_microsoft365_secret_storage(path)
+    if path is None:
+        return "", "", "Secret Microsoft 365 non configuré.", status
+
+    parent_fd = -1
+    descriptor = -1
+    try:
+        # Resolve every parent component with O_NOFOLLOW, then keep that directory descriptor
+        # pinned while opening the target. O_NONBLOCK prevents a target swapped to a FIFO between
+        # the lstat and open from hanging the collector.
+        parent_fd = _open_microsoft365_secret_parent(path)
+        target_kind = _secret_entry_kind_at(parent_fd, path.name)
+        if target_kind == "missing":
+            return "", str(path), "Secret Microsoft 365 non configuré.", status
+        if target_kind != "regular":
+            unavailable = Microsoft365SecretStorageStatus(
+                MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
+                False,
+                False,
+            )
+            return "", str(path), "Secret Microsoft 365 non configuré.", unavailable
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=parent_fd,
+        )
+        target_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(target_stat.st_mode):
+            unavailable = Microsoft365SecretStorageStatus(
+                MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
+                False,
+                False,
+            )
+            return "", str(path), "Secret Microsoft 365 non configuré.", unavailable
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            raw = handle.read(MAX_MICROSOFT365_CLIENT_SECRET_BYTES + 1)
+        if len(raw) > MAX_MICROSOFT365_CLIENT_SECRET_BYTES:
+            return "", str(path), "Secret Microsoft 365 illisible.", status
+        value = raw.decode("utf-8").rstrip("\r\n")
+    except (OSError, UnicodeError, ValueError):
+        unavailable = Microsoft365SecretStorageStatus(
+            MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
+            False,
+            False,
+        )
+        return "", str(path), "Secret Microsoft 365 illisible.", unavailable
+    finally:
+        if descriptor != -1:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if parent_fd != -1:
+            os.close(parent_fd)
+    if not value:
+        return "", str(path), "Secret Microsoft 365 illisible.", status
+    return value, str(path), "", status
 
 
 def _email_transport_from_env(environment: dict[str, str]) -> str:
@@ -963,10 +1399,8 @@ def load_smtp_snapshot(
         smtp_password, smtp_password_file, smtp_password_error = _env_secret(
             environment, "FORTIOS_SMTP_PASSWORD"
         )
-        graph_secret, graph_secret_file, graph_secret_error = _env_secret(
-            environment,
-            "FORTIOS_MICROSOFT365_CLIENT_SECRET",
-            label="Microsoft 365",
+        graph_secret, graph_secret_file, graph_secret_error, graph_secret_storage = (
+            _load_microsoft365_client_secret(environment)
         )
         graph_timeout = _env_int(
             environment,
@@ -995,6 +1429,8 @@ def load_smtp_snapshot(
             graph_client_secret=graph_secret,
             graph_client_secret_file=graph_secret_file,
             graph_client_secret_error=graph_secret_error,
+            graph_client_secret_storage_state=graph_secret_storage.state,
+            graph_client_secret_write_available=graph_secret_storage.can_write,
             graph_sender=transport_settings.sender,
             graph_display_name=transport_settings.display_name,
             graph_mailbox_identity=transport_settings.mailbox_identity,
@@ -1044,6 +1480,26 @@ def load_email_config(
     return config
 
 
+def _microsoft365_public_status(config: EmailConfig) -> dict[str, Any]:
+    return {
+        "tenantId": config.graph_tenant_id,
+        "clientId": config.graph_client_id,
+        "from": config.graph_sender,
+        "displayName": config.graph_display_name or config.display_name,
+        "mailboxIdentity": config.mailbox_identity,
+        "clientSecretConfigured": bool(
+            config.graph_client_secret and not config.graph_client_secret_error
+        ),
+        "clientSecretSource": "mounted-file"
+        if config.graph_client_secret_file
+        else "not-configured",
+        "clientSecretStorageState": config.graph_client_secret_storage_state,
+        "canSetClientSecret": config.graph_client_secret_write_available,
+        "helpUrl": "/cert/microsoft365-help",
+        "guideUrl": "/cert/microsoft365-guide.md",
+    }
+
+
 def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
     public = {
         "state": "operational" if config.is_complete() else "incomplete",
@@ -1053,22 +1509,7 @@ def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
         "starttls": config.smtp_starttls,
         "from": config.smtp_from,
     }
-    if config.transport == EMAIL_TRANSPORT_MICROSOFT365:
-        public["microsoft365"] = {
-            "tenantId": config.graph_tenant_id,
-            "clientId": config.graph_client_id,
-            "from": config.graph_sender,
-            "displayName": config.graph_display_name or config.display_name,
-            "mailboxIdentity": config.mailbox_identity,
-            "clientSecretConfigured": bool(
-                config.graph_client_secret and not config.graph_client_secret_error
-            ),
-            "clientSecretSource": "mounted-file"
-            if config.graph_client_secret_file
-            else "not-configured",
-            "helpUrl": "/cert/microsoft365-help",
-            "guideUrl": "/cert/microsoft365-guide.md",
-        }
+    public["microsoft365"] = _microsoft365_public_status(config)
     return public
 
 
@@ -1086,22 +1527,7 @@ def smtp_public_settings(
         ),
         "transport": config.transport,
     }
-    if config.transport == EMAIL_TRANSPORT_MICROSOFT365:
-        public["microsoft365"] = {
-            "tenantId": config.graph_tenant_id,
-            "clientId": config.graph_client_id,
-            "from": config.graph_sender,
-            "displayName": config.graph_display_name or config.display_name,
-            "mailboxIdentity": config.mailbox_identity,
-            "clientSecretConfigured": bool(
-                config.graph_client_secret and not config.graph_client_secret_error
-            ),
-            "clientSecretSource": "mounted-file"
-            if config.graph_client_secret_file
-            else "not-configured",
-            "helpUrl": "/cert/microsoft365-help",
-            "guideUrl": "/cert/microsoft365-guide.md",
-        }
+    public["microsoft365"] = _microsoft365_public_status(config)
     return public
 
 

@@ -7,7 +7,7 @@ x-email-environment: &email-environment
   PGID: "1000"
   FORTIOS_EMAIL_ENABLED: "false"
   FORTIOS_EMAIL_TRANSPORT: smtp
-  FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: /run/fortios-secrets/microsoft365-client-secret
+  FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: /opt/fortios/microsoft365-secrets/client-secret
   FORTIOS_MICROSOFT365_TIMEOUT: "10"
   FORTIOS_APP_URL: https://localhost:18443/app/
 
@@ -30,6 +30,7 @@ services:
       - candidate-data:/opt/fortios/data
       - candidate-docs:/opt/fortios/docs
       - candidate-admin:/opt/fortios/certificates
+      - candidate-microsoft365-secrets:/opt/fortios/microsoft365-secrets:rw
       - type: bind
         source: /var/lib/fortiupgrade-m365-test/secrets
         target: /run/fortios-secrets
@@ -56,6 +57,7 @@ services:
       <<: *email-environment
       FORTIOS_RUN_ON_START: "0"
     volumes:
+      - candidate-microsoft365-secrets:/opt/fortios/microsoft365-secrets:ro
       - candidate-data:/opt/fortios/data
       - candidate-docs:/opt/fortios/docs
       - type: bind
@@ -70,6 +72,7 @@ services:
       - no-new-privileges:true
 
 volumes:
+  candidate-microsoft365-secrets:
   candidate-data:
   candidate-admin:
   candidate-docs:

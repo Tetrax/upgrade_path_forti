@@ -21,7 +21,7 @@ services:
       FORTIOS_EMAIL_TRANSPORT: ${FORTIOS_EMAIL_TRANSPORT:-smtp}
       FORTIOS_MICROSOFT365_TENANT_ID: ${FORTIOS_MICROSOFT365_TENANT_ID:-}
       FORTIOS_MICROSOFT365_CLIENT_ID: ${FORTIOS_MICROSOFT365_CLIENT_ID:-}
-      FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: ${FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE:-}
+      FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: ${FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE:-/opt/fortios/microsoft365-secrets/client-secret}
       FORTIOS_MICROSOFT365_FROM: ${FORTIOS_MICROSOFT365_FROM:-}
       FORTIOS_MICROSOFT365_DISPLAY_NAME: ${FORTIOS_MICROSOFT365_DISPLAY_NAME:-}
       FORTIOS_MICROSOFT365_MAILBOX_IDENTITY: ${FORTIOS_MICROSOFT365_MAILBOX_IDENTITY:-}
@@ -44,6 +44,7 @@ services:
       - ${FORTIOS_CERTS_DIR:-./certificates}:/opt/fortios/certificates:${FORTIOS_CERTS_MOUNT_MODE:-rw}
       - ${FORTIOS_CERT_HELPER_SOCKET_DIR:-/run/fortios-cert-helper}:/run/fortios-cert-helper:ro
       - ${FORTIOS_SECRETS_DIR:-/etc/fortiupgrade/secrets}:/run/fortios-secrets:ro
+      - fortios-microsoft365-secrets:/opt/fortios/microsoft365-secrets:rw
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=128m
     healthcheck:
@@ -72,7 +73,7 @@ services:
       FORTIOS_EMAIL_TRANSPORT: ${FORTIOS_EMAIL_TRANSPORT:-smtp}
       FORTIOS_MICROSOFT365_TENANT_ID: ${FORTIOS_MICROSOFT365_TENANT_ID:-}
       FORTIOS_MICROSOFT365_CLIENT_ID: ${FORTIOS_MICROSOFT365_CLIENT_ID:-}
-      FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: ${FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE:-}
+      FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: ${FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE:-/opt/fortios/microsoft365-secrets/client-secret}
       FORTIOS_MICROSOFT365_FROM: ${FORTIOS_MICROSOFT365_FROM:-}
       FORTIOS_MICROSOFT365_DISPLAY_NAME: ${FORTIOS_MICROSOFT365_DISPLAY_NAME:-}
       FORTIOS_MICROSOFT365_MAILBOX_IDENTITY: ${FORTIOS_MICROSOFT365_MAILBOX_IDENTITY:-}
@@ -90,7 +91,11 @@ services:
       - ${FORTIOS_DATA_DIR:-./data}:/opt/fortios/data
       - ${FORTIOS_DOCS_DIR:-./docs}:/opt/fortios/docs
       - ${FORTIOS_SECRETS_DIR:-/etc/fortiupgrade/secrets}:/run/fortios-secrets:ro
+      - fortios-microsoft365-secrets:/opt/fortios/microsoft365-secrets:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  fortios-microsoft365-secrets:

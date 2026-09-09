@@ -187,17 +187,20 @@ Before enabling Microsoft 365:
 
 1. Follow [the Entra/Exchange setup guide](microsoft365.md). Prefer scoped
    Exchange `Application Mail.Send` over tenant-wide Entra `Mail.Send` consent.
-2. Provision `<FORTIOS_SECRETS_DIR>/microsoft365-client-secret` outside Git/data,
-   mode `0640` and owner `root:PGID`, in the existing mode-`0750` secret directory.
-   Set only the reference
-   `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE=/run/fortios-secrets/microsoft365-client-secret`
-   in the Stack. Never put the credential value in Stack YAML, environment
-   values, Docker build arguments or a browser payload.
+2. Use the dedicated `fortios-microsoft365-secrets` persistent volume in the
+   updated Compose: web mounts it `rw`, scheduler mounts the same volume `ro`.
+   Both use `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE=/opt/fortios/microsoft365-secrets/client-secret`.
+   The entrypoint initializes directory ownership for PUID/PGID and mode `0700`;
+   the GUI writes a mode-`0600` file atomically. Never put its value in Stack YAML,
+   environment values or Docker build arguments. Only the authenticated HTTPS
+   secret-write endpoint accepts the value; settings responses never return it.
 3. Keep the same data/docs/certificate volumes, PUID/PGID, proxy configuration and
    Stack name. Recreate web and scheduler with the reviewed, pinned candidate
    image. No global Docker cleanup or volume deletion is required.
-4. Verify both containers can read the mounted secret without printing it and
-   cannot write the secret mount. Allow DNS and outbound HTTPS to
+4. Set or replace the secret through Administration → Notifications → Microsoft
+   365. Verify both containers can read it without printing it; scheduler cannot
+   write the Microsoft volume. Keep the existing SMTP secret directory read-only
+   in both containers. Allow DNS and outbound HTTPS to
    `login.microsoftonline.com` and `graph.microsoft.com`; do not weaken TLS.
 5. Save the Graph parameters in the admin form and explicitly send a test mail.
    Check its reception as well as `202 Accepted`. Repeat after recreation to
@@ -210,6 +213,16 @@ the new setup instructions. No runtime document directory is overwritten.
 name, in addition to existing credential/catalog exclusions. Arbitrarily named
 secrets still belong outside the build context; ignore patterns are not a secret
 manager.
+
+For upgrades from an externally provisioned Graph file, migrate the existing
+credential into the dedicated volume before changing its path, or keep the old
+reference and accept that GUI writes remain unavailable on read-only storage.
+There is exactly one configured file, not a hidden override. Update both image
+and Compose/Portainer Stack, retain its project name and all existing volumes.
+The same model works with direct TLS and a host reverse proxy; no additional
+host helper is required. Include the new private volume in protected backups.
+An image rollback to a Graph-capable version can retain the same volume/path
+and newest secret; do not revert secret rotation or notification state blindly.
 
 ### Data compatibility and rollback
 

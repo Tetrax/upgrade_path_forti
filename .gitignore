@@ -9,6 +9,7 @@ data/smtp-settings.json*
 data/email-transport-settings.json*
 data/.email-transport-settings.json*
 **/microsoft365-client-secret*
+**/microsoft365-secrets/
 data/smtp-password*
 data/.smtp-settings.json*
 data/.smtp-password*
@@ -30,7 +31,7 @@ certificates/
 *.p7b
 *.p7c
 
-# Email credentials belong in read-only deployment secret files outside the repo,
+# Email credentials belong in private persistent secret files outside the repo,
 # never in environment values — also guard against accidental real .env files.
 *.env
 .env*

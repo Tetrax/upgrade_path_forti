@@ -155,6 +155,9 @@ IMAGE_REF_RE = re.compile(r"!\[[^\]]*\]\(/data/advisory-images/([^)\s]+)\)")
 MAX_JSON_BODY_BYTES = 1 * 1024 * 1024
 MAX_IMAGE_UPLOAD_BODY_BYTES = 12 * 1024 * 1024
 MAX_CERT_UPLOAD_BODY_BYTES = 56 * 1024 * 1024
+MAX_MICROSOFT365_CLIENT_SECRET_BODY_BYTES = (
+    6 * fortios_notify.MAX_MICROSOFT365_CLIENT_SECRET_BYTES + 512
+)
 REQUEST_SOCKET_TIMEOUT_SECONDS = 15
 EMAIL_PREVIEW_RENDER_PREFIX = "/api/cert/notifications/preview/render/"
 EMAIL_PREVIEW_CSP = (
@@ -943,6 +946,48 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             extra_headers={"Cache-Control": "no-store"},
         )
 
+    def handle_microsoft365_client_secret_write(self) -> None:
+        if self.require_admin_session(csrf=True) is None:
+            return
+        try:
+            payload = self.read_json_body(
+                max_bytes=MAX_MICROSOFT365_CLIENT_SECRET_BODY_BYTES
+            )
+            if not isinstance(payload, dict) or set(payload) != {"clientSecret"}:
+                raise fortios_notify.Microsoft365SecretValidationError(
+                    "Secret client Microsoft 365 invalide."
+                )
+            fortios_notify.save_microsoft365_client_secret(payload["clientSecret"])
+            response = self.smtp_settings_response()
+        except fortios_notify.Microsoft365SecretValidationError:
+            self.write_json_response(
+                {"error": "Secret client Microsoft 365 invalide."},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except (TypeError, ValueError):
+            self.write_json_response(
+                {"error": "Secret client Microsoft 365 invalide."},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except fortios_notify.Microsoft365SecretStorageError:
+            self.write_json_response(
+                {
+                    "error": "Stockage du secret Microsoft 365 indisponible.",
+                    "errorCode": fortios_notify.MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
+                },
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            response,
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
     def handle_smtp_password_delete(self) -> None:
         if self.require_admin_session(csrf=True) is None:
             return
@@ -1279,6 +1324,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_cert_logout()
             elif url_path == "/api/cert/password":
                 self.handle_cert_password_change()
+            elif url_path == "/api/cert/microsoft365/client-secret":
+                self.handle_microsoft365_client_secret_write()
             elif self.path == "/api/cert/notifications":
                 self.handle_notification_settings_write()
             elif self.path == "/api/cert/smtp":
