@@ -357,12 +357,21 @@
               <div class="panel-header result-heading">
                 <div>
                   <p class="eyebrow">Infrastructure email</p>
-                  <h3 class="panel-title">Configuration SMTP</h3>
-                  <p class="panel-copy">Gérée par l’environnement de déploiement. Secret fourni exclusivement par un fichier monté en lecture seule.</p>
+                  <h3 class="panel-title" id="email-transport-heading">Configuration SMTP</h3>
+                  <p class="panel-copy" id="email-transport-copy">Les paramètres sont enregistrés ici. Les secrets restent stockés séparément.</p>
                 </div>
                 <p class="smtp-status"><span class="status-dot neutral" id="smtp-status-dot" aria-hidden="true"></span><strong id="smtp-status-label">Chargement…</strong></p>
               </div>
               <div class="panel-body">
+                <div class="field transport-choice">
+                  <label for="email-transport">Comment voulez-vous envoyer les notifications ?</label>
+                  <select id="email-transport" required>
+                    <option value="smtp">SMTP</option>
+                    <option value="microsoft365">Microsoft 365 / Azure</option>
+                  </select>
+                  <span class="field-help">Le choix et les paramètres sont conservés après redémarrage.</span>
+                </div>
+                <div id="smtp-transport-fields">
                 <div class="compact-field-grid">
                   <div class="field field-wide">
                     <label for="smtp-host">Serveur SMTP</label>
@@ -389,11 +398,10 @@
                     <input id="smtp-username" maxlength="320" autocomplete="username">
                   </div>
                 </div>
-                <div class="secret-control">
-                  <div>
-                    <strong>Mot de passe</strong>
-                    <p id="smtp-password-status">Non configuré</p>
-                  </div>
+                <div class="field">
+                  <label for="smtp-password">Mot de passe</label>
+                  <input id="smtp-password" type="password" maxlength="4096" autocomplete="new-password" placeholder="Laisser vide pour conserver" aria-describedby="smtp-password-status">
+                  <span class="field-help" id="smtp-password-status">Non configuré</span>
                 </div>
                 <div class="field">
                   <label for="smtp-from-address">Expéditeur</label>
@@ -410,6 +418,50 @@
                     <input id="smtp-timeout" type="number" required min="1" max="120" inputmode="numeric">
                   </div>
                 </details>
+                </div>
+                <section id="microsoft365-settings" class="microsoft365-settings" hidden aria-labelledby="microsoft365-settings-heading">
+                  <div class="microsoft365-heading">
+                    <div>
+                      <h4 id="microsoft365-settings-heading">Microsoft 365</h4>
+                      <p class="field-help">Envoi sans serveur SMTP, depuis une boîte Microsoft 365 autorisée.</p>
+                    </div>
+                    <a id="microsoft365-help" class="btn" href="/cert/microsoft365-guide.md">Comment configurer Microsoft 365 ?</a>
+                  </div>
+                  <div class="compact-field-grid">
+                    <div class="field field-wide">
+                      <label for="m365-tenant-id">Tenant ID ou domaine</label>
+                      <input id="m365-tenant-id" maxlength="255" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off">
+                    </div>
+                    <div class="field field-wide">
+                      <label for="m365-client-id">Application (client) ID</label>
+                      <input id="m365-client-id" maxlength="36" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off">
+                    </div>
+                    <div class="field m365-secret-control field-wide">
+                      <label for="m365-client-secret">Client secret</label>
+                      <p id="m365-secret-status" hidden>Non configuré</p>
+                      <p class="field-help" id="m365-secret-storage-status" hidden aria-live="polite">storage-unavailable</p>
+                      <div class="secret-actions">
+                        <input id="m365-client-secret" type="password" autocomplete="new-password" maxlength="4096" spellcheck="false">
+                        <button class="btn" id="save-m365-secret-button" type="button">Enregistrer</button>
+                      </div>
+                      <p class="form-message" id="m365-secret-message" role="alert"></p>
+                    </div>
+                    <div class="field">
+                      <label for="m365-from-address">Adresse d’envoi</label>
+                      <input id="m365-from-address" type="email" maxlength="254" placeholder="fortiupgrade@example.tld" autocomplete="email">
+                      <span class="field-help">Doit être une boîte autorisée par Graph.</span>
+                    </div>
+                    <div class="field">
+                      <label for="m365-display-name">Nom affiché</label>
+                      <input id="m365-display-name" maxlength="100" placeholder="FortiUpgrade" autocomplete="organization">
+                    </div>
+                    <div class="field field-wide">
+                      <label for="m365-mailbox-identity">Identité de boîte Graph (avancé, facultatif)</label>
+                      <input id="m365-mailbox-identity" maxlength="320" placeholder="UPN ou ExternalDirectoryObjectId" autocomplete="off">
+                      <span class="field-help">Utilisée dans <code>/users/{...}/sendMail</code> quand l’UPN diffère de l’adresse expéditrice. GUID ou UPN uniquement ; ne saisissez pas un alias SMTP arbitraire.</span>
+                    </div>
+                  </div>
+                </section>
               </div>
             </section>
 
@@ -480,8 +532,9 @@
               <label for="test-email-recipient">Destinataire de test</label>
               <input id="test-email-recipient" type="email" required maxlength="254" placeholder="security@example.com">
             </div>
-            <dl class="smtp-details test-summary" aria-label="Résumé du test SMTP">
-              <div><dt>SMTP</dt><dd id="test-smtp-endpoint">Non configuré</dd></div>
+            <dl class="smtp-details test-summary" aria-label="Résumé du test email">
+              <div><dt>Transport</dt><dd id="test-email-transport">Non configuré</dd></div>
+              <div><dt id="test-email-endpoint-label">SMTP</dt><dd id="test-smtp-endpoint">Non configuré</dd></div>
               <div><dt>Sécurité</dt><dd id="test-smtp-security">—</dd></div>
               <div><dt>Expéditeur</dt><dd id="test-smtp-from">Non configuré</dd></div>
               <div><dt>Destinataire</dt><dd id="test-smtp-recipient">—</dd></div>

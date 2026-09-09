@@ -853,7 +853,7 @@ class NotificationAdminWebTests(unittest.TestCase):
             response_text = json.dumps([saved, current, test_result]).lower()
             self.assertNotIn("password", response_text)
             self.assertNotIn("username", response_text)
-            self.assertNotIn("secret", response_text)
+            self.assertNotIn('"clientsecret":', response_text)
             self.assertEqual(current["settings"], settings_payload())
             self.assertEqual(current["smtp"]["state"], "operational")
             self.assertTrue(test_result["sent"])

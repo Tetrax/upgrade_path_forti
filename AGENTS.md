@@ -164,9 +164,9 @@ Elle est validée et persistée dans l’état applicatif prévu à cet effet.
 - URL applicative ;
 - référence vers le secret SMTP.
 
-Elle relève de l’environnement de déploiement.
+Les paramètres SMTP non secrets sont modifiables dans l’administration et persistés par le moteur existant. L’environnement sert de bootstrap ; une sauvegarde GUI valide et explicitement versionnée devient autoritative. Les anciens fichiers non marqués ne doivent jamais réactiver silencieusement des paramètres obsolètes. Une configuration enregistrée invalide suspend les envois plutôt que revenir à une autre source.
 
-Le mot de passe SMTP est fourni par un fichier secret monté en lecture seule. Il ne doit jamais être enregistré dans Git, dans la configuration fonctionnelle, dans l’image, dans une réponse au navigateur ou dans les logs.
+La référence du mot de passe SMTP reste définie par l’environnement de déploiement. Sa saisie administrateur est write-only, avec les protections de session, d’origine et de CSRF existantes ; un champ vide conserve le secret actuel. L’écriture atomique utilise un stockage privé dédié, inscriptible par le web et en lecture seule pour le scheduler, sans rendre inscriptibles les répertoires globaux de secrets ou de certificats. Les anciens montages en lecture seule restent utilisables pour l’envoi. Le mot de passe ne doit jamais être enregistré dans Git, dans la configuration fonctionnelle, dans l’image, dans une réponse au navigateur ou dans les logs. Les procédures de migration et de rollback restent dans `docs/delivery.md`.
 
 Une compatibilité historique par variables d’environnement peut servir au bootstrap initial, mais elle ne doit pas devenir une seconde source de vérité après l’enregistrement de la configuration fonctionnelle.
 

@@ -17,10 +17,18 @@ services:
       FORTIOS_CERT_ADMIN_FILE: ${FORTIOS_CERT_ADMIN_FILE:-/opt/fortios/certificates/admin/credentials.json}
       FORTIOS_OFFICIAL_PATH_MAX_CONCURRENCY: ${FORTIOS_OFFICIAL_PATH_MAX_CONCURRENCY:-2}
       FORTIOS_EMAIL_ENABLED: ${FORTIOS_EMAIL_ENABLED:-false}
+      FORTIOS_EMAIL_TRANSPORT: ${FORTIOS_EMAIL_TRANSPORT:-smtp}
+      FORTIOS_MICROSOFT365_TENANT_ID: ${FORTIOS_MICROSOFT365_TENANT_ID:-}
+      FORTIOS_MICROSOFT365_CLIENT_ID: ${FORTIOS_MICROSOFT365_CLIENT_ID:-}
+      FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: ${FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE:-/opt/fortios/microsoft365-secrets/client-secret}
+      FORTIOS_MICROSOFT365_FROM: ${FORTIOS_MICROSOFT365_FROM:-}
+      FORTIOS_MICROSOFT365_DISPLAY_NAME: ${FORTIOS_MICROSOFT365_DISPLAY_NAME:-}
+      FORTIOS_MICROSOFT365_MAILBOX_IDENTITY: ${FORTIOS_MICROSOFT365_MAILBOX_IDENTITY:-}
+      FORTIOS_MICROSOFT365_TIMEOUT: ${FORTIOS_MICROSOFT365_TIMEOUT:-10}
       FORTIOS_SMTP_HOST: ${FORTIOS_SMTP_HOST:-}
       FORTIOS_SMTP_PORT: ${FORTIOS_SMTP_PORT:-587}
       FORTIOS_SMTP_USERNAME: ${FORTIOS_SMTP_USERNAME:-}
-      FORTIOS_SMTP_PASSWORD_FILE: ${FORTIOS_SMTP_PASSWORD_FILE:-}
+      FORTIOS_SMTP_PASSWORD_FILE: ${FORTIOS_SMTP_PASSWORD_FILE:-/opt/fortios/smtp-secrets/password}
       FORTIOS_SMTP_STARTTLS: ${FORTIOS_SMTP_STARTTLS:-true}
       FORTIOS_SMTP_TIMEOUT: ${FORTIOS_SMTP_TIMEOUT:-10}
       FORTIOS_SMTP_FROM: ${FORTIOS_SMTP_FROM:-}
@@ -34,6 +42,8 @@ services:
       - fortios-docs:/opt/fortios/docs
       - fortios-certificates:/opt/fortios/certificates
       - ${FORTIOS_SECRETS_DIR:-/etc/fortiupgrade/secrets}:/run/fortios-secrets:ro
+      - fortios-microsoft365-secrets:/opt/fortios/microsoft365-secrets:rw
+      - fortios-smtp-secrets:/opt/fortios/smtp-secrets:rw
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=128m
     healthcheck:
@@ -56,10 +66,18 @@ services:
       FORTIOS_SMTP_ALLOW_INSECURE: ${FORTIOS_SMTP_ALLOW_INSECURE:-false}
       FORTIOS_RUN_ON_START: ${FORTIOS_RUN_ON_START:-0}
       FORTIOS_EMAIL_ENABLED: ${FORTIOS_EMAIL_ENABLED:-false}
+      FORTIOS_EMAIL_TRANSPORT: ${FORTIOS_EMAIL_TRANSPORT:-smtp}
+      FORTIOS_MICROSOFT365_TENANT_ID: ${FORTIOS_MICROSOFT365_TENANT_ID:-}
+      FORTIOS_MICROSOFT365_CLIENT_ID: ${FORTIOS_MICROSOFT365_CLIENT_ID:-}
+      FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: ${FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE:-/opt/fortios/microsoft365-secrets/client-secret}
+      FORTIOS_MICROSOFT365_FROM: ${FORTIOS_MICROSOFT365_FROM:-}
+      FORTIOS_MICROSOFT365_DISPLAY_NAME: ${FORTIOS_MICROSOFT365_DISPLAY_NAME:-}
+      FORTIOS_MICROSOFT365_MAILBOX_IDENTITY: ${FORTIOS_MICROSOFT365_MAILBOX_IDENTITY:-}
+      FORTIOS_MICROSOFT365_TIMEOUT: ${FORTIOS_MICROSOFT365_TIMEOUT:-10}
       FORTIOS_SMTP_HOST: ${FORTIOS_SMTP_HOST:-}
       FORTIOS_SMTP_PORT: ${FORTIOS_SMTP_PORT:-587}
       FORTIOS_SMTP_USERNAME: ${FORTIOS_SMTP_USERNAME:-}
-      FORTIOS_SMTP_PASSWORD_FILE: ${FORTIOS_SMTP_PASSWORD_FILE:-}
+      FORTIOS_SMTP_PASSWORD_FILE: ${FORTIOS_SMTP_PASSWORD_FILE:-/opt/fortios/smtp-secrets/password}
       FORTIOS_SMTP_STARTTLS: ${FORTIOS_SMTP_STARTTLS:-true}
       FORTIOS_SMTP_TIMEOUT: ${FORTIOS_SMTP_TIMEOUT:-10}
       FORTIOS_SMTP_FROM: ${FORTIOS_SMTP_FROM:-}
@@ -69,12 +87,16 @@ services:
       - fortios-data:/opt/fortios/data
       - fortios-docs:/opt/fortios/docs
       - ${FORTIOS_SECRETS_DIR:-/etc/fortiupgrade/secrets}:/run/fortios-secrets:ro
+      - fortios-microsoft365-secrets:/opt/fortios/microsoft365-secrets:ro
+      - fortios-smtp-secrets:/opt/fortios/smtp-secrets:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m
     security_opt:
       - no-new-privileges:true
 
 volumes:
+  fortios-smtp-secrets:
+  fortios-microsoft365-secrets:
   fortios-data:
   fortios-docs:
   fortios-certificates:

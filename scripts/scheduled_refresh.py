@@ -237,6 +237,7 @@ def _notify_compatibility_transition(*, root: Path) -> None:
         new_checkpoint,
         events,
         claimant=claimant,
+        transport=config.transport,
     )
     composed = fortios_notify.compose_email(
         pending,
@@ -247,10 +248,16 @@ def _notify_compatibility_transition(*, root: Path) -> None:
     if not composed:
         return
     subject, text_body, html_body = composed
-    if fortios_notify.send_email(config, subject, text_body, html_body):
+    result = fortios_notify.deliver_email_result(config, subject, text_body, html_body)
+    if result.sent:
         fortios_notify.finalize_sent_events(history_path, pending)
     else:
-        fortios_notify.release_claim(history_path, claimant)
+        fortios_notify.release_claim(
+            history_path,
+            claimant,
+            outcome=result,
+            transport=config.transport,
+        )
 
 
 def _run_full_unlocked(

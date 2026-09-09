@@ -578,8 +578,9 @@ def test_notifications_admin_exposes_grouped_smtp_and_email_appearance(page, for
         "options => options.map(option => option.value)",
     ) == ["starttls", "tls", "none"]
     expect(page.locator("#smtp-advanced-options")).not_to_have_attribute("open", "")
-    expect(page.locator("#smtp-host")).to_be_disabled()
-    expect(page.locator("#smtp-password")).to_have_count(0)
+    expect(page.locator("#smtp-host")).not_to_be_disabled()
+    expect(page.locator("#smtp-password")).to_have_count(1)
+    expect(page.locator("#smtp-password")).not_to_be_disabled()
     expect(page.locator("#replace-smtp-password-button")).to_have_count(0)
     expect(page.locator("#delete-smtp-password-button")).to_have_count(0)
 
@@ -783,13 +784,21 @@ def test_email_preview_ignores_stale_responses_after_rapid_scenario_changes(
     )
 
 
-def test_smtp_admin_persists_appearance_without_mutating_infrastructure(
-    page, fortios_server
-):
+def test_smtp_admin_edits_configuration_and_appearance(page, fortios_server):
     login_cert_admin(page, fortios_server)
     page.click("#notifications-tab")
     for field in ("host", "port", "security", "username", "from-address", "app-url", "timeout"):
-        expect(page.locator(f"#smtp-{field}")).to_be_disabled()
+        expect(page.locator(f"#smtp-{field}")).not_to_be_disabled()
+    expect(page.locator("#smtp-password")).to_have_count(1)
+    expect(page.locator("#smtp-password")).not_to_be_disabled()
+    page.fill("#smtp-host", "smtp.gui.example")
+    page.fill("#smtp-port", "2525")
+    page.select_option("#smtp-security", "starttls")
+    page.fill("#smtp-username", "gui-user")
+    page.fill("#smtp-from-address", "gui@example.invalid")
+    page.fill("#smtp-app-url", f"{fortios_server.base_url}/app/")
+    page.locator("#smtp-advanced-options summary").click()
+    page.fill("#smtp-timeout", "18")
     page.fill("#email-display-name", "FortiUpgrade E2E")
     page.fill("#email-introduction", "Introduction E2E")
     page.fill("#email-signature", "Signature E2E")
@@ -801,7 +810,10 @@ def test_smtp_admin_persists_appearance_without_mutating_infrastructure(
         page.click("#save-smtp-button")
     saved_payload = saved_response.value.json()
     assert saved_payload["smtp"]["passwordConfigured"] is False
-    assert set(saved_response.value.request.post_data_json) == {"emailAppearance"}
+    assert set(saved_response.value.request.post_data_json) == {
+        "transport", "microsoft365", "emailAppearance", "smtp"
+    }
+    assert "password" not in json.dumps(saved_response.value.request.post_data_json).lower()
     expect(page.locator("#smtp-message")).to_have_text(
         "Configuration email enregistrée."
     )
@@ -809,6 +821,12 @@ def test_smtp_admin_persists_appearance_without_mutating_infrastructure(
     page.reload()
     expect(page.locator("#admin-view")).to_be_visible()
     page.click("#notifications-tab")
+    expect(page.locator("#smtp-host")).to_have_value("smtp.gui.example")
+    expect(page.locator("#smtp-port")).to_have_value("2525")
+    expect(page.locator("#smtp-username")).to_have_value("gui-user")
+    expect(page.locator("#smtp-from-address")).to_have_value("gui@example.invalid")
+    expect(page.locator("#smtp-app-url")).to_have_value(f"{fortios_server.base_url}/app/")
+    expect(page.locator("#smtp-timeout")).to_have_value("18")
     expect(page.locator("#email-display-name")).to_have_value("FortiUpgrade E2E")
     expect(page.locator("#email-introduction")).to_have_value("Introduction E2E")
     expect(page.locator("#email-signature")).to_have_value("Signature E2E")

@@ -19,11 +19,13 @@ COPY app ./app
 COPY scripts ./scripts
 COPY data ./data
 COPY docs ./docs
+# Keep the canonical setup guide accessible when historical docs volumes mask image docs.
+COPY docs/microsoft365.md ./app/cert/microsoft365-guide.md
 COPY docker/entrypoint.sh /usr/local/bin/fortios-entrypoint
 COPY docker/certctl.sh /usr/local/bin/fortios-certctl
 COPY docker/cert_admin.sh /usr/local/bin/fortios-cert-admin
 
-RUN mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs /opt/fortios/certificates \
+RUN mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs /opt/fortios/certificates /opt/fortios/microsoft365-secrets /opt/fortios/smtp-secrets \
     && chmod -R a+rX /opt/fortios/app /opt/fortios/scripts \
     && chmod 0755 /usr/local/bin/fortios-entrypoint /usr/local/bin/fortios-certctl \
       /usr/local/bin/fortios-cert-admin

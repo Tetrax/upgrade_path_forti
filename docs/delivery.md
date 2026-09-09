@@ -151,11 +151,15 @@ A different Stack name or bind path is a new data store, not a migration.
   `admin/`, not only `active/`.
 - `FORTIOS_SECRETS_DIR`: absolute host directory outside Git/data, mounted read-only
   at `/run/fortios-secrets` in web and scheduler. Create it even without SMTP.
-- `FORTIOS_SMTP_PASSWORD_FILE=/run/fortios-secrets/smtp-password` when configured.
-  File root:PGID mode 0640, parent root:PGID mode 0750. Do not use a plain
-  `FORTIOS_SMTP_PASSWORD` variable or put a secret in Stack YAML.
+- `FORTIOS_SMTP_PASSWORD_FILE=/opt/fortios/smtp-secrets/password`: dedicated
+  `fortios-smtp-secrets` volume, web `rw`, scheduler `ro`, directory `0700` and
+  file `0600` owned by PUID:PGID. The entrypoint prepares the directory; the GUI
+  writes the optional password. An external read-only file remains supported
+  for sending only. Do not use a plain `FORTIOS_SMTP_PASSWORD` variable or put
+  a secret in Stack YAML. Migrate an existing password before changing its path.
 - `FORTIOS_SMTP_HOST`, `FORTIOS_SMTP_PORT`, `FORTIOS_SMTP_USERNAME`,
-  `FORTIOS_SMTP_FROM`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_APP_URL`: deployment environment.
+  `FORTIOS_SMTP_FROM`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_APP_URL`: bootstrap environment;
+  a valid versioned GUI save takes precedence for these non-secret fields.
 - `FORTIOS_SMTP_SECURITY`: `starttls` (default), `tls`, or `none`; clear SMTP also
   requires explicit `FORTIOS_SMTP_ALLOW_INSECURE=true`. Preserve your previous
   transport, sender and application URL.
@@ -170,30 +174,133 @@ A different Stack name or bind path is a new data store, not a migration.
   Normal slots: 07:00 full, 07:45 recovery, 15:30 PSIRT, Europe/Paris.
 
 Functional notification preferences and recipients stay in
-`data/notification-settings.json`; appearance remains in `data/smtp-settings.json`.
+`data/notification-settings.json`; non-secret SMTP settings and appearance reside
+in `data/smtp-settings.json`. The password path always remains environment-owned.
 
-## Migration from the historical Web SMTP console
+## Adding the Microsoft 365 transport
+
+The new image adds an optional Graph transport without replacing SMTP, data
+mounts, notification history or the scheduler. All three Compose definitions
+pass the same `FORTIOS_EMAIL_TRANSPORT` and `FORTIOS_MICROSOFT365_*` variables
+to web and scheduler. Existing installations default to SMTP. Non-secret Graph
+identity fields and transport selection are saved through Administration →
+Notifications in `data/email-transport-settings.json`; once saved, they take
+precedence over bootstrap environment values. SMTP non-secret settings are also
+editable, with their own explicit schema marker; see the migration below.
+
+Before enabling Microsoft 365:
+
+1. Follow [the Entra/Exchange setup guide](microsoft365.md). Prefer scoped
+   Exchange `Application Mail.Send` over tenant-wide Entra `Mail.Send` consent.
+2. Use the dedicated `fortios-microsoft365-secrets` persistent volume in the
+   updated Compose: web mounts it `rw`, scheduler mounts the same volume `ro`.
+   Both use `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE=/opt/fortios/microsoft365-secrets/client-secret`.
+   The entrypoint initializes directory ownership for PUID/PGID and mode `0700`;
+   the GUI writes a mode-`0600` file atomically. Never put its value in Stack YAML,
+   environment values or Docker build arguments. Only the authenticated HTTPS
+   secret-write endpoint accepts the value; settings responses never return it.
+3. Keep the same data/docs/certificate volumes, PUID/PGID, proxy configuration and
+   Stack name. Recreate web and scheduler with the reviewed, pinned candidate
+   image. No global Docker cleanup or volume deletion is required.
+4. Set or replace the secret through Administration → Notifications → Microsoft
+   365. Verify both containers can read it without printing it; scheduler cannot
+   write the Microsoft volume. Keep the global external secrets directory read-only;
+   SMTP GUI writes use a separate private volume. Allow DNS and outbound HTTPS to
+   `login.microsoftonline.com` and `graph.microsoft.com`; do not weaken TLS.
+5. Save the Graph parameters in the admin form and explicitly send a test mail.
+   Check its reception as well as `202 Accepted`. Repeat after recreation to
+   confirm persistence and non-interactive authentication.
+
+The canonical guide is copied into the immutable application directory during
+the Docker build, so an older persistent `/opt/fortios/docs` volume cannot hide
+the new setup instructions. No runtime document directory is overwritten.
+`.dockerignore` excludes transport settings and the conventional credential file
+name, in addition to existing credential/catalog exclusions. Arbitrarily named
+secrets still belong outside the build context; ignore patterns are not a secret
+manager.
+
+For upgrades from an externally provisioned Graph file, migrate the existing
+credential into the dedicated volume before changing its path, or keep the old
+reference and accept that GUI writes remain unavailable on read-only storage.
+There is exactly one configured file, not a hidden override. Update both image
+and Compose/Portainer Stack, retain its project name and all existing volumes.
+The same model works with direct TLS and a host reverse proxy; no additional
+host helper is required. Include the new private volume in protected backups.
+An image rollback to a Graph-capable version can retain the same volume/path
+and newest secret; do not revert secret rotation or notification state blindly.
+
+### Data compatibility and rollback
+
+Back up data/docs/certificates and deployment settings consistently before the
+change, retaining the preceding immutable image. The transport sidecar is
+additive; optional retry metadata extends existing outbox entries without
+changing the checkpoint, event keys or historical categories. A rollback must
+retain the **current** notification history rather than restoring an old
+checkpoint that could replay already-accepted messages.
+
+Before reverting to an older SMTP-only image, disable notifications via the
+existing functional settings if unintended SMTP sending would be a risk: that
+image ignores the Graph selection and Graph retry metadata and uses its SMTP
+environment. Restore the old image and compatible Compose while keeping the
+same volumes. The new sidecar can remain for a later re-upgrade. Verify health,
+catalogue, admin UI, pending outbox and the selected delivery policy again.
+
+The deployment gate must include an isolated copy of existing persistent data,
+candidate startup, Graph settings/retry persistence, container recreation and
+old-image rollback. Keep this copy disconnected from outbound delivery and do
+not reuse operational recipients or credentials for a live test. Unit/mock
+OAuth/Graph success and Docker health do not prove tenant permission or mail
+delivery; real-tenant acceptance is a separate activation gate.
+
+## Migration to editable SMTP administration
 
 Before upgrading, stop only this Stack's scheduler and web for a consistent
 backup (data, docs, certificates, deployment config, helper source). Record image
 IDs/digests and retain the old image. Never remove volumes.
 
-The old `smtp-settings.json` contains non-secret `host`, `port`, `security`,
-`allowInsecure`, `username`, `from`, `appUrl`, `timeout`: transfer their existing
-values to the corresponding environment variables above. Copy `data/smtp-password`
-into the protected `FORTIOS_SECRETS_DIR/smtp-password` without displaying it.
-Verify the two files are byte-identical locally, then move the legacy secret to
-the restricted rollback directory so it is no longer in writable application data.
-Keep `smtp-settings.json`: its `emailAppearance` is read unchanged. Saving appearance
-later writes only this non-secret block. Transport fields from the historical
-file are ignored, even when environment values are missing. This is intentional:
-missing deployment settings must be visible, not silently fall back to a second
-SMTP source. Preserve recipients, notification checkpoint, sent keys and outbox.
+1. Establish the **currently active** non-secret settings and password reference.
+   On environment-owned releases, preserve those environment values, not dormant
+   unmarked JSON. If migrating directly from a historical editable console, first
+   verify that its JSON/password sidecar is actually authoritative and transfer
+   its non-secret values explicitly to bootstrap environment settings.
+2. Update both image and Compose/Portainer Stack, keeping the original project
+   name, data/docs/certificate mounts, PUID/PGID, network and proxy settings.
+   Add only the dedicated SMTP volume (`rw` web, `ro` scheduler). Never turn the
+   global secrets or certificate mounts writable to enable this feature.
+3. Before switching `FORTIOS_SMTP_PASSWORD_FILE`, securely copy the active password
+   into the new volume at `/opt/fortios/smtp-secrets/password`, owner PUID:PGID,
+   mode `0600`, directory `0700`. Compare bytes without printing them. Preserve
+   the prior protected file and Compose for rollback. If no password exists,
+   do not invent one: the directory may remain empty until GUI configuration.
+   Keeping an external read-only reference is supported, but prevents GUI rotation.
+4. Recreate both services and verify sending configuration is still recognized,
+   the web can write only the dedicated SMTP volume, and the scheduler cannot.
+   Saving the form persists non-secret fields with `schemaVersion: 1`; later
+   reads prefer this valid document over bootstrap environment values. Unmarked
+   legacy JSON remains appearance-only and cannot silently reactivate stale SMTP.
+   A malformed saved document fails closed and can be repaired by a complete
+   valid form save. Passwords never enter either settings JSON.
+5. Verify GUI save/reload, blank-password preservation, previews and container
+   recreation. Configuration and optional password use separate operations: if
+   the latter fails, the GUI explicitly reports that settings were saved but
+   the password was not changed. A save never sends a test email. Exercise a
+   real send only when authorized; retain recipients, checkpoint, outbox and retries.
 
-Recreate both containers and verify secret mount `RW=false`, runtime UID/GID,
-transport configured, preview rendering and a controlled test if authorized.
-Do not replay synthetic CVEs against production. An SMTP failure must not fail
-collection, and queued real events must remain available for retry.
+For native Python deployment, prepare the private persistent `0700` directory
+for the service account and point `FORTIOS_SMTP_PASSWORD_FILE` at its password
+file. Never use an HTTP-served or versioned directory; the API does not create
+parent directories. The same writer and validation are used in all deployments.
+
+### SMTP rollback compatibility
+
+The preceding environment-owned image ignores the new marked SMTP fields.
+Therefore an image-only rollback with **new password + old environment host/login**
+can produce an incoherent configuration after GUI edits. Restore the previous
+Compose and its preserved password reference as a pair, or explicitly transfer
+the current validated non-secret settings into that older image's environment
+while retaining the current password volume. Do not claim automatic preservation
+of new GUI settings by an older image. Keep the new sidecar/volume for re-upgrade.
+Never restore an old notification checkpoint merely to roll back SMTP settings.
 
 ## Authentication upgrade and recovery
 
@@ -223,7 +330,8 @@ login on its authorized network before calling the enterprise deployment complet
 ## Update / rollback
 
 1. Keep the previous YAML/env, image and root-only state backup. Check archive
-   readability and checksums. Build/pull only the reviewed merge SHA after green CI.
+   readability and checksums. Build/pull only the reviewed, authorized immutable
+   SHA after green CI; an explicitly approved unmerged candidate is not a merge.
 2. Reuse exactly the previous volumes/paths and Stack name. Set the new immutable
    `FORTIOS_IMAGE`, recreate web and scheduler, and update the host helper if used.
 3. Check web healthy, scheduler running/next slot, HTTPS, catalogue/products,
@@ -232,9 +340,10 @@ login on its authorized network before calling the enterprise deployment complet
    legitimate new collection events only.
 4. If unhealthy, restore the previous image and deployment config plus matching
    helper. No notification/catalogue schema migration is required by this release.
-   The older account code ignores the recovery sidecar. Old SMTP code expects
-   the archived full `smtp-settings.json` and `smtp-password`; restore these from
-   backup when rolling back after appearance-only saves.
+   The older account code ignores the recovery sidecar. Follow the SMTP rollback
+   compatibility rule above; do not mix a previous host/login with a rotated password.
+   A much older editable-console image may require its historical SMTP sidecars;
+   reconcile those explicitly rather than restoring a whole data volume.
 5. Prefer retaining current catalogue and outbox. Restoring an older notification
    checkpoint after successful sends risks replay: freeze sends and reconcile
    sent keys before any state rollback. Never blindly restore a whole old volume

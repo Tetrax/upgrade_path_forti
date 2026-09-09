@@ -186,6 +186,27 @@
 .smtp-details > div { padding: 10px 0; border-bottom: 1px solid var(--soft-line); }
 .smtp-details dt { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .smtp-details dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.transport-choice { margin-bottom: 18px; }
+.microsoft365-settings { margin-top: 2px; padding: 15px; border: 1px solid #bfd8f2; border-radius: 8px; background: var(--soft-blue); }
+.microsoft365-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.microsoft365-heading h4 { margin: 0 0 5px; color: var(--ink); font-size: 15px; }
+.microsoft365-settings .field { margin-bottom: 12px; }
+.microsoft365-settings code { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.microsoft365-settings .secret-control { margin-bottom: 12px; background: rgba(255, 255, 255, .7); }
+.m365-secret-control { align-items: stretch; flex-direction: column; }
+.m365-secret-control .secret-actions { width: 100%; align-items: center; }
+.m365-secret-control .secret-actions input {
+  min-height: 42px;
+  min-width: 0;
+  flex: 1 1 220px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 11px;
+  background: #fff;
+  color: var(--ink);
+}
+.m365-secret-control .form-message { margin-bottom: 0; }
+.microsoft365-settings .secret-control .field-help { text-align: right; }
 
 [hidden] { display: none !important; }
 
@@ -201,4 +222,6 @@
   .account-summary { grid-template-columns: 1fr; }
   .account-summary > div:nth-child(even) { border-left: 0; }
   .account-summary > div + div { border-top: 1px solid var(--soft-line); }
+  .microsoft365-heading { align-items: flex-start; flex-direction: column; }
+  .microsoft365-settings .secret-control .field-help { text-align: left; }
 }

@@ -19,6 +19,44 @@ fi
 # the persistent paths, then run every application process without root.
 mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs
 chown -R "$PUID:$PGID" /opt/fortios/data /opt/fortios/docs
+# Prepare only dedicated email secret volumes, never the global read-only
+# secret directory or an operator-supplied external secret path. The scheduler
+# mounts these volumes read-only and may boot before web initializes them.
+python - "$PUID" "$PGID" <<'PY'
+import os
+import stat
+import sys
+
+def prepare_secret_volume(path, filename):
+    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        if not os.fstatvfs(directory).f_flag & os.ST_RDONLY:
+            os.fchown(directory, int(sys.argv[1]), int(sys.argv[2]))
+            os.fchmod(directory, 0o700)
+            try:
+                secret = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+            else:
+                try:
+                    secret_stat = os.fstat(secret)
+                    if not stat.S_ISREG(secret_stat.st_mode) or secret_stat.st_nlink != 1:
+                        raise ValueError('not a regular file')
+                    os.fchown(secret, int(sys.argv[1]), int(sys.argv[2]))
+                    os.fchmod(secret, 0o600)
+                finally:
+                    os.close(secret)
+    finally:
+        os.close(directory)
+for path, filename, label in (
+    ('/opt/fortios/microsoft365-secrets', 'client-secret', 'Microsoft 365'),
+    ('/opt/fortios/smtp-secrets', 'password', 'SMTP'),
+):
+    try:
+        prepare_secret_volume(path, filename)
+    except (OSError, ValueError):
+        sys.exit(f'{label} secret volume is invalid or unavailable.')
+PY
 if [ -z "${FORTIOS_CERT_HELPER_SOCKET:-}" ]; then
   ADMIN_CREDENTIALS="${FORTIOS_CERT_ADMIN_FILE:-/opt/fortios/certificates/admin/credentials.json}"
   ADMIN_DIR="$(dirname "$ADMIN_CREDENTIALS")"
