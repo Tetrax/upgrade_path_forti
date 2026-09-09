@@ -6,6 +6,9 @@ data/fortios-health.json
 data/fortios-notify-history.json
 data/notification-settings.json*
 data/smtp-settings.json*
+data/email-transport-settings.json*
+data/.email-transport-settings.json*
+**/microsoft365-client-secret*
 data/smtp-password*
 data/.smtp-settings.json*
 data/.smtp-password*
@@ -27,8 +30,8 @@ certificates/
 *.p7b
 *.p7c
 
-# Real SMTP credentials belong in /etc/fortios-upgrade-intelligence.env (outside the repo),
-# never here — this only guards against someone accidentally dropping a real .env file in-tree.
+# Email credentials belong in read-only deployment secret files outside the repo,
+# never in environment values — also guard against accidental real .env files.
 *.env
 .env*
 !*.env.example

@@ -115,7 +115,10 @@ def fortios_server(tmp_path: Path):
     # A real SMTP config leaking from the host environment into a test run would be surprising
     # and is never needed by anything in this suite.
     for key in list(env):
-        if key.startswith("FORTIOS_SMTP_") or key == "FORTIOS_EMAIL_ENABLED":
+        if (
+            key.startswith(("FORTIOS_SMTP_", "FORTIOS_MICROSOFT365_"))
+            or key in {"FORTIOS_EMAIL_ENABLED", "FORTIOS_EMAIL_TRANSPORT"}
+        ):
             env.pop(key, None)
 
     process = subprocess.Popen(

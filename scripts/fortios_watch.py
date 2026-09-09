@@ -3025,6 +3025,7 @@ def main(argv: list[str]) -> int:
                 new_checkpoint,
                 events,
                 claimant=claimant,
+                transport=email_config.transport,
             )
             if pending:
                 composed = fortios_notify.compose_email(
@@ -3035,15 +3036,19 @@ def main(argv: list[str]) -> int:
                 )
                 if composed:
                     subject, text_body, html_body = composed
-                    if fortios_notify.send_email(
+                    result = fortios_notify.deliver_email_result(
                         email_config, subject, text_body, html_body
-                    ):
+                    )
+                    if result.sent:
                         fortios_notify.finalize_sent_events(
                             args.notify_history_output, pending
                         )
                     else:
                         fortios_notify.release_claim(
-                            args.notify_history_output, claimant
+                            args.notify_history_output,
+                            claimant,
+                            outcome=result,
+                            transport=email_config.transport,
                         )
     except Exception as error:  # noqa: BLE001 - a broken notification path must never fail the run.
         sys.stderr.write(f"Avertissement : notification email non envoyée ({error}).\n")

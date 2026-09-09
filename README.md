@@ -5,7 +5,7 @@ Outil interne pour afficher le chemin de mise à niveau FortiOS recommandé par 
 La ligne autoritative du produit est **`main`** du dépôt
 `git@github.com:Tetrax/upgrade_path_forti.git`. Les worktrees spécialisés sont des
 archives de travail, pas des variantes à déployer. Certificats, reverse proxy,
-notifications High/Critical et SMTP sont intégrés dans cette même ligne.
+notifications High/Critical et transports email sont intégrés dans cette même ligne.
 Voir la [cartographie de convergence et les validations](docs/delivery.md#convergence-des-branches).
 
 ## Structure
@@ -61,7 +61,7 @@ Run côté web permet de le créer avec une adresse de récupération optionnell
 La section **Compte & sécurité** gère ensuite le mot de passe, la vérification de
 cette adresse, la révocation globale des sessions et le parcours public de
 réinitialisation sans révéler l'état du compte. Les notifications de récupération
-réutilisent le SMTP existant ; le CLI reste le mécanisme break-glass. Le démarrage
+réutilisent le transport email sélectionné ; le CLI reste le mécanisme break-glass. Le démarrage
 local borné, la migration compatible et le rollback sont documentés dans
 [`docs/certificates.md`](docs/certificates.md).
 
@@ -318,16 +318,27 @@ Affiché dans `/app/` sous le bandeau de briefing : section repliable « État d
 
 ## Notifications email
 
-Le moteur existant de `scripts/fortios_notify.py` est conservé : SMTP stdlib, déduplication, checkpoint, outbox persistante, retry et isolation complète des erreurs SMTP. Aucun daemon ni scheduler supplémentaire n'est nécessaire ; les notifications sont déclenchées par le diff de chaque collecte PSIRT existante.
+Le moteur existant de `scripts/fortios_notify.py` est conservé : déduplication, checkpoint, outbox persistante, retry et isolation des erreurs de transport. Deux modes sont disponibles dans **Administration → Notifications** : **SMTP** et **Microsoft 365 / Azure**, via Microsoft Graph et OAuth 2.0 non interactif. Aucun daemon ni scheduler supplémentaire n'est nécessaire ; les notifications sont déclenchées par le diff de chaque collecte PSIRT existante.
 
-La configuration sépare préférences fonctionnelles et infrastructure SMTP :
+La configuration sépare préférences, choix du transport et credentials :
 
 - `notification-settings.json` : activation, produits surveillés et destinataires ;
 - `smtp-settings.json` : apparence non secrète (nom/titre, introduction, signature), préservée des installations historiques ;
+- `email-transport-settings.json` : choix SMTP/Microsoft 365 et paramètres Microsoft non secrets ;
 - environnement : serveur, port, sécurité, utilisateur, expéditeur, URL et timeout ;
 - `FORTIOS_SMTP_PASSWORD_FILE` : unique source du mot de passe, hors `data/` et montée en lecture seule dans les deux conteneurs.
+- `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE` : unique source du secret Entra, protégée par le même montage en lecture seule.
 
-Les préférences sont validées et remplacées atomiquement sous verrou. Le navigateur ne reçoit jamais le mot de passe ni son chemin, seulement `passwordConfigured`. La console montre l'infrastructure en lecture seule ; l'apparence, les produits et destinataires restent modifiables.
+Les préférences et le choix du transport sont validés et remplacés atomiquement sous verrou dans leurs fichiers respectifs. Le navigateur ne reçoit jamais les secrets ni leurs chemins, seulement leur disponibilité. La console montre l'infrastructure SMTP en lecture seule ; le choix du transport, les identifiants Microsoft non secrets, l'apparence, les produits et destinataires sont modifiables.
+
+Pour Microsoft 365, **Tester la connexion** obtient un token puis envoie un mail
+de test depuis la boîte configurée. `202 Accepted` confirme la soumission Graph,
+pas la remise finale. L'autorisation recommandée est **Exchange Online RBAC for
+Applications**, rôle `Application Mail.Send` limité à cette boîte, sans ajouter
+une permission Entra `Mail.Send` globale qui annulerait cette restriction.
+Le [guide Microsoft 365 pas à pas](docs/microsoft365.md), accessible depuis
+l'interface, décrit l'App Registration, le secret, les permissions, la recette
+réelle et le dépannage. Voir aussi [architecture et reprises](docs/notifications.md).
 
 Les variables `FORTIOS_SMTP_HOST`, `FORTIOS_SMTP_PORT`, `FORTIOS_SMTP_USERNAME`, `FORTIOS_SMTP_PASSWORD_FILE`, `FORTIOS_SMTP_SECURITY`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_SMTP_FROM` et `FORTIOS_APP_URL` sont autoritatives, même lorsqu'un ancien `smtp-settings.json` existe. Voir [livraison, migration SMTP et rollback](docs/delivery.md) avant de mettre à jour une ancienne console Web SMTP. Ne pas effacer le checkpoint ou l'outbox.
 

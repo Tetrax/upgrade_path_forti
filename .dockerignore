@@ -28,6 +28,9 @@ tests/
 data/notification-settings.json*
 data/smtp-password*
 data/smtp-settings.json*
+data/email-transport-settings.json*
+data/.email-transport-settings.json*
+**/microsoft365-client-secret*
 data/fortios-notify-history.json*
 data/fortios-health.json*
 data/fortios-data.generated.json*

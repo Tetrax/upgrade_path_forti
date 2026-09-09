@@ -1,0 +1,75 @@
+# Isolated Linux/VPS acceptance stack. Never use production directories here.
+# Start only web by default; collection is an explicit opt-in profile.
+name: fortiupgrade-m365-test
+
+x-email-environment: &email-environment
+  PUID: "1000"
+  PGID: "1000"
+  FORTIOS_EMAIL_ENABLED: "false"
+  FORTIOS_EMAIL_TRANSPORT: smtp
+  FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: /run/fortios-secrets/microsoft365-client-secret
+  FORTIOS_MICROSOFT365_TIMEOUT: "10"
+  FORTIOS_APP_URL: https://localhost:18443/app/
+
+services:
+  web:
+    image: fortiupgrade:microsoft365-candidate
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    environment:
+      <<: *email-environment
+      FORTIOS_TLS_CERT: /run/fortios-secrets/localhost.crt
+      FORTIOS_TLS_KEY: /run/fortios-secrets/localhost.key
+      FORTIOS_TLS_HOSTNAME: localhost
+      FORTIOS_CONTAINER_HEALTHCHECK: "1"
+    ports:
+      - "127.0.0.1:18443:8000"
+    volumes:
+      - candidate-data:/opt/fortios/data
+      - candidate-docs:/opt/fortios/docs
+      - candidate-admin:/opt/fortios/certificates
+      - type: bind
+        source: /var/lib/fortiupgrade-m365-test/secrets
+        target: /run/fortios-secrets
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    healthcheck:
+      test: ["CMD", "python", "scripts/container_healthcheck.py"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  scheduler:
+    image: fortiupgrade:microsoft365-candidate
+    profiles: [collection]
+    restart: "no"
+    command: ["python", "scripts/container_scheduler.py"]
+    environment:
+      <<: *email-environment
+      FORTIOS_RUN_ON_START: "0"
+    volumes:
+      - candidate-data:/opt/fortios/data
+      - candidate-docs:/opt/fortios/docs
+      - type: bind
+        source: /var/lib/fortiupgrade-m365-test/secrets
+        target: /run/fortios-secrets
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  candidate-data:
+  candidate-admin:
+  candidate-docs:

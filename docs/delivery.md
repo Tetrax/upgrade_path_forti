@@ -172,6 +172,68 @@ A different Stack name or bind path is a new data store, not a migration.
 Functional notification preferences and recipients stay in
 `data/notification-settings.json`; appearance remains in `data/smtp-settings.json`.
 
+## Adding the Microsoft 365 transport
+
+The new image adds an optional Graph transport without replacing SMTP, data
+mounts, notification history or the scheduler. All three Compose definitions
+pass the same `FORTIOS_EMAIL_TRANSPORT` and `FORTIOS_MICROSOFT365_*` variables
+to web and scheduler. Existing installations default to SMTP. Non-secret Graph
+identity fields and transport selection are saved through Administration →
+Notifications in `data/email-transport-settings.json`; once saved, they take
+precedence over bootstrap environment values. SMTP infrastructure stays
+deployment-owned.
+
+Before enabling Microsoft 365:
+
+1. Follow [the Entra/Exchange setup guide](microsoft365.md). Prefer scoped
+   Exchange `Application Mail.Send` over tenant-wide Entra `Mail.Send` consent.
+2. Provision `<FORTIOS_SECRETS_DIR>/microsoft365-client-secret` outside Git/data,
+   mode `0640` and owner `root:PGID`, in the existing mode-`0750` secret directory.
+   Set only the reference
+   `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE=/run/fortios-secrets/microsoft365-client-secret`
+   in the Stack. Never put the credential value in Stack YAML, environment
+   values, Docker build arguments or a browser payload.
+3. Keep the same data/docs/certificate volumes, PUID/PGID, proxy configuration and
+   Stack name. Recreate web and scheduler with the reviewed, pinned candidate
+   image. No global Docker cleanup or volume deletion is required.
+4. Verify both containers can read the mounted secret without printing it and
+   cannot write the secret mount. Allow DNS and outbound HTTPS to
+   `login.microsoftonline.com` and `graph.microsoft.com`; do not weaken TLS.
+5. Save the Graph parameters in the admin form and explicitly send a test mail.
+   Check its reception as well as `202 Accepted`. Repeat after recreation to
+   confirm persistence and non-interactive authentication.
+
+The canonical guide is copied into the immutable application directory during
+the Docker build, so an older persistent `/opt/fortios/docs` volume cannot hide
+the new setup instructions. No runtime document directory is overwritten.
+`.dockerignore` excludes transport settings and the conventional credential file
+name, in addition to existing credential/catalog exclusions. Arbitrarily named
+secrets still belong outside the build context; ignore patterns are not a secret
+manager.
+
+### Data compatibility and rollback
+
+Back up data/docs/certificates and deployment settings consistently before the
+change, retaining the preceding immutable image. The transport sidecar is
+additive; optional retry metadata extends existing outbox entries without
+changing the checkpoint, event keys or historical categories. A rollback must
+retain the **current** notification history rather than restoring an old
+checkpoint that could replay already-accepted messages.
+
+Before reverting to an older SMTP-only image, disable notifications via the
+existing functional settings if unintended SMTP sending would be a risk: that
+image ignores the Graph selection and Graph retry metadata and uses its SMTP
+environment. Restore the old image and compatible Compose while keeping the
+same volumes. The new sidecar can remain for a later re-upgrade. Verify health,
+catalogue, admin UI, pending outbox and the selected delivery policy again.
+
+The deployment gate must include an isolated copy of existing persistent data,
+candidate startup, Graph settings/retry persistence, container recreation and
+old-image rollback. Keep this copy disconnected from outbound delivery and do
+not reuse operational recipients or credentials for a live test. Unit/mock
+OAuth/Graph success and Docker health do not prove tenant permission or mail
+delivery; real-tenant acceptance is a separate activation gate.
+
 ## Migration from the historical Web SMTP console
 
 Before upgrading, stop only this Stack's scheduler and web for a consistent

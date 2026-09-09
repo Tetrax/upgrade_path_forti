@@ -476,6 +476,7 @@ SAMPLE_PATH = DATA_DIR / "fortios-data.sample.json"
 IMAGE_DIR = DATA_DIR / "advisory-images"
 NOTIFICATION_SETTINGS_PATH = DATA_DIR / "notification-settings.json"
 SMTP_SETTINGS_PATH = DATA_DIR / "smtp-settings.json"
+EMAIL_TRANSPORT_SETTINGS_PATH = DATA_DIR / "email-transport-settings.json"
 
 
 def referenced_image_filenames(description: str) -> set[str]:
@@ -661,6 +662,18 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 return
             self.serve_cert_spa()
             return
+        if url_path == "/cert/microsoft365-help":
+            if not self.certificate_ui_available():
+                self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
+                return
+            self.serve_microsoft365_help()
+            return
+        if url_path == "/cert/microsoft365-guide.md":
+            if not self.certificate_ui_available():
+                self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
+                return
+            self.serve_microsoft365_guide()
+            return
         if (
             url_path in ("/cert", "/app/cert")
             or url_path.startswith(("/cert/", "/app/cert/"))
@@ -677,6 +690,50 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             return
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_microsoft365_help(self) -> None:
+        """Serve the packaged quick reference outside the persistent docs mount."""
+        try:
+            body = (ALLOWED_STATIC_DIR_CERT / "microsoft365-help.html").read_bytes()
+        except OSError:
+            self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
+            return
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'; base-uri 'none'",
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def serve_microsoft365_guide(self) -> None:
+        """Serve the immutable guide even when the persistent docs directory is mounted."""
+        candidates = (
+            ALLOWED_STATIC_DIR_CERT / "microsoft365-guide.md",
+            ROOT / "docs" / "microsoft365.md",
+        )
+        body: bytes | None = None
+        for candidate in candidates:
+            try:
+                body = candidate.read_bytes()
+                break
+            except OSError:
+                continue
+        if body is None:
+            body = (
+                "# Configuration Microsoft 365\\n\\n"
+                "Le guide complet n’est pas encore installé dans cette image.\\n"
+            ).encode()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/markdown; charset=utf-8")
+        self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'self'; base-uri 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -787,6 +844,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             settings=settings,
             settings_path=NOTIFICATION_SETTINGS_PATH,
             smtp_settings_path=SMTP_SETTINGS_PATH,
+            email_transport_settings_path=EMAIL_TRANSPORT_SETTINGS_PATH,
         )
         return {
             "settings": settings.to_payload(),
@@ -832,6 +890,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             settings=notification_settings,
             settings_path=NOTIFICATION_SETTINGS_PATH,
             smtp_settings_path=SMTP_SETTINGS_PATH,
+            email_transport_settings_path=EMAIL_TRANSPORT_SETTINGS_PATH,
         )
         return {
             "smtp": fortios_notify.smtp_public_settings(smtp_settings, config)
@@ -850,14 +909,27 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             return
         try:
             payload = self.read_json_body(max_bytes=64 * 1024)
+            if not isinstance(payload, dict):
+                raise TypeError("Configuration email invalide.")
             password = payload.pop("password", None)
             if password is not None and not isinstance(password, str):
                 raise TypeError("Le mot de passe SMTP doit être une chaîne.")
-            fortios_notify.save_smtp_settings(
-                SMTP_SETTINGS_PATH,
-                payload,
-                password=password,
-            )
+            if set(payload) == {"emailAppearance"}:
+                fortios_notify.save_smtp_settings(
+                    SMTP_SETTINGS_PATH,
+                    payload,
+                    password=password,
+                )
+            else:
+                if password is not None:
+                    raise ValueError(
+                        "Les secrets email doivent provenir d'un fichier monté en lecture seule."
+                    )
+                fortios_notify.save_email_configuration(
+                    SMTP_SETTINGS_PATH,
+                    EMAIL_TRANSPORT_SETTINGS_PATH,
+                    payload,
+                )
             response = self.smtp_settings_response()
         except (TypeError, ValueError, OSError) as error:
             self.write_json_response(
@@ -979,6 +1051,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 raise TypeError("Destinataire de test invalide.")
             _smtp_settings, config = fortios_notify.load_smtp_preview_snapshot(
                 smtp_settings_path=SMTP_SETTINGS_PATH,
+                email_transport_settings_path=EMAIL_TRANSPORT_SETTINGS_PATH,
             )
             preview = self.compose_notification_email_preview(
                 {"scenario": payload["scenario"], "appearance": payload["appearance"]},
@@ -1002,6 +1075,12 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 "sent": result.sent,
                 "message": "Aperçu email envoyé." if result.sent else result.message,
                 "checks": list(result.checks),
+                "errorCode": result.error_code or None,
+                "retryable": result.retryable,
+                "retryAfterSeconds": result.retry_after_seconds,
+                "transport": result.transport,
+                "providerStatus": result.provider_status,
+                "deliveryConfirmed": result.delivery_confirmed,
                 "summary": {
                     "recipient": recipient.strip(),
                     "subject": preview["subject"],
@@ -1037,6 +1116,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 settings=settings,
                 settings_path=NOTIFICATION_SETTINGS_PATH,
                 smtp_settings_path=SMTP_SETTINGS_PATH,
+                email_transport_settings_path=EMAIL_TRANSPORT_SETTINGS_PATH,
             )
             result = fortios_notify.send_test_email_result(
                 config,
@@ -1055,23 +1135,35 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             "tls": "TLS implicite",
             "none": "Sans chiffrement explicitement autorisé",
         }
-        summary = {
-            "smtp": f"{config.smtp_host}:{config.smtp_port}",
-            "security": security_labels.get(
-                config.smtp_security, "Configuration inconnue"
-            ),
-            "from": config.smtp_from,
-            "recipient": recipient.strip(),
-        }
-        if not result.sent and result.message == "Destinataire de test invalide.":
-            result = fortios_notify.SmtpResult(
-                False, "Destinataire de test invalide."
-            )
+        if config.transport == fortios_notify.EMAIL_TRANSPORT_MICROSOFT365:
+            summary = {
+                "transport": "Microsoft 365",
+                "service": "Microsoft Graph sendMail",
+                "mailboxIdentity": config.mailbox_identity,
+                "from": config.graph_sender,
+                "recipient": recipient.strip(),
+            }
+        else:
+            summary = {
+                "transport": "SMTP",
+                "smtp": f"{config.smtp_host}:{config.smtp_port}",
+                "security": security_labels.get(
+                    config.smtp_security, "Configuration inconnue"
+                ),
+                "from": config.smtp_from,
+                "recipient": recipient.strip(),
+            }
         self.write_json_response(
             {
                 "sent": result.sent,
                 "message": result.message,
                 "checks": list(result.checks),
+                "errorCode": result.error_code or None,
+                "retryable": result.retryable,
+                "retryAfterSeconds": result.retry_after_seconds,
+                "transport": result.transport,
+                "providerStatus": result.provider_status,
+                "deliveryConfirmed": result.delivery_confirmed,
                 "summary": summary,
             },
             HTTPStatus.OK if result.sent else HTTPStatus.SERVICE_UNAVAILABLE,
@@ -1115,6 +1207,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 ".fortios-notify-history.json",
                 "smtp-settings.json",
                 ".smtp-settings.json",
+                "email-transport-settings.json",
+                ".email-transport-settings.json",
                 "smtp-password",
                 ".smtp-password",
             )
@@ -1228,6 +1322,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         try:
             _smtp_settings, config = fortios_notify.load_smtp_preview_snapshot(
                 smtp_settings_path=SMTP_SETTINGS_PATH,
+                email_transport_settings_path=EMAIL_TRANSPORT_SETTINGS_PATH,
             )
             recipient_config = fortios_notify.prepare_recovery_email_config(
                 config,
@@ -1274,6 +1369,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         try:
             _smtp_settings, config = fortios_notify.load_smtp_preview_snapshot(
                 smtp_settings_path=SMTP_SETTINGS_PATH,
+                email_transport_settings_path=EMAIL_TRANSPORT_SETTINGS_PATH,
             )
             fortios_notify.prepare_recovery_email_config(config, recipient)
         except (OSError, TypeError, ValueError):
