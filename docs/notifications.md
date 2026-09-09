@@ -23,33 +23,80 @@ least-privilege Exchange RBAC, mounted credentials and the real-tenant checklist
 
 ## SMTP ownership
 
-SMTP infrastructure is deployment-owned and is read from the process environment
-on every snapshot load. The console keeps SMTP host/port/security/login/sender
-read-only. It can save the selected email transport, non-secret Microsoft 365
-parameters and `emailAppearance`; it cannot create, replace or read either secret.
+SMTP non-secret infrastructure is editable by an authenticated administrator, with an explicit
+bootstrap/migration rule. A valid `smtp-settings.json` carrying
+`"schemaVersion": 1` is the saved source of truth for host, port, security, login,
+sender, application URL, timeout, and appearance. When that marked document is
+absent, the process environment supplies the initial values. A valid unmarked
+historical document is treated as appearance-only: its stale transport fields
+are ignored. An existing truncated, unreadable, non-object, or malformed marked
+document fails closed and never falls back to the environment; its bytes remain
+untouched until a complete valid save repairs it.
 
-Set these values in the deployment environment (the same values must be available to the web and scheduler containers):
+The full non-secret SMTP form is saved through the authenticated/CSRF-protected
+`POST /api/cert/smtp` endpoint. The same endpoint still accepts the legacy
+`{"emailAppearance": ...}` shape. Graph selection and appearance saves preserve
+a valid marked SMTP document; a complete nested `smtp` object may explicitly
+repair one. Passwords are never part of either configuration payload. The
+optional `POST /api/cert/smtp/password` operation is separate and write-only.
+An empty password field is a no-op, so it preserves the existing secret.
+
+Set these values in the deployment environment for bootstrap (the same values must be available to the web and scheduler containers):
 
 | Variable | Meaning |
 | --- | --- |
-| `FORTIOS_SMTP_HOST` | SMTP host. |
-| `FORTIOS_SMTP_PORT` | SMTP port; defaults to `587` when omitted. |
-| `FORTIOS_SMTP_USERNAME` | Optional SMTP login name. |
-| `FORTIOS_SMTP_PASSWORD_FILE` | Sole password source. Point it at the read-only-mounted secret file. |
+| `FORTIOS_SMTP_HOST` | Bootstrap SMTP host. |
+| `FORTIOS_SMTP_PORT` | Bootstrap SMTP port; defaults to `587` when omitted. |
+| `FORTIOS_SMTP_USERNAME` | Bootstrap SMTP login name. |
+| `FORTIOS_SMTP_PASSWORD_FILE` | Sole password source and write target when its storage is writable. |
 | `FORTIOS_SMTP_SECURITY` | `starttls`, `tls`, or `none`; `starttls` is the default. |
 | `FORTIOS_SMTP_ALLOW_INSECURE` | Must be `true` before `none` is considered deliverable. |
-| `FORTIOS_SMTP_FROM` | Sender address. |
+| `FORTIOS_SMTP_FROM` | Bootstrap sender address. |
 | `FORTIOS_SMTP_TIMEOUT` | SMTP timeout in seconds; defaults to `10`. |
 | `FORTIOS_APP_URL` | Canonical application URL used in notification links. |
 
-Do not set or pass a plain `FORTIOS_SMTP_PASSWORD`, and do not put a password in Stack YAML, `smtp-settings.json`, browser payloads, logs, or preview data. The historical `data/smtp-password` sidecar is never a runtime fallback. `delete_smtp_password` is intentionally rejected because the mounted secret is managed by deployment operations.
+`POST /api/cert/smtp/password` is the only request body that may carry the
+write-only password; the value is not echoed, logged, or persisted in JSON.
+Do not set or pass a plain `FORTIOS_SMTP_PASSWORD`, and do not put a password
+in Stack YAML, `smtp-settings.json`, logs, or preview data. The historical
+`data/smtp-password` sidecar is never a runtime fallback, and
+`delete_smtp_password` remains rejected. Public settings expose only whether
+password storage is configured and whether the selected file can be written;
+they never expose the password or its path. The `FORTIOS_SMTP_PASSWORD_FILE`
+environment variable remains authoritative for the secret path; the JSON schema
+marker never overrides it.
+
+The portable Compose definitions use a dedicated secret volume:
+
+```text
+Volume Compose : fortios-smtp-secrets (prefixed by the Stack name)
+Container      : /opt/fortios/smtp-secrets/password
+Variable       : FORTIOS_SMTP_PASSWORD_FILE
+Web            : volume rw, directory 0700, file 0600
+Scheduler      : the same volume ro
+```
+
+The entrypoint prepares only this dedicated volume. An external path such as a
+read-only `/run/fortios-secrets` mount remains valid for delivery but is not a
+GUI write target. The global certificate/secrets trees are never made writable
+for SMTP administration.
 
 `FORTIOS_SMTP_STARTTLS` remains accepted only as a compatibility input for older local configurations. New deployments should set `FORTIOS_SMTP_SECURITY` and, for clear SMTP, explicitly set `FORTIOS_SMTP_ALLOW_INSECURE=true`.
 
-Functional notification preferences and recipients remain in `data/notification-settings.json`. The appearance sidecar at `data/smtp-settings.json` contains only:
+Functional notification preferences and recipients remain in `data/notification-settings.json`.
+A newly saved SMTP document has this non-secret shape:
 
 ```json
 {
+  "schemaVersion": 1,
+  "host": "smtp.example.tld",
+  "port": 587,
+  "security": "starttls",
+  "allowInsecure": false,
+  "username": "mailer@example.tld",
+  "from": "fortiupgrade@example.tld",
+  "appUrl": "https://fortiupgrade.example.tld/app/",
+  "timeout": 10,
   "emailAppearance": {
     "displayName": "FortiUpgrade",
     "introduction": "",
@@ -58,12 +105,10 @@ Functional notification preferences and recipients remain in `data/notification-
 }
 ```
 
-The historical `POST /api/cert/smtp/settings` payload containing only
-`emailAppearance` remains supported. The same authenticated/CSRF-protected
-endpoint also accepts exactly `transport`, `microsoft365` and `emailAppearance`
-for the new form; unknown fields and secret mutations are rejected. Legacy SMTP
-infrastructure fields in `smtp-settings.json` remain ignored. Generated security
-facts and links stay engine-owned and are escaped before rendering.
+An appearance-only save remains deliberately unmarked for compatibility when
+there is no valid marked SMTP document to preserve. It cannot reactivate any
+historical infrastructure fields. Generated security facts and links stay
+engine-owned and are escaped before rendering.
 
 ## Microsoft 365 configuration and credentials
 
@@ -98,7 +143,8 @@ Compose files:
 The secret is stored outside Git/data/image in a dedicated persistent volume:
 web may set/replace it through the authenticated, same-origin, CSRF-protected
 GUI endpoint; scheduler reads the same file through a read-only mount. The
-existing SMTP secret directory remains read-only. The settings API reports
+existing global/external secrets directory remains read-only; SMTP GUI writes
+use their own separate private volume. The settings API reports
 readiness and safe write capability, never the secret or its path. A blank
 submission cannot delete the old credential; the input is cleared after submit
 and never prefilled. No transport, checkpoint or outbox change accompanies a

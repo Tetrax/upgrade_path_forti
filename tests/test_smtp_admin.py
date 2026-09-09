@@ -7,6 +7,7 @@ import io
 import json
 import smtplib
 import socketserver
+import stat
 import sys
 import tempfile
 import threading
@@ -218,7 +219,288 @@ class SmtpSettingsPersistenceTests(unittest.TestCase):
         self.assertNotIn("legacy-secret", serialized)
         self.assertNotIn(str(secret), serialized)
 
-    def test_save_accepts_only_appearance_and_preserves_environment_transport(self) -> None:
+    def test_new_gui_schema_precedes_environment_and_keeps_password_out_of_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings_path = root / "smtp-settings.json"
+            password_path = root / "smtp-secrets" / "password"
+            password_path.parent.mkdir()
+            environment = {
+                "FORTIOS_SMTP_HOST": "smtp.bootstrap.example",
+                "FORTIOS_SMTP_PORT": "2525",
+                "FORTIOS_SMTP_SECURITY": "starttls",
+                "FORTIOS_SMTP_USERNAME": "bootstrap-user",
+                "FORTIOS_SMTP_FROM": "bootstrap@example.com",
+                "FORTIOS_SMTP_TIMEOUT": "20",
+                "FORTIOS_APP_URL": "https://bootstrap.example/app/",
+                "FORTIOS_SMTP_PASSWORD_FILE": str(password_path),
+            }
+            notify.save_smtp_settings(settings_path, smtp_payload(), env=environment)
+            persisted = json.loads(settings_path.read_text(encoding="utf-8"))
+            changed_environment = {
+                **environment,
+                "FORTIOS_SMTP_HOST": "smtp.changed.example",
+                "FORTIOS_SMTP_PORT": "465",
+                "FORTIOS_SMTP_USERNAME": "changed-user",
+                "FORTIOS_SMTP_FROM": "changed@example.com",
+                "FORTIOS_SMTP_TIMEOUT": "30",
+                "FORTIOS_APP_URL": "https://changed.example/app/",
+            }
+            loaded = notify.load_smtp_settings(settings_path, env=changed_environment)
+            public = notify.smtp_public_settings(
+                loaded,
+                notify.load_email_config(
+                    changed_environment,
+                    settings=notification_settings(),
+                    smtp_settings_path=settings_path,
+                ),
+            )
+
+        self.assertEqual(persisted["schemaVersion"], notify.SMTP_SETTINGS_SCHEMA_VERSION)
+        self.assertEqual(loaded.source, "saved")
+        self.assertEqual(loaded.host, "smtp.saved.example")
+        self.assertEqual(loaded.port, 587)
+        self.assertEqual(loaded.username, "mailer@example.com")
+        self.assertEqual(loaded.sender, "fortiupgrade@example.com")
+        self.assertEqual(loaded.app_url, "https://fortiupgrade.example/app/")
+        serialized = json.dumps(persisted) + json.dumps(public)
+        self.assertNotIn("api-secret-value", serialized)
+        self.assertNotIn("smtp-secret", serialized)
+
+    def test_corrupt_new_schema_fails_closed_instead_of_bootstrapping_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "smtp-settings.json"
+            path.write_text(
+                json.dumps({"schemaVersion": notify.SMTP_SETTINGS_SCHEMA_VERSION, "host": "smtp.saved.example"}),
+                encoding="utf-8",
+            )
+            environment = {
+                "FORTIOS_SMTP_HOST": "smtp.environment.example",
+                "FORTIOS_SMTP_FROM": "environment@example.com",
+                "FORTIOS_SMTP_PASSWORD_FILE": str(Path(tmp) / "password"),
+            }
+            loaded = notify.load_smtp_settings(path, env=environment)
+            config = notify.load_email_config(
+                environment,
+                settings=notification_settings(),
+                smtp_settings_path=path,
+            )
+
+        self.assertEqual(loaded.source, "saved-invalid")
+        self.assertEqual(loaded.host, "")
+        self.assertNotEqual(config.smtp_host, "smtp.environment.example")
+        self.assertFalse(config.is_complete())
+
+    def test_truncated_existing_document_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "smtp-settings.json"
+            path.write_text(
+                '{"schemaVersion": 1, "host": "smtp.partial.example",',
+                encoding="utf-8",
+            )
+            environment = {
+                "FORTIOS_SMTP_HOST": "smtp.environment.example",
+                "FORTIOS_SMTP_FROM": "environment@example.com",
+            }
+            loaded = notify.load_smtp_settings(path, env=environment)
+            config = notify.load_email_config(
+                environment,
+                settings=notification_settings(),
+                smtp_settings_path=path,
+            )
+
+        self.assertEqual(loaded.source, "saved-invalid")
+        self.assertEqual(loaded.host, "")
+        self.assertNotEqual(config.smtp_host, "smtp.environment.example")
+        self.assertFalse(config.is_complete())
+
+    def test_existing_non_object_documents_fail_closed(self) -> None:
+        for document in ([], 42, "smtp-settings"):
+            with self.subTest(document=document), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "smtp-settings.json"
+                path.write_text(json.dumps(document), encoding="utf-8")
+                settings = notify.load_smtp_settings(
+                    path,
+                    env={"FORTIOS_SMTP_HOST": "smtp.environment.example"},
+                )
+                self.assertEqual(settings.source, "saved-invalid")
+                self.assertEqual(settings.host, "")
+
+    def test_smtp_password_is_write_only_atomic_and_empty_submission_preserves_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            password_path = Path(tmp) / "smtp-secrets" / "password"
+            password_path.parent.mkdir()
+            environment = {"FORTIOS_SMTP_PASSWORD_FILE": str(password_path)}
+            notify.save_smtp_password("initial-secret", env=environment)
+            self.assertEqual(password_path.read_bytes(), b"initial-secret")
+            self.assertEqual(stat.S_IMODE(password_path.stat().st_mode), 0o600)
+            self.assertEqual(
+                notify.save_smtp_password("", env=environment),
+                notify.SMTP_PASSWORD_STORAGE_AVAILABLE,
+            )
+            self.assertEqual(password_path.read_bytes(), b"initial-secret")
+            config = notify.load_email_config(
+                {
+                    **environment,
+                    "FORTIOS_SMTP_HOST": "smtp.example.com",
+                    "FORTIOS_SMTP_FROM": "fortiupgrade@example.com",
+                },
+                settings=notification_settings(),
+                smtp_settings_path=Path(tmp) / "missing-settings.json",
+            )
+            public = notify.smtp_public_settings(
+                notify.load_smtp_settings(Path(tmp) / "missing-settings.json", env=environment),
+                config,
+            )
+
+        self.assertEqual(config.smtp_password, "initial-secret")
+        self.assertTrue(public["passwordConfigured"])
+        serialized = json.dumps(public)
+        self.assertNotIn("initial-secret", serialized)
+        self.assertNotIn(str(password_path), serialized)
+
+    def test_smtp_password_requires_prepared_private_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            password_path = Path(tmp) / "unprepared" / "password"
+            environment = {"FORTIOS_SMTP_PASSWORD_FILE": str(password_path)}
+            with self.assertRaises(notify.SmtpPasswordStorageError):
+                notify.save_smtp_password("must-not-create", env=environment)
+            self.assertFalse(password_path.parent.exists())
+
+    def test_graph_and_appearance_saves_preserve_new_saved_smtp_fields(self) -> None:
+        appearance = smtp_payload()["emailAppearance"]
+        graph_payload = {
+            "transport": "microsoft365",
+            "microsoft365": {
+                "tenantId": "tenant.example.test",
+                "clientId": "11111111-2222-3333-4444-555555555555",
+                "from": "graph@example.com",
+                "displayName": "Graph",
+                "mailboxIdentity": "graph@example.com",
+            },
+            "emailAppearance": {
+                "displayName": "Graph appearance",
+                "introduction": "Graph intro",
+                "signature": "Graph signature",
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            smtp_path = root / "smtp-settings.json"
+            transport_path = root / "email-transport-settings.json"
+            notify.save_smtp_settings(smtp_path, smtp_payload())
+            notify.save_email_configuration(smtp_path, transport_path, graph_payload)
+            after_graph = json.loads(smtp_path.read_text(encoding="utf-8"))
+            notify.save_email_appearance(
+                smtp_path,
+                {"emailAppearance": appearance},
+            )
+            after_appearance = json.loads(smtp_path.read_text(encoding="utf-8"))
+
+        for saved in (after_graph, after_appearance):
+            self.assertEqual(saved["schemaVersion"], notify.SMTP_SETTINGS_SCHEMA_VERSION)
+            self.assertEqual(saved["host"], "smtp.saved.example")
+            self.assertEqual(saved["port"], 587)
+            self.assertEqual(saved["username"], "mailer@example.com")
+        self.assertEqual(after_graph["emailAppearance"]["displayName"], "Graph appearance")
+        self.assertEqual(after_appearance["emailAppearance"], appearance)
+
+    def test_graph_save_can_validate_and_persist_nested_smtp_before_writes(self) -> None:
+        graph_payload = {
+            "transport": "microsoft365",
+            "microsoft365": {
+                "tenantId": "tenant.example.test",
+                "clientId": "11111111-2222-3333-4444-555555555555",
+                "from": "graph@example.com",
+                "displayName": "Graph",
+                "mailboxIdentity": "graph@example.com",
+            },
+            "emailAppearance": {
+                "displayName": "Shared appearance",
+                "introduction": "Shared intro",
+                "signature": "Shared signature",
+            },
+            "smtp": smtp_payload(),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            smtp_path = root / "smtp-settings.json"
+            transport_path = root / "email-transport-settings.json"
+            notify.save_email_configuration(smtp_path, transport_path, graph_payload)
+            saved_smtp = json.loads(smtp_path.read_text(encoding="utf-8"))
+            saved_transport = json.loads(transport_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved_smtp["schemaVersion"], notify.SMTP_SETTINGS_SCHEMA_VERSION)
+        self.assertEqual(saved_smtp["host"], "smtp.saved.example")
+        self.assertEqual(saved_smtp["emailAppearance"], graph_payload["emailAppearance"])
+        self.assertEqual(saved_transport["transport"], "microsoft365")
+        self.assertNotIn("password", json.dumps(saved_smtp).lower())
+
+    def test_graph_save_preflights_malformed_smtp_before_transport_write(self) -> None:
+        graph_payload = {
+            "transport": "microsoft365",
+            "microsoft365": {
+                "tenantId": "tenant.example.test",
+                "clientId": "11111111-2222-3333-4444-555555555555",
+                "from": "graph@example.com",
+                "displayName": "Graph",
+                "mailboxIdentity": "graph@example.com",
+            },
+            "emailAppearance": {
+                "displayName": "Shared appearance",
+                "introduction": "Shared intro",
+                "signature": "Shared signature",
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            smtp_path = root / "smtp-settings.json"
+            transport_path = root / "email-transport-settings.json"
+            smtp_path.write_text(
+                json.dumps({"schemaVersion": notify.SMTP_SETTINGS_SCHEMA_VERSION, "host": ""}),
+                encoding="utf-8",
+            )
+            original_transport = {"transport": "smtp", "microsoft365": {
+                "tenantId": "", "clientId": "", "from": "", "displayName": "", "mailboxIdentity": ""
+            }}
+            transport_path.write_text(json.dumps(original_transport), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "Configuration SMTP"):
+                notify.save_email_configuration(smtp_path, transport_path, graph_payload)
+            self.assertEqual(json.loads(transport_path.read_text(encoding="utf-8")), original_transport)
+
+    def test_nested_smtp_save_repairs_corrupt_marked_document(self) -> None:
+        graph_payload = {
+            "transport": "microsoft365",
+            "microsoft365": {
+                "tenantId": "tenant.example.test",
+                "clientId": "11111111-2222-3333-4444-555555555555",
+                "from": "graph@example.com",
+                "displayName": "Graph",
+                "mailboxIdentity": "graph@example.com",
+            },
+            "emailAppearance": {
+                "displayName": "Repaired appearance",
+                "introduction": "Repaired intro",
+                "signature": "Repaired signature",
+            },
+            "smtp": smtp_payload(),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            smtp_path = root / "smtp-settings.json"
+            transport_path = root / "email-transport-settings.json"
+            smtp_path.write_text(
+                '{"schemaVersion": 1, "host": "smtp.corrupt.example",',
+                encoding="utf-8",
+            )
+            notify.save_email_configuration(smtp_path, transport_path, graph_payload)
+            repaired = json.loads(smtp_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(repaired["schemaVersion"], notify.SMTP_SETTINGS_SCHEMA_VERSION)
+        self.assertEqual(repaired["host"], "smtp.saved.example")
+        self.assertEqual(repaired["emailAppearance"], graph_payload["emailAppearance"])
+
+    def test_saving_appearance_persists_no_transport(self) -> None:
         appearance = {
             "displayName": "FortiUpgrade SOC",
             "introduction": "Introduction contrôlée",
@@ -563,6 +845,77 @@ class SmtpAdminApiTests(unittest.TestCase):
             )
             serialized = json.dumps(written)
             self.assertNotIn('"password"', serialized.lower())
+
+    def test_editable_smtp_route_uses_auth_csrf_and_separate_write_only_password(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            data_dir = root / "data"
+            password_path = root / "smtp-secrets" / "password"
+            password_path.parent.mkdir(mode=0o700)
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_TEST_DATA_DIR": str(data_dir),
+                "FORTIOS_SMTP_PASSWORD_FILE": str(password_path),
+            }
+            with running_server(environment) as base_url:
+                opener, csrf_token = authenticated_opener(base_url)
+                settings_body = smtp_payload()
+                without_csrf = urllib.request.Request(
+                    f"{base_url}/api/cert/smtp",
+                    data=json.dumps(settings_body).encode(),
+                    method="POST",
+                    headers={"Content-Type": "application/json", "Origin": base_url},
+                )
+                with self.assertRaises(urllib.error.HTTPError) as settings_rejected:
+                    opener.open(without_csrf, timeout=3)
+                self.assertEqual(settings_rejected.exception.code, 403)
+
+                def post(path: str, body: dict[str, object], token: str = csrf_token) -> dict[str, object]:
+                    request = urllib.request.Request(
+                        f"{base_url}{path}",
+                        data=json.dumps(body).encode(),
+                        method="POST",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Origin": base_url,
+                            "X-CSRF-Token": token,
+                        },
+                    )
+                    with opener.open(request, timeout=3) as response:
+                        return json.load(response)
+
+                written = post("/api/cert/smtp", settings_body)
+                self.assertEqual(written["smtp"]["host"], "smtp.saved.example")
+                empty_password_response = post(
+                    "/api/cert/smtp/password", {"password": ""}
+                )
+                self.assertEqual(
+                    empty_password_response["smtp"]["passwordConfigured"], False
+                )
+                self.assertFalse(password_path.exists())
+                password_response = post(
+                    "/api/cert/smtp/password",
+                    {"password": "api-secret-value"},
+                )
+                with opener.open(f"{base_url}/api/cert/smtp", timeout=3) as response:
+                    loaded = json.load(response)
+
+            serialized = json.dumps(password_response) + json.dumps(loaded)
+            settings_bytes = (data_dir / "smtp-settings.json").read_bytes()
+
+            self.assertEqual(password_path.read_bytes(), b"api-secret-value")
+            self.assertEqual(stat.S_IMODE(password_path.stat().st_mode), 0o600)
+            self.assertEqual(loaded, password_response)
+            self.assertNotIn("api-secret-value", serialized)
+            self.assertNotIn(str(password_path), serialized)
+            self.assertNotIn(b"api-secret-value", settings_bytes)
+            self.assertFalse((data_dir / "fortios-notify-history.json").exists())
 
     def test_test_endpoint_sends_without_touching_notification_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, running_smtp_server() as smtp:

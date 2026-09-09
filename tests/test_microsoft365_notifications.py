@@ -249,7 +249,9 @@ class Microsoft365ApiTests(unittest.TestCase):
         self.assertIn('"Configuration Microsoft 365"', script)
         self.assertIn('"Tester la connexion"', script)
         self.assertIn('for (const id of ["m365-tenant-id", "m365-client-id", "m365-from-address", "m365-display-name"])', script)
-        self.assertIn('if (transport === "smtp" && savedSmtpSettings?.transport === "smtp")', script)
+        self.assertIn('if (transport === "smtp") {', script)
+        self.assertIn("payload.smtp = {", script)
+        self.assertIn("emailAppearance: appearance", script)
 
     def test_graph_configuration_api_persists_only_non_secret_fields_and_requires_csrf(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

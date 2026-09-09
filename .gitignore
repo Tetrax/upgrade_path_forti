@@ -10,6 +10,7 @@ data/email-transport-settings.json*
 data/.email-transport-settings.json*
 **/microsoft365-client-secret*
 **/microsoft365-secrets/
+**/smtp-secrets/
 data/smtp-password*
 data/.smtp-settings.json*
 data/.smtp-password*

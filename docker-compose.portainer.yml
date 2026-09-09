@@ -28,7 +28,7 @@ services:
       FORTIOS_SMTP_HOST: ${FORTIOS_SMTP_HOST:-}
       FORTIOS_SMTP_PORT: ${FORTIOS_SMTP_PORT:-587}
       FORTIOS_SMTP_USERNAME: ${FORTIOS_SMTP_USERNAME:-}
-      FORTIOS_SMTP_PASSWORD_FILE: ${FORTIOS_SMTP_PASSWORD_FILE:-}
+      FORTIOS_SMTP_PASSWORD_FILE: ${FORTIOS_SMTP_PASSWORD_FILE:-/opt/fortios/smtp-secrets/password}
       FORTIOS_SMTP_STARTTLS: ${FORTIOS_SMTP_STARTTLS:-true}
       FORTIOS_SMTP_TIMEOUT: ${FORTIOS_SMTP_TIMEOUT:-10}
       FORTIOS_SMTP_FROM: ${FORTIOS_SMTP_FROM:-}
@@ -44,6 +44,7 @@ services:
       - ${FORTIOS_CERT_HELPER_SOCKET_DIR:-/run/fortios-cert-helper}:/run/fortios-cert-helper:ro
       - ${FORTIOS_SECRETS_DIR:-/etc/fortiupgrade/secrets}:/run/fortios-secrets:ro
       - fortios-microsoft365-secrets:/opt/fortios/microsoft365-secrets:rw
+      - fortios-smtp-secrets:/opt/fortios/smtp-secrets:rw
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=128m
     healthcheck:
@@ -78,7 +79,7 @@ services:
       FORTIOS_SMTP_HOST: ${FORTIOS_SMTP_HOST:-}
       FORTIOS_SMTP_PORT: ${FORTIOS_SMTP_PORT:-587}
       FORTIOS_SMTP_USERNAME: ${FORTIOS_SMTP_USERNAME:-}
-      FORTIOS_SMTP_PASSWORD_FILE: ${FORTIOS_SMTP_PASSWORD_FILE:-}
+      FORTIOS_SMTP_PASSWORD_FILE: ${FORTIOS_SMTP_PASSWORD_FILE:-/opt/fortios/smtp-secrets/password}
       FORTIOS_SMTP_STARTTLS: ${FORTIOS_SMTP_STARTTLS:-true}
       FORTIOS_SMTP_TIMEOUT: ${FORTIOS_SMTP_TIMEOUT:-10}
       FORTIOS_SMTP_FROM: ${FORTIOS_SMTP_FROM:-}
@@ -89,10 +90,12 @@ services:
       - ${FORTIOS_DOCS_DIR}:/opt/fortios/docs
       - ${FORTIOS_SECRETS_DIR:-/etc/fortiupgrade/secrets}:/run/fortios-secrets:ro
       - fortios-microsoft365-secrets:/opt/fortios/microsoft365-secrets:ro
+      - fortios-smtp-secrets:/opt/fortios/smtp-secrets:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=512m
     security_opt:
       - no-new-privileges:true
 
 volumes:
+  fortios-smtp-secrets:
   fortios-microsoft365-secrets:

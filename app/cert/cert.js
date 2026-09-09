@@ -270,9 +270,7 @@ function updateEmailTransportUI() {
   byId("email-transport-heading").textContent = microsoft365Selected
     ? "Configuration Microsoft 365"
     : "Configuration SMTP";
-  byId("email-transport-copy").textContent = microsoft365Selected
-    ? "Les paramètres non secrets sont conservés ici. Le secret reste fourni exclusivement par un fichier monté en lecture seule."
-    : "Les paramètres de connexion proviennent de l’environnement de déploiement. Le secret est fourni exclusivement par un fichier monté en lecture seule.";
+  byId("email-transport-copy").textContent = "Les paramètres sont enregistrés ici. Les secrets restent stockés séparément.";
   byId("test-email-heading").textContent = microsoft365Selected && savedSmtpSettings?.transport === "microsoft365"
     ? "Tester la connexion"
     : "Test d’envoi";
@@ -293,9 +291,12 @@ function updateEmailTransportUI() {
     "smtp-timeout",
   ]) {
     const input = byId(id);
-    input.disabled = true;
-    input.required = false;
+    input.disabled = !smtpSelected;
+    input.required = smtpSelected && !["smtp-username", "smtp-allow-insecure"].includes(id);
   }
+  updateInsecureConfirmation();
+  byId("smtp-password").disabled = !(smtpSelected && savedSmtpSettings?.canSetPassword);
+  if (!smtpSelected) byId("smtp-password").value = "";
   for (const id of ["m365-tenant-id", "m365-client-id", "m365-from-address", "m365-display-name"]) {
     const input = byId(id);
     input.disabled = !microsoft365Selected;
@@ -429,6 +430,10 @@ function renderSmtpSettings(payload) {
   byId("smtp-password-status").textContent = smtp.passwordConfigured
     ? "Mot de passe configuré"
     : "Non configuré";
+  if (!smtp.canSetPassword) {
+    byId("smtp-password-status").textContent += " — modification indisponible : stockage en lecture seule ou non configuré";
+  }
+  byId("smtp-password").value = "";
   const operational = smtp.state === "operational";
   byId("smtp-status-label").textContent = operational ? "Opérationnelle" : "Configuration incomplète";
   byId("smtp-status-dot").className = `status-dot ${operational ? "success" : "failure"}`;
@@ -476,10 +481,7 @@ async function loadSmtpSettings() {
 function buildSmtpSettingsPayload() {
   const transport = byId("email-transport").value;
   const appearance = buildEmailAppearancePayload();
-  if (transport === "smtp" && savedSmtpSettings?.transport === "smtp") {
-    return { emailAppearance: appearance };
-  }
-  return {
+  const payload = {
     transport,
     microsoft365: {
       tenantId: byId("m365-tenant-id").value.trim(),
@@ -488,8 +490,22 @@ function buildSmtpSettingsPayload() {
       displayName: byId("m365-display-name").value.trim(),
       mailboxIdentity: byId("m365-mailbox-identity").value.trim(),
     },
-    emailAppearance: buildEmailAppearancePayload(),
+    emailAppearance: appearance,
   };
+  if (transport === "smtp") {
+    payload.smtp = {
+      host: byId("smtp-host").value.trim(),
+      port: Number(byId("smtp-port").value),
+      security: byId("smtp-security").value,
+      allowInsecure: byId("smtp-allow-insecure").checked,
+      username: byId("smtp-username").value.trim(),
+      from: byId("smtp-from-address").value.trim(),
+      appUrl: byId("smtp-app-url").value.trim(),
+      timeout: Number(byId("smtp-timeout").value),
+      emailAppearance: appearance,
+    };
+  }
+  return payload;
 }
 
 function buildNotificationSettingsPayload() {
@@ -940,19 +956,33 @@ byId("save-m365-secret-button").addEventListener("click", () => {
 smtpForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = byId("save-smtp-button");
+  const passwordInput = byId("smtp-password");
+  const password = passwordInput.disabled ? "" : passwordInput.value;
+  let settingsSaved = false;
   button.disabled = true;
   setMessage("smtp-message", "Enregistrement…");
   try {
-    const result = await apiRequest("smtp", {
+    let result = await apiRequest("smtp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(buildSmtpSettingsPayload()),
     });
+    settingsSaved = true;
+    if (password) {
+      result = await apiRequest("smtp/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+    }
     renderSmtpSettings(result);
     setMessage("smtp-message", "Configuration email enregistrée.", true);
   } catch (error) {
-    setMessage("smtp-message", error.message);
+    setMessage("smtp-message", settingsSaved
+      ? `Paramètres enregistrés, mais mot de passe non modifié : ${error.message}`
+      : error.message);
   } finally {
+    passwordInput.value = "";
     button.disabled = false;
   }
 });

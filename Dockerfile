@@ -25,7 +25,7 @@ COPY docker/entrypoint.sh /usr/local/bin/fortios-entrypoint
 COPY docker/certctl.sh /usr/local/bin/fortios-certctl
 COPY docker/cert_admin.sh /usr/local/bin/fortios-cert-admin
 
-RUN mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs /opt/fortios/certificates /opt/fortios/microsoft365-secrets \
+RUN mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs /opt/fortios/certificates /opt/fortios/microsoft365-secrets /opt/fortios/smtp-secrets \
     && chmod -R a+rX /opt/fortios/app /opt/fortios/scripts \
     && chmod 0755 /usr/local/bin/fortios-entrypoint /usr/local/bin/fortios-certctl \
       /usr/local/bin/fortios-cert-admin

@@ -4,6 +4,8 @@ import json
 import pytest
 from playwright.sync_api import expect
 
+from scripts import fortios_notify
+
 
 @pytest.mark.parametrize("width", [1440, 390])
 def test_secret_save_preserves_drafts_and_clears_value(page, fortios_server, width):
@@ -51,6 +53,24 @@ def test_secret_save_preserves_drafts_and_clears_value(page, fortios_server, wid
 def test_microsoft365_settings_roundtrip_and_missing_secret(page, fortios_server, width):
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
+    fortios_notify.save_smtp_settings(
+        fortios_server.data_dir / "smtp-settings.json",
+        {
+            "host": "smtp.roundtrip.example",
+            "port": 587,
+            "security": "starttls",
+            "allowInsecure": False,
+            "username": "roundtrip-user",
+            "from": "roundtrip@example.invalid",
+            "appUrl": f"{fortios_server.base_url}/app/",
+            "timeout": 17,
+            "emailAppearance": {
+                "displayName": "Roundtrip fixture",
+                "introduction": "SMTP fixture",
+                "signature": "Test suite",
+            },
+        },
+    )
     page.set_viewport_size({"width": width, "height": 1000})
     page.goto(f"{fortios_server.base_url}/cert/")
     page.fill("#username", fortios_server.admin_username)
@@ -61,6 +81,92 @@ def test_microsoft365_settings_roundtrip_and_missing_secret(page, fortios_server
     expect(page.locator("#email-transport")).to_have_value("smtp")
     expect(page.locator("#microsoft365-settings")).to_have_count(1)
     expect(page.locator("#microsoft365-settings")).to_be_hidden()
+    expect(page.locator("#smtp-host")).to_have_value("smtp.roundtrip.example")
+    expect(page.locator("#smtp-port")).to_have_value("587")
+    expect(page.locator("#smtp-username")).to_have_value("roundtrip-user")
+    expect(page.locator("#smtp-from-address")).to_have_value("roundtrip@example.invalid")
+    smtp_values = {
+        "#smtp-host": "smtp.gui.example",
+        "#smtp-port": "2525",
+        "#smtp-username": "gui-user",
+        "#smtp-from-address": "gui@example.invalid",
+        "#smtp-app-url": f"{fortios_server.base_url}/gui-app/",
+        "#smtp-timeout": "23",
+    }
+    for field, value in smtp_values.items():
+        if field == "#smtp-timeout":
+            page.locator("#smtp-advanced-options summary").click()
+        page.fill(field, value)
+    page.fill("#smtp-password", "smtp-initial-fixture")
+    with (
+        page.expect_response(
+            lambda r: r.url.endswith("/api/cert/smtp") and r.request.method == "POST"
+        ) as smtp_settings_response,
+        page.expect_response(
+            lambda r: r.url.endswith("/api/cert/smtp/password") and r.request.method == "POST"
+        ) as smtp_password_response,
+    ):
+        page.click("#save-smtp-button")
+    assert smtp_settings_response.value.status == 200
+    assert smtp_password_response.value.status == 200
+    assert "smtp-initial-fixture" not in smtp_settings_response.value.text()
+    assert "smtp-initial-fixture" not in smtp_password_response.value.text()
+    expect(page.locator("#smtp-password")).to_have_value("")
+    assert fortios_server.smtp_password_path.read_text() == "smtp-initial-fixture"
+    assert fortios_server.smtp_password_path.stat().st_mode & 0o777 == 0o600
+
+    page.fill("#smtp-password", "smtp-rotated-fixture")
+    with page.expect_response(
+        lambda r: r.url.endswith("/api/cert/smtp/password") and r.request.method == "POST"
+    ) as rotated_password_response:
+        page.click("#save-smtp-button")
+    assert rotated_password_response.value.status == 200
+    assert "smtp-rotated-fixture" not in rotated_password_response.value.text()
+    expect(page.locator("#smtp-password")).to_have_value("")
+    assert fortios_server.smtp_password_path.read_text() == "smtp-rotated-fixture"
+
+    page.fill("#smtp-password", "smtp-failing-fixture")
+
+    def fail_smtp_password(route):
+        route.fulfill(
+            status=503,
+            content_type="application/json",
+            body=json.dumps(
+                {
+                    "error": "Stockage du mot de passe SMTP indisponible.",
+                    "errorCode": "storage-unavailable",
+                }
+            ),
+        )
+
+    page.route("**/api/cert/smtp/password", fail_smtp_password)
+    with (
+        page.expect_response(
+            lambda r: r.url.endswith("/api/cert/smtp") and r.request.method == "POST"
+        ) as failed_settings_response,
+        page.expect_response(
+            lambda r: r.url.endswith("/api/cert/smtp/password") and r.request.method == "POST"
+        ) as failed_password_response,
+    ):
+        page.click("#save-smtp-button")
+    assert failed_settings_response.value.status == 200
+    assert failed_password_response.value.status == 503
+    expect(page.locator("#smtp-message")).to_contain_text(
+        "Paramètres enregistrés, mais mot de passe non modifié"
+    )
+    expect(page.locator("#smtp-password")).to_have_value("")
+    assert fortios_server.smtp_password_path.read_text() == "smtp-rotated-fixture"
+    assert "smtp-failing-fixture" not in page.content()
+    page.unroute("**/api/cert/smtp/password", fail_smtp_password)
+
+    # A blank password field is not submitted as a password operation and leaves the rotation intact.
+    with page.expect_response(
+        lambda r: r.url.endswith("/api/cert/smtp") and r.request.method == "POST"
+    ) as blank_settings_response:
+        page.click("#save-smtp-button")
+    assert blank_settings_response.value.status == 200
+    assert fortios_server.smtp_password_path.read_text() == "smtp-rotated-fixture"
+
     page.select_option("#email-transport", "microsoft365")
     expect(page.locator("#microsoft365-settings")).to_be_visible()
     expect(page.locator("#smtp-transport-fields")).to_be_hidden()
@@ -120,5 +226,12 @@ def test_microsoft365_settings_roundtrip_and_missing_secret(page, fortios_server
     page.reload()
     page.click("#notifications-tab")
     expect(page.locator("#email-transport")).to_have_value("smtp")
+    expect(page.locator("#smtp-host")).to_have_value("smtp.gui.example")
+    expect(page.locator("#smtp-port")).to_have_value("2525")
+    expect(page.locator("#smtp-security")).to_have_value("starttls")
+    expect(page.locator("#smtp-username")).to_have_value("gui-user")
+    expect(page.locator("#smtp-from-address")).to_have_value("gui@example.invalid")
+    expect(page.locator("#smtp-app-url")).to_have_value(f"{fortios_server.base_url}/gui-app/")
+    expect(page.locator("#smtp-timeout")).to_have_value("23")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     assert not errors

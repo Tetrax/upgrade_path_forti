@@ -323,13 +323,29 @@ Le moteur existant de `scripts/fortios_notify.py` est conservé : déduplication
 La configuration sépare préférences, choix du transport et credentials :
 
 - `notification-settings.json` : activation, produits surveillés et destinataires ;
-- `smtp-settings.json` : apparence non secrète (nom/titre, introduction, signature), préservée des installations historiques ;
+- `smtp-settings.json` : paramètres SMTP non secrets et apparence, lorsque la GUI a enregistré le schéma `schemaVersion: 1` ;
 - `email-transport-settings.json` : choix SMTP/Microsoft 365 et paramètres Microsoft non secrets ;
-- environnement : serveur, port, sécurité, utilisateur, expéditeur, URL et timeout ;
-- `FORTIOS_SMTP_PASSWORD_FILE` : unique source du mot de passe, hors `data/` et montée en lecture seule dans les deux conteneurs.
+- environnement : bootstrap SMTP (serveur, port, sécurité, utilisateur, expéditeur, URL et timeout) lorsqu'aucun document SMTP marqué n'existe ;
+- `FORTIOS_SMTP_PASSWORD_FILE` : unique chemin du mot de passe, choisi par l'environnement et jamais remplacé par le JSON ; le volume dédié est inscriptible par le web et monté en lecture seule par le scheduler.
 - `FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE` : unique fichier du secret Entra dans un volume privé dédié, inscriptible par le web et monté en lecture seule par le scheduler.
 
-Les préférences et le choix du transport sont validés et remplacés atomiquement sous verrou dans leurs fichiers respectifs. Le navigateur ne reçoit jamais les secrets ni leurs chemins, seulement leur disponibilité. La console montre l'infrastructure SMTP en lecture seule ; le choix du transport, les identifiants Microsoft non secrets, l'apparence, les produits et destinataires sont modifiables.
+Les paramètres SMTP non secrets peuvent être modifiés dans **Administration → Notifications**.
+Un fichier `smtp-settings.json` marqué et valide prévaut sur l'environnement ; un
+ancien fichier non marqué est ignoré pour le transport et ne conserve que
+l'apparence valide. Un fichier existant tronqué, illisible ou marqué mais
+malformé met le SMTP en échec fermé jusqu'à une sauvegarde complète valide.
+Les préférences et le choix du transport sont validés et remplacés atomiquement
+sous verrou dans leurs fichiers respectifs. Les réponses GET et les réponses
+publiques ne renvoient jamais les secrets ni leurs chemins, seulement leur
+état de disponibilité.
+
+Le mot de passe utilise une opération séparée, protégée par session/CSRF : un
+champ vide conserve le secret existant ; une nouvelle valeur est écrite
+atomiquement en `0600` seulement si `FORTIOS_SMTP_PASSWORD_FILE` pointe vers un
+stockage dédié préparé et inscriptible. Un fichier externe monté en lecture
+seule reste utilisable pour l'envoi mais ne peut pas être modifié par la GUI.
+Le répertoire global des secrets et celui des certificats ne deviennent jamais
+inscriptibles pour SMTP.
 
 Le **Client Secret Microsoft 365 peut être saisi ou remplacé dans la GUI HTTPS** :
 champ masqué, contrôle administrateur/CSRF, écriture atomique, jamais de relecture
@@ -350,7 +366,7 @@ Le [guide Microsoft 365 pas à pas](docs/microsoft365.md), accessible depuis
 l'interface, décrit l'App Registration, le secret, les permissions, la recette
 réelle et le dépannage. Voir aussi [architecture et reprises](docs/notifications.md).
 
-Les variables `FORTIOS_SMTP_HOST`, `FORTIOS_SMTP_PORT`, `FORTIOS_SMTP_USERNAME`, `FORTIOS_SMTP_PASSWORD_FILE`, `FORTIOS_SMTP_SECURITY`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_SMTP_FROM` et `FORTIOS_APP_URL` sont autoritatives, même lorsqu'un ancien `smtp-settings.json` existe. Voir [livraison, migration SMTP et rollback](docs/delivery.md) avant de mettre à jour une ancienne console Web SMTP. Ne pas effacer le checkpoint ou l'outbox.
+Les variables `FORTIOS_SMTP_HOST`, `FORTIOS_SMTP_PORT`, `FORTIOS_SMTP_USERNAME`, `FORTIOS_SMTP_PASSWORD_FILE`, `FORTIOS_SMTP_SECURITY`, `FORTIOS_SMTP_TIMEOUT`, `FORTIOS_SMTP_FROM` et `FORTIOS_APP_URL` servent de bootstrap lorsqu'aucun `smtp-settings.json` marqué n'existe. Après une sauvegarde GUI valide, les paramètres SMTP non secrets enregistrés prévalent sur ces variables ; un ancien fichier non marqué reste ignoré pour le transport. Voir [livraison, migration SMTP et rollback](docs/delivery.md) avant de mettre à jour une ancienne console Web SMTP. Ne pas effacer le checkpoint ou l'outbox.
 
 Format persistant :
 
@@ -418,7 +434,7 @@ Chaque collecte réserve («&nbsp;réclame&nbsp;») les entrées de l'outbox qui
 
 Un fichier `fortios-notify-history.json` existant mais corrompu, tronqué, illisible ou de structure invalide est conservé en place, sans réinitialisation. Les notifications restent suspendues avec une erreur nettoyée ; la collecte continue indépendamment. **Récupération :** conserver ce fichier ainsi que la dernière sauvegarde valide, puis réconcilier checkpoint, outbox et clés d'envoi avant reprise. Ne pas supprimer l'historique comme remède : un nouvel amorçage est silencieux et ne reconstruit pas les événements en attente perdus ; restaurer un ancien checkpoint sans réconciliation peut aussi rejouer des événements déjà envoyés. Les anciennes archives `.corrupt-*` doivent aussi être conservées pour cette réconciliation. Voir [rollback et données persistantes](docs/delivery.md#update--rollback).
 
-L'interface privée `/cert/` expose les onglets **Certificats** et **Notifications** avec la même session administrateur, le même contrôle d'origine et le même jeton CSRF. La section **Configuration SMTP** affiche en lecture seule le transport fourni par le déploiement : STARTTLS, TLS implicite, ou mode clair explicitement autorisé dans l'environnement. Elle permet de modifier l'apparence (introduction, nom et signature) ; ces champs entourent le contenu de sécurité généré et ne peuvent pas retirer les CVE, produits, versions, avertissements ou liens obligatoires.
+L'interface privée `/cert/` expose les onglets **Certificats** et **Notifications** avec la même session administrateur, le même contrôle d'origine et le même jeton CSRF. La section **Configuration SMTP** permet de modifier et d'enregistrer le transport non secret : STARTTLS, TLS implicite, ou mode clair explicitement autorisé. Le mot de passe est saisi séparément dans un champ masqué et n'est jamais relu ; un champ vide le conserve. Les paramètres d'apparence (introduction, nom et signature) entourent le contenu de sécurité généré et ne peuvent pas retirer les CVE, produits, versions, avertissements ou liens obligatoires.
 
 Dans **Apparence des emails**, les scénarios fictifs **1 CVE**, **Plusieurs CVE** et **Multi-produits** sont construits uniquement en mémoire par le backend. La route administrateur `/api/cert/notifications/preview` transmet ces événements au renderer autoritatif `fortios_notify.compose_email()` et retourne son vrai sujet, son HTML et son alternative texte ; l'interface n'embarque aucun second template. `/api/cert/notifications/send-preview` recompose les mêmes données et les envoie avec le moteur SMTP existant, même lorsque les notifications sont désactivées. Cet envoi de prévisualisation reste soumis à la session, au contrôle d'origine, au CSRF et au rate limiting des tests SMTP. Il n'écrit ni catalogue, ni paramètres de notification, ni checkpoint, ni outbox, ni `sentKeys`, ni `eolState`. Rollback : retirer ces deux routes et les contrôles d'aperçu ne nécessite aucune migration de données persistantes.
 
@@ -597,7 +613,7 @@ bouton d'import Portainer attend l'archive Docker `.tar` produite par
    FORTIOS_SMTP_PORT=587
    FORTIOS_SMTP_USERNAME=fortiupgrade@example.com
    FORTIOS_SECRETS_DIR=/etc/fortiupgrade/secrets
-   FORTIOS_SMTP_PASSWORD_FILE=/run/fortios-secrets/smtp-password
+   FORTIOS_SMTP_PASSWORD_FILE=/opt/fortios/smtp-secrets/password
    FORTIOS_SMTP_STARTTLS=true
    FORTIOS_SMTP_TIMEOUT=10
    FORTIOS_SMTP_FROM=fortiupgrade@example.com
@@ -606,10 +622,11 @@ bouton d'import Portainer attend l'archive Docker `.tar` produite par
 
    Ce sont des valeurs d'exemple sans secret réel. Ne jamais créer de variable
    `FORTIOS_SMTP_PASSWORD` dans Portainer : utiliser uniquement
-   `FORTIOS_SMTP_PASSWORD_FILE`, pointant vers un fichier monté en lecture seule.
+   `FORTIOS_SMTP_PASSWORD_FILE`, pointant par défaut vers le volume SMTP privé
+   partagé (web RW, scheduler RO). La GUI permet ensuite de saisir le mot de passe.
 
-   Monter le même fichier secret dans `web` (test depuis l'interface) et
-   `scheduler` (envoi après collecte). Exemple pour un fichier hôte déjà créé en
+   Un montage externe en lecture seule reste une alternative compatible, sans
+   remplacement du mot de passe en GUI. Exemple pour un fichier hôte déjà créé en
    mode `0640` root:PGID (lisible par le processus non-root), si un montage personnalisé est nécessaire :
 
    ```yaml
@@ -622,9 +639,10 @@ bouton d'import Portainer attend l'archive Docker `.tar` produite par
    Stack : les enregistrer ensuite dans **Administration > Notifications**.
 5. Cliquer **Deploy the stack**.
 
-La Stack crée deux conteneurs, `web` et `scheduler`, et trois volumes nommés
+La Stack crée deux conteneurs, `web` et `scheduler`, et des volumes nommés
 préfixés par le nom de la Stack, généralement `upgrade-path_fortios-data` et
-`upgrade-path_fortios-docs`, plus `upgrade-path_fortios-certificates`.
+`upgrade-path_fortios-docs`, plus `upgrade-path_fortios-certificates`,
+`upgrade-path_fortios-smtp-secrets` et `upgrade-path_fortios-microsoft365-secrets`.
 
 #### 4. Vérifier puis basculer
 
@@ -639,7 +657,7 @@ préfixés par le nom de la Stack, généralement `upgrade-path_fortios-data` et
    firewall de la VM. Le TLS direct avec certificat de PKI interne peut ensuite
    être activé sans ajouter de reverse proxy.
 
-Ne pas supprimer les trois volumes nommés lors d'une mise à jour ou d'une
+Ne pas supprimer ces volumes nommés lors d'une mise à jour ou d'une
 suppression/recréation de Stack : ils contiennent les données accumulées après
 la migration. Garder l'instance VPS actuelle en fonctionnement jusqu'à la
 validation complète de la nouvelle instance.

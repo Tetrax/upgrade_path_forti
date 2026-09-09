@@ -93,7 +93,13 @@ _MICROSOFT365_IDENTITY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+@-]{0,319}$")
 DEFAULT_NOTIFICATION_SETTINGS_PATH = Path("data/notification-settings.json")
 DEFAULT_SMTP_SETTINGS_PATH = Path("data/smtp-settings.json")
 DEFAULT_EMAIL_TRANSPORT_SETTINGS_PATH = Path("data/email-transport-settings.json")
-SMTP_PASSWORD_FILENAME = "smtp-password"
+SMTP_SETTINGS_SCHEMA_VERSION = 1
+SMTP_PASSWORD_FILENAME = "smtp-password"  # historical data-sidecar name; not a runtime source
+SMTP_PASSWORD_ENV = "FORTIOS_SMTP_PASSWORD_FILE"
+SMTP_PASSWORD_CANONICAL_PATH = Path("/opt/fortios/smtp-secrets/password")
+SMTP_PASSWORD_STORAGE_AVAILABLE = "available"
+SMTP_PASSWORD_STORAGE_UNAVAILABLE = "storage-unavailable"
+MAX_SMTP_PASSWORD_BYTES = 4096
 MICROSOFT365_CLIENT_SECRET_ENV = "FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE"
 MICROSOFT365_SECRET_STORAGE_AVAILABLE = "available"
 MICROSOFT365_SECRET_STORAGE_UNAVAILABLE = "storage-unavailable"
@@ -337,6 +343,8 @@ class EmailConfig:
     graph_sender: str = ""
     graph_display_name: str = ""
     graph_mailbox_identity: str = ""
+    smtp_password_storage_state: str = SMTP_PASSWORD_STORAGE_UNAVAILABLE
+    smtp_password_write_available: bool = False
 
     def is_complete(self) -> bool:
         if self.transport == EMAIL_TRANSPORT_MICROSOFT365:
@@ -445,6 +453,12 @@ class SmtpSettings:
             "emailAppearance": self.email_appearance.to_payload(),
         }
 
+    def to_saved_payload(self) -> dict[str, Any]:
+        return {
+            "schemaVersion": SMTP_SETTINGS_SCHEMA_VERSION,
+            **self.to_payload(),
+        }
+
 
 @dataclass(frozen=True)
 class EmailTransportSettings:
@@ -549,6 +563,14 @@ class Microsoft365SecretStorageError(OSError):
     """The environment-selected client-secret storage cannot be safely written."""
 
 
+class SmtpPasswordValidationError(ValueError):
+    """A submitted SMTP password is empty, malformed, or too large."""
+
+
+class SmtpPasswordStorageError(OSError):
+    """The dedicated SMTP password storage cannot be safely written."""
+
+
 @dataclass(frozen=True)
 class Microsoft365SecretStorageStatus:
     state: str
@@ -564,6 +586,29 @@ def _microsoft365_secret_path(environment: dict[str, str]) -> Path | None:
         return Path(configured).absolute()
     except (TypeError, ValueError, OSError):
         return None
+
+
+def _smtp_password_path(environment: dict[str, str]) -> Path | None:
+    configured = (environment.get(SMTP_PASSWORD_ENV) or "").strip()
+    if not configured or "\0" in configured:
+        return None
+    try:
+        return Path(configured).absolute()
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _smtp_password_write_allowed(path: Path | None) -> bool:
+    """Keep external, certificate, data, and Graph secret trees out of SMTP writes."""
+    if path is None:
+        return False
+    protected = (
+        Path("/run/fortios-secrets"),
+        Path("/opt/fortios/certificates"),
+        Path("/opt/fortios/data"),
+        Path("/opt/fortios/microsoft365-secrets"),
+    )
+    return not any(path == prefix or prefix in path.parents for prefix in protected)
 
 
 def _secret_parent_open_flags() -> int:
@@ -812,34 +857,29 @@ def _validate_microsoft365_client_secret(value: object) -> bytes:
     return encoded
 
 
-def save_microsoft365_client_secret(
-    value: object,
-    *,
-    env: dict[str, str] | None = None,
+def _write_private_secret_bytes(
+    path: Path | None,
+    encoded: bytes,
+    unavailable_error: Any,
 ) -> str:
-    """Atomically replace the environment-selected Graph secret without accepting a path."""
-    encoded = _validate_microsoft365_client_secret(value)
-    environment = dict(os.environ) if env is None else env
-    path = _microsoft365_secret_path(environment)
+    """Atomically replace one file-backed secret through the existing descriptor-bound writer."""
     status = _inspect_microsoft365_secret_storage(path)
     if path is None or not status.can_write:
-        raise _microsoft365_storage_error()
+        raise unavailable_error()
 
     try:
         with _microsoft365_secret_lock(path) as parent_fd:
             target_kind = _secret_entry_kind_at(parent_fd, path.name)
             if target_kind not in {"missing", "regular"}:
-                raise _microsoft365_storage_error()
+                raise unavailable_error()
             if not _secret_entry_is_writable(
                 parent_fd,
                 path.name,
                 target_kind=target_kind,
             ):
-                raise _microsoft365_storage_error()
+                raise unavailable_error()
 
-            temporary_name = (
-                f".{path.name}.tmp-{os.getpid()}-{secrets.token_hex(8)}"
-            )
+            temporary_name = f".{path.name}.tmp-{os.getpid()}-{secrets.token_hex(8)}"
             try:
                 flags = (
                     os.O_WRONLY
@@ -848,12 +888,7 @@ def save_microsoft365_client_secret(
                     | getattr(os, "O_CLOEXEC", 0)
                     | getattr(os, "O_NOFOLLOW", 0)
                 )
-                descriptor = os.open(
-                    temporary_name,
-                    flags,
-                    0o600,
-                    dir_fd=parent_fd,
-                )
+                descriptor = os.open(temporary_name, flags, 0o600, dir_fd=parent_fd)
                 try:
                     with os.fdopen(descriptor, "wb") as handle:
                         descriptor = -1
@@ -865,14 +900,13 @@ def save_microsoft365_client_secret(
                     if descriptor != -1:
                         os.close(descriptor)
 
-                # Recheck the destination through the pinned parent immediately before rename.
                 target_kind = _secret_entry_kind_at(parent_fd, path.name)
                 if target_kind not in {"missing", "regular"} or not _secret_entry_is_writable(
                     parent_fd,
                     path.name,
                     target_kind=target_kind,
                 ):
-                    raise _microsoft365_storage_error()
+                    raise unavailable_error()
                 os.replace(
                     temporary_name,
                     path.name,
@@ -883,8 +917,7 @@ def save_microsoft365_client_secret(
                 try:
                     os.fsync(parent_fd)
                 except OSError:
-                    # The rename already completed atomically; do not report an error after
-                    # mutating the destination and thereby imply that the old value survived.
+                    # The rename already completed atomically.
                     pass
             finally:
                 if temporary_name:
@@ -893,10 +926,77 @@ def save_microsoft365_client_secret(
                     except FileNotFoundError:
                         pass
             return MICROSOFT365_SECRET_STORAGE_AVAILABLE
-    except Microsoft365SecretStorageError:
-        raise
     except (OSError, UnicodeError, ValueError) as error:
-        raise _microsoft365_storage_error() from error
+        raise unavailable_error() from error
+
+
+def save_microsoft365_client_secret(
+    value: object,
+    *,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Atomically replace the environment-selected Graph secret without accepting a path."""
+    encoded = _validate_microsoft365_client_secret(value)
+    environment = dict(os.environ) if env is None else env
+    path = _microsoft365_secret_path(environment)
+    return _write_private_secret_bytes(path, encoded, _microsoft365_storage_error)
+
+
+def _smtp_password_storage_error() -> SmtpPasswordStorageError:
+    return SmtpPasswordStorageError("Stockage du mot de passe SMTP indisponible.")
+
+
+def _validate_smtp_password(value: object) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise SmtpPasswordValidationError("Mot de passe SMTP invalide.")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise SmtpPasswordValidationError("Mot de passe SMTP invalide.") from error
+    if len(encoded) > MAX_SMTP_PASSWORD_BYTES or all(
+        character.isspace() or unicodedata.category(character).startswith("C")
+        for character in value
+    ):
+        raise SmtpPasswordValidationError("Mot de passe SMTP invalide.")
+    return encoded
+
+
+def _smtp_password_storage_status(
+    environment: dict[str, str],
+) -> Microsoft365SecretStorageStatus:
+    path = _smtp_password_path(environment)
+    status = _inspect_microsoft365_secret_storage(path)
+    if not _smtp_password_write_allowed(path):
+        return Microsoft365SecretStorageStatus(
+            SMTP_PASSWORD_STORAGE_UNAVAILABLE,
+            False,
+            status.configured,
+        )
+    return Microsoft365SecretStorageStatus(
+        SMTP_PASSWORD_STORAGE_AVAILABLE
+        if status.can_write
+        else SMTP_PASSWORD_STORAGE_UNAVAILABLE,
+        status.can_write,
+        status.configured,
+    )
+
+
+def save_smtp_password(
+    value: object,
+    *,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Atomically write the optional GUI-managed SMTP password to its dedicated path."""
+    environment = dict(os.environ) if env is None else env
+    # A blank browser field means "keep the current secret". It must not create, truncate, or
+    # otherwise touch the file, and is valid even when deployments deliberately expose no writer.
+    if isinstance(value, str) and value == "":
+        return _smtp_password_storage_status(environment).state
+    encoded = _validate_smtp_password(value)
+    path = _smtp_password_path(environment)
+    if not _smtp_password_write_allowed(path):
+        raise _smtp_password_storage_error()
+    return _write_private_secret_bytes(path, encoded, _smtp_password_storage_error)
 
 
 def _load_microsoft365_client_secret(
@@ -1257,16 +1357,80 @@ def _saved_email_appearance(path: Path) -> EmailAppearance:
         return _default_email_appearance()
 
 
+def _invalid_smtp_settings(appearance: EmailAppearance | None = None) -> SmtpSettings:
+    """Represent a malformed marked document without falling back to deployment values."""
+    return SmtpSettings(
+        host="",
+        port=587,
+        security="starttls",
+        allow_insecure=False,
+        username="",
+        sender="",
+        app_url="",
+        timeout=10,
+        email_appearance=appearance or _default_email_appearance(),
+        source="saved-invalid",
+    )
+
+
+def _saved_smtp_settings_from_payload(payload: Any) -> SmtpSettings:
+    if not isinstance(payload, dict) or payload.get("schemaVersion") != SMTP_SETTINGS_SCHEMA_VERSION:
+        raise ValueError("Configuration SMTP marquée invalide.")
+    document = dict(payload)
+    del document["schemaVersion"]
+    return validate_smtp_settings(document, source="saved")
+
+
+def _load_smtp_document(path: Path) -> tuple[Any, bool, bool]:
+    """Read settings and distinguish a missing file from an unreadable existing file."""
+    if not os.path.lexists(path):
+        return None, False, False
+    if not path.is_file():
+        return None, True, True
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        # An existing document may be a truncated/new-schema save. Never reactivate deployment
+        # SMTP values when its schema cannot be determined.
+        return None, True, True
+    return payload, isinstance(payload, dict) and "schemaVersion" in payload, True
+
+
+def _appearance_from_payload(payload: Any) -> EmailAppearance:
+    if not isinstance(payload, dict):
+        return _default_email_appearance()
+    appearance_payload = payload.get("emailAppearance", payload)
+    try:
+        return validate_email_appearance(appearance_payload)
+    except (TypeError, ValueError):
+        return _default_email_appearance()
+
+
 def _load_smtp_settings_unlocked(
     path: Path, environment: dict[str, str]
 ) -> SmtpSettings:
-    # `path` is an appearance sidecar only. Every transport field remains environment-authoritative
-    # even when a legacy full smtp-settings.json or smtp-password file is still present.
-    return replace(
-        _smtp_settings_from_env(environment),
-        email_appearance=_saved_email_appearance(path),
-        source="environment",
-    )
+    payload, marked, present = _load_smtp_document(path)
+    if not present:
+        # A missing appearance sidecar bootstraps from deployment values.
+        return replace(
+            _smtp_settings_from_env(environment),
+            email_appearance=_saved_email_appearance(path),
+            source="environment",
+        )
+    if not isinstance(payload, dict):
+        return _invalid_smtp_settings()
+    if not marked:
+        # Historical full documents are intentionally ignored. Their appearance remains readable,
+        # but stale host/port/login/sender values never regain authority after an upgrade.
+        return replace(
+            _smtp_settings_from_env(environment),
+            email_appearance=_appearance_from_payload(payload),
+            source="environment",
+        )
+    try:
+        return _saved_smtp_settings_from_payload(payload)
+    except (TypeError, ValueError):
+        return _invalid_smtp_settings(_appearance_from_payload(payload))
 
 
 def load_smtp_settings(
@@ -1281,10 +1445,33 @@ def load_smtp_settings(
 
 def _appearance_payload_from_settings(payload: Any) -> Any:
     if not isinstance(payload, dict) or set(payload) != {"emailAppearance"}:
-        raise ValueError(
-            "Configuration SMTP en lecture seule : seul emailAppearance peut être enregistré."
-        )
+        raise ValueError("Configuration SMTP invalide.")
     return payload["emailAppearance"]
+
+
+def _existing_saved_smtp_settings_unlocked(path: Path) -> SmtpSettings | None:
+    payload, marked, _present = _load_smtp_document(path)
+    if not marked:
+        return None
+    try:
+        return _saved_smtp_settings_from_payload(payload)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Configuration SMTP marquée invalide.") from error
+
+
+def _persist_email_appearance_unlocked(
+    path: Path, appearance: EmailAppearance
+) -> SmtpSettings | None:
+    """Update appearance without discarding a valid marked SMTP document."""
+    existing = _existing_saved_smtp_settings_unlocked(path)
+    if existing is not None:
+        updated = replace(existing, email_appearance=appearance)
+        write_json(path, updated.to_saved_payload())
+        return updated
+    # Keep the historical appearance-only shape for first saves and legacy documents. It has no
+    # infrastructure authority; a later full SMTP save adds the schema marker explicitly.
+    write_json(path, {"emailAppearance": appearance.to_payload()})
+    return None
 
 
 def save_email_appearance(
@@ -1293,15 +1480,15 @@ def save_email_appearance(
     *,
     env: dict[str, str] | None = None,
 ) -> SmtpSettings:
-    """Persist only non-secret email appearance preferences.
-
-    SMTP transport and the password are intentionally not accepted here. The sidecar is kept for
-    the display title/name, introduction, and signature used by previews and real emails.
-    """
+    """Persist appearance while retaining any valid saved SMTP infrastructure."""
+    if isinstance(payload, dict) and set(payload) == {"emailAppearance"}:
+        payload = payload["emailAppearance"]
     appearance = validate_email_appearance(payload)
     environment = dict(os.environ) if env is None else env
     with cross_process_lock(path):
-        write_json(path, {"emailAppearance": appearance.to_payload()})
+        saved = _persist_email_appearance_unlocked(path, appearance)
+    if saved is not None:
+        return saved
     return replace(
         _smtp_settings_from_env(environment),
         email_appearance=appearance,
@@ -1316,20 +1503,21 @@ def save_smtp_settings(
     password: str | None = None,
     env: dict[str, str] | None = None,
 ) -> SmtpSettings:
-    """Compatibility-shaped adapter for the appearance-only administration endpoint.
+    """Persist validated non-secret SMTP settings with an explicit schema marker.
 
-    The endpoint signature remains stable for callers during migration, but all transport fields
-    and every browser-managed password are rejected. SMTP infrastructure is deployment-owned.
+    The legacy appearance-only shape remains accepted for callers that only customize email
+    rendering. Passwords are deliberately a separate, file-backed operation.
     """
     if password is not None:
         raise ValueError(
             "Le mot de passe SMTP doit provenir de FORTIOS_SMTP_PASSWORD_FILE."
         )
-    return save_email_appearance(
-        path,
-        _appearance_payload_from_settings(payload),
-        env=env,
-    )
+    if isinstance(payload, dict) and set(payload) == {"emailAppearance"}:
+        return save_email_appearance(path, payload["emailAppearance"], env=env)
+    settings = validate_smtp_settings(payload, source="saved")
+    with cross_process_lock(path):
+        write_json(path, settings.to_saved_payload())
+    return settings
 
 
 def save_email_configuration(
@@ -1339,34 +1527,36 @@ def save_email_configuration(
     *,
     env: dict[str, str] | None = None,
 ) -> tuple[SmtpSettings, EmailTransportSettings]:
-    """Persist non-secret email appearance and transport selection together at the API boundary.
-
-    The Graph client secret is intentionally not part of this payload. Deployments provide it via
-    the read-only ``FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE`` path. Existing SMTP-only callers
-    should continue using ``save_smtp_settings`` so their historical sidecar shape is unchanged.
-    """
-    expected = {"transport", "microsoft365", "emailAppearance"}
-    if not isinstance(payload, dict) or set(payload) != expected:
+    """Persist Graph selection/appearance without wiping saved SMTP infrastructure."""
+    base_keys = {"transport", "microsoft365", "emailAppearance"}
+    allowed_keys = (base_keys, base_keys | {"smtp"})
+    if not isinstance(payload, dict) or set(payload) not in allowed_keys:
         raise ValueError("Configuration email invalide.")
     appearance = validate_email_appearance(payload["emailAppearance"])
     transport = validate_email_transport_settings(
         {"transport": payload["transport"], "microsoft365": payload["microsoft365"]}
     )
+    smtp_settings: SmtpSettings | None = None
+    if "smtp" in payload:
+        smtp_settings = validate_smtp_settings(payload["smtp"], source="saved")
+        # The wrapper's appearance is the single value shared by both transports. This also
+        # prevents a stale nested appearance from silently replacing a current Graph draft.
+        smtp_settings = replace(smtp_settings, email_appearance=appearance)
     environment = dict(os.environ) if env is None else env
-    # Validate both documents before either write. They are separate sidecars so old SMTP data
-    # remains readable, while no secret can be introduced through this endpoint.
+    # A Graph-only save must preserve a valid marked SMTP document and must not reactivate a
+    # malformed one. A complete nested SMTP payload is an explicit repair, so it is validated above
+    # and may replace a corrupt marked document.
+    if smtp_settings is None:
+        with cross_process_lock(appearance_path):
+            _existing_saved_smtp_settings_unlocked(appearance_path)
     with cross_process_lock(transport_path):
         write_json(transport_path, transport.to_payload())
     with cross_process_lock(appearance_path):
-        write_json(appearance_path, {"emailAppearance": appearance.to_payload()})
-    return (
-        replace(
-            _smtp_settings_from_env(environment),
-            email_appearance=appearance,
-            source="environment",
-        ),
-        transport,
-    )
+        if smtp_settings is None:
+            _persist_email_appearance_unlocked(appearance_path, appearance)
+        else:
+            write_json(appearance_path, smtp_settings.to_saved_payload())
+    return load_smtp_settings(appearance_path, env=environment), transport
 
 
 def delete_smtp_password(path: Path) -> None:
@@ -1399,6 +1589,7 @@ def load_smtp_snapshot(
         smtp_password, smtp_password_file, smtp_password_error = _env_secret(
             environment, "FORTIOS_SMTP_PASSWORD"
         )
+        smtp_password_storage = _smtp_password_storage_status(environment)
         graph_secret, graph_secret_file, graph_secret_error, graph_secret_storage = (
             _load_microsoft365_client_secret(environment)
         )
@@ -1420,6 +1611,8 @@ def load_smtp_snapshot(
             app_url=smtp.app_url,
             smtp_password_file=smtp_password_file,
             smtp_password_error=smtp_password_error,
+            smtp_password_storage_state=smtp_password_storage.state,
+            smtp_password_write_available=smtp_password_storage.can_write,
             smtp_security=smtp.security,
             smtp_allow_insecure=smtp.allow_insecure,
             email_appearance=smtp.email_appearance,
@@ -1525,6 +1718,8 @@ def smtp_public_settings(
         "passwordConfigured": bool(
             config.smtp_password and not config.smtp_password_error
         ),
+        "passwordStorageState": config.smtp_password_storage_state,
+        "canSetPassword": config.smtp_password_write_available,
         "transport": config.transport,
     }
     public["microsoft365"] = _microsoft365_public_status(config)

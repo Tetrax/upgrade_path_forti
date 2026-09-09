@@ -15,12 +15,24 @@ class DeliveryStackTests(unittest.TestCase):
                 self.assertIn('  fortios-microsoft365-secrets:', text)
                 self.assertEqual(text.count('FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: ${FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE:-/opt/fortios/microsoft365-secrets/client-secret}'), 2)
 
+    def test_gui_smtp_password_storage_is_dedicated_and_scheduler_read_only(self):
+        for name in ('docker-compose.yml', 'docker-compose.portainer.yml', 'docker-compose.portainer-import.yml'):
+            with self.subTest(name=name):
+                text = (ROOT / name).read_text()
+                self.assertEqual(text.count('fortios-smtp-secrets:/opt/fortios/smtp-secrets:rw'), 1)
+                self.assertEqual(text.count('fortios-smtp-secrets:/opt/fortios/smtp-secrets:ro'), 1)
+                self.assertIn('  fortios-smtp-secrets:', text)
+                self.assertEqual(text.count('FORTIOS_SMTP_PASSWORD_FILE: ${FORTIOS_SMTP_PASSWORD_FILE:-/opt/fortios/smtp-secrets/password}'), 2)
+                self.assertNotIn('fortios-smtp-secrets:/run/fortios-secrets', text)
+                self.assertNotIn('fortios-smtp-secrets:/opt/fortios/certificates', text)
+
     def test_images_exclude_live_settings_secrets_and_outbox(self):
         text = (ROOT / '.dockerignore').read_text()
         for pattern in (
             'data/smtp-password*', 'data/smtp-settings.json*',
             'data/fortios-notify-history.json*', 'data/email-transport-settings.json*',
             'data/.email-transport-settings.json*', '**/microsoft365-client-secret*',
+            '**/smtp-secrets/', '**/microsoft365-secrets/',
         ):
             self.assertIn(pattern, text)
 
@@ -72,3 +84,6 @@ class DeliveryStackTests(unittest.TestCase):
         self.assertEqual(text.count('source: /var/lib/fortiupgrade-m365-test/secrets'), 2)
         self.assertEqual(text.count('read_only: true'), 2)
         self.assertEqual(text.count('create_host_path: false'), 2)
+        self.assertIn('FORTIOS_SMTP_PASSWORD_FILE: /opt/fortios/smtp-secrets/password', text)
+        self.assertEqual(text.count('candidate-smtp-secrets:/opt/fortios/smtp-secrets:rw'), 1)
+        self.assertEqual(text.count('candidate-smtp-secrets:/opt/fortios/smtp-secrets:ro'), 1)

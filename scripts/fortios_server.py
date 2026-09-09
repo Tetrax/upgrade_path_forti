@@ -917,7 +917,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             password = payload.pop("password", None)
             if password is not None and not isinstance(password, str):
                 raise TypeError("Le mot de passe SMTP doit être une chaîne.")
-            if set(payload) == {"emailAppearance"}:
+            if "transport" not in payload:
                 fortios_notify.save_smtp_settings(
                     SMTP_SETTINGS_PATH,
                     payload,
@@ -926,7 +926,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             else:
                 if password is not None:
                     raise ValueError(
-                        "Les secrets email doivent provenir d'un fichier monté en lecture seule."
+                        "Enregistrer le mot de passe séparément des paramètres email."
                     )
                 fortios_notify.save_email_configuration(
                     SMTP_SETTINGS_PATH,
@@ -938,6 +938,35 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.write_json_response(
                 {"error": str(error)[:500]},
                 HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            response,
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_smtp_password_write(self) -> None:
+        if self.require_admin_session(csrf=True) is None:
+            return
+        try:
+            payload = self.read_json_body(max_bytes=32 * 1024)
+            if not isinstance(payload, dict) or set(payload) != {"password"}:
+                raise ValueError("Mot de passe SMTP invalide.")
+            fortios_notify.save_smtp_password(payload["password"])
+            response = self.smtp_settings_response()
+        except (TypeError, ValueError):
+            self.write_json_response(
+                {"error": "Mot de passe SMTP invalide."},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        except OSError:
+            self.write_json_response(
+                {"error": "Stockage du mot de passe SMTP indisponible.",
+                 "errorCode": fortios_notify.SMTP_PASSWORD_STORAGE_UNAVAILABLE},
+                HTTPStatus.SERVICE_UNAVAILABLE,
                 extra_headers={"Cache-Control": "no-store"},
             )
             return
@@ -1330,6 +1359,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_notification_settings_write()
             elif self.path == "/api/cert/smtp":
                 self.handle_smtp_settings_write()
+            elif url_path == "/api/cert/smtp/password":
+                self.handle_smtp_password_write()
             elif self.path == "/api/cert/notifications/test":
                 self.handle_notification_test_email()
             elif self.path == "/api/cert/notifications/preview":

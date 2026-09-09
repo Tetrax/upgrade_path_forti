@@ -19,22 +19,22 @@ fi
 # the persistent paths, then run every application process without root.
 mkdir -p /opt/fortios/data/advisory-images /opt/fortios/docs
 chown -R "$PUID:$PGID" /opt/fortios/data /opt/fortios/docs
-# Prepare only the dedicated Microsoft 365 volume, never the read-only SMTP
+# Prepare only dedicated email secret volumes, never the global read-only
 # secret directory or an operator-supplied external secret path. The scheduler
-# mounts this volume read-only and must also boot before the web initializes it.
+# mounts these volumes read-only and may boot before web initializes them.
 python - "$PUID" "$PGID" <<'PY'
 import os
 import stat
 import sys
 
-try:
-    directory = os.open('/opt/fortios/microsoft365-secrets', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+def prepare_secret_volume(path, filename):
+    directory = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         if not os.fstatvfs(directory).f_flag & os.ST_RDONLY:
             os.fchown(directory, int(sys.argv[1]), int(sys.argv[2]))
             os.fchmod(directory, 0o700)
             try:
-                secret = os.open('client-secret', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                secret = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
             except FileNotFoundError:
                 pass
             else:
@@ -48,8 +48,14 @@ try:
                     os.close(secret)
     finally:
         os.close(directory)
-except (OSError, ValueError):
-    sys.exit('Microsoft 365 secret volume is invalid or unavailable.')
+for path, filename, label in (
+    ('/opt/fortios/microsoft365-secrets', 'client-secret', 'Microsoft 365'),
+    ('/opt/fortios/smtp-secrets', 'password', 'SMTP'),
+):
+    try:
+        prepare_secret_volume(path, filename)
+    except (OSError, ValueError):
+        sys.exit(f'{label} secret volume is invalid or unavailable.')
 PY
 if [ -z "${FORTIOS_CERT_HELPER_SOCKET:-}" ]; then
   ADMIN_CREDENTIALS="${FORTIOS_CERT_ADMIN_FILE:-/opt/fortios/certificates/admin/credentials.json}"

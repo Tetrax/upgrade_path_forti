@@ -189,8 +189,9 @@ Scheduler :      le même volume ro, mêmes PUID/PGID que web
 
 Le volume est initialisé par l'entrypoint et reste vide tant qu'aucun vrai secret
 n'est fourni. Le démarrage et SMTP restent fonctionnels. **Ne pas rendre
-`/run/fortios-secrets` inscriptible** : le secret SMTP et les autres secrets
-externes y conservent leur montage lecture seule. Les certificats et leur helper
+`/run/fortios-secrets` inscriptible** : les secrets externes y conservent leur
+montage lecture seule. SMTP dispose de son propre volume `fortios-smtp-secrets`
+pour sa saisie GUI, distinct de celui de Microsoft 365. Les certificats et leur helper
 ne changent pas de frontière de privilèges.
 
 | Environnement | Mécanisme |
@@ -204,8 +205,10 @@ ne changent pas de frontière de privilèges.
 
 Mettre à jour **l'image et la définition du Stack**, pas seulement l'image.
 Conserver le nom du Stack et tous les volumes data/docs/certificates existants ;
-ajouter seulement le volume Microsoft dédié et la référence identique dans web
-et scheduler. Dans Portainer, retirer un éventuel ancien override de la variable
+ajouter les volumes privés dédiés manquants et leurs références identiques dans web
+et scheduler. Pour migrer le mot de passe SMTP sans perdre sa valeur, suivre
+[la procédure SMTP](delivery.md#migration-to-editable-smtp-administration).
+Dans Portainer, retirer un éventuel ancien override de la variable
 qui pointe vers `/run/fortios-secrets/microsoft365-client-secret`, ou le remplacer
 par le nouveau chemin. Le même nom de Stack garantit la réutilisation du volume.
 
