@@ -197,10 +197,10 @@ def compose_text_body(
             f"High     : {high}",
             f"Total    : {total}",
             "",
-            "Produits concernés",
+            "Produits concernés (nombre de CVE par produit)",
         ]
     )
-    lines.extend(f"{label} : {count}" for label, count in product_counts)
+    lines.extend(f"{label} : {count} CVE" for label, count in product_counts)
     lines.append("")
 
     for event in security_events:
@@ -316,7 +316,8 @@ def compose_html_body(
         "<tr>"
         f"<td style='padding:8px 14px;font-size:14px;color:{SNS_BLACK}'>{html.escape(label)}</td>"
         f"<td style='padding:8px 14px;text-align:right;font-size:14px;font-weight:700;"
-        f"color:{SNS_BLACK}'>{count}</td>"
+        f"color:{SNS_BLACK}'>{count}"
+        f"<span style='font-size:12px;font-weight:400;color:{SNS_GRAY_TEXT}'> CVE</span></td>"
         "</tr>"
         for label, count in product_counts
     )
@@ -483,10 +484,14 @@ def compose_html_body(
         "</td></tr>"
 
         # Products concerned (SNS pale rose background)
+        # The per-product figure is a number of CVEs, not a share of the total: the explicit
+        # unit plus the subtitle remove the "these numbers should add up to the total" reading.
         "<tr><td style='padding:22px 20px 6px'>"
         f"<div style='background:{SNS_ROSE_PALE};padding:18px 16px'>"
         f"<div style='font-size:12px;font-weight:700;color:{SNS_BLACK};letter-spacing:1px;"
-        "margin:0 0 10px'>PRODUITS CONCERNÉS</div>"
+        "margin:0 0 2px'>PRODUITS CONCERNÉS</div>"
+        f"<div style='font-size:12px;color:{SNS_GRAY_TEXT};margin:0 0 10px'>"
+        "Nombre de CVE par produit</div>"
         f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
         "style='border-collapse:collapse'>"
         f"{product_rows}"
