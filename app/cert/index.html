@@ -465,6 +465,32 @@
               </div>
             </section>
 
+            <!-- Validation contrôlée: same panel, same behaviour, now inside the email
+                 configuration column between the transport and the appearance cards. -->
+            <section class="panel test-email-panel" aria-labelledby="test-email-heading">
+              <div class="panel-header">
+                <p class="eyebrow">Validation contrôlée</p>
+                <h3 class="panel-title" id="test-email-heading">Test d’envoi</h3>
+                <p class="panel-copy">Le test utilise la dernière configuration enregistrée et ne crée aucun événement CVE.</p>
+              </div>
+              <div class="panel-body test-email-layout">
+                <div class="field">
+                  <label for="test-email-recipient">Destinataire de test</label>
+                  <input id="test-email-recipient" form="test-email-form" type="email" required maxlength="254" placeholder="security@example.com">
+                </div>
+                <dl class="smtp-details test-summary" aria-label="Résumé du test email">
+                  <div><dt>Transport</dt><dd id="test-email-transport">Non configuré</dd></div>
+                  <div><dt id="test-email-endpoint-label">SMTP</dt><dd id="test-smtp-endpoint">Non configuré</dd></div>
+                  <div><dt>Sécurité</dt><dd id="test-smtp-security">—</dd></div>
+                  <div><dt>Expéditeur</dt><dd id="test-smtp-from">Non configuré</dd></div>
+                  <div><dt>Destinataire</dt><dd id="test-smtp-recipient">—</dd></div>
+                </dl>
+                <button class="btn primary" id="test-email-button" type="button">Envoyer un email de test</button>
+                <ul class="smtp-checks" id="smtp-test-checks" aria-live="polite"></ul>
+                <p class="form-message" id="test-email-message" role="alert"></p>
+              </div>
+            </section>
+
             <section class="panel appearance-panel">
               <div class="panel-header">
                 <p class="eyebrow">Personnalisation encadrée</p>
@@ -521,29 +547,10 @@
           </form>
         </div>
 
-        <section class="panel test-email-panel" aria-labelledby="test-email-heading">
-          <div class="panel-header">
-            <p class="eyebrow">Validation contrôlée</p>
-            <h3 class="panel-title" id="test-email-heading">Test d’envoi</h3>
-            <p class="panel-copy">Le test utilise la dernière configuration enregistrée et ne crée aucun événement CVE.</p>
-          </div>
-          <div class="panel-body test-email-layout">
-            <div class="field">
-              <label for="test-email-recipient">Destinataire de test</label>
-              <input id="test-email-recipient" type="email" required maxlength="254" placeholder="security@example.com">
-            </div>
-            <dl class="smtp-details test-summary" aria-label="Résumé du test email">
-              <div><dt>Transport</dt><dd id="test-email-transport">Non configuré</dd></div>
-              <div><dt id="test-email-endpoint-label">SMTP</dt><dd id="test-smtp-endpoint">Non configuré</dd></div>
-              <div><dt>Sécurité</dt><dd id="test-smtp-security">—</dd></div>
-              <div><dt>Expéditeur</dt><dd id="test-smtp-from">Non configuré</dd></div>
-              <div><dt>Destinataire</dt><dd id="test-smtp-recipient">—</dd></div>
-            </dl>
-            <button class="btn primary" id="test-email-button" type="button">Envoyer un email de test</button>
-            <ul class="smtp-checks" id="smtp-test-checks" aria-live="polite"></ul>
-            <p class="form-message" id="test-email-message" role="alert"></p>
-          </div>
-        </section>
+        <!-- Inert form owner: it keeps the test recipient's `required` check for the test flow
+             (the button calls reportValidity()) without letting it block "Enregistrer la
+             configuration email". Never submitted. -->
+        <form id="test-email-form" hidden></form>
       </section>
     </section>
   </main>
