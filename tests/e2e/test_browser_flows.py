@@ -1000,3 +1000,71 @@ def test_transport_indicator_follows_the_selected_transport(page, fortios_server
     assert transport_settings["microsoft365"]["tenantId"] == "11111111-2222-3333-4444-555555555555"
     assert "browser-graph-fixture" not in page.content()
     assert not errors
+
+
+def test_notifications_keeps_the_test_card_in_the_email_column(page, fortios_server):
+    """The "Test d’envoi" card sits in the email column, between transport and appearance.
+
+    Same card, same margins and same behaviour: only its position in the layout changes, and the
+    empty test recipient must never block saving the email configuration.
+    """
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    order = page.evaluate(
+        """() => [...document.querySelector('#smtp-form').children].map(node => {
+             if (node.classList.contains('smtp-panel')) return 'transport';
+             if (node.classList.contains('test-email-panel')) return 'test';
+             if (node.classList.contains('appearance-panel')) return 'appearance';
+             return `other:${node.className}`;
+           })"""
+    )
+    assert order == ["transport", "test", "appearance"]
+    # Left column untouched: the CVEs alerts card stays the grid's first column.
+    assert page.evaluate(
+        "document.querySelector('.notifications-grid').firstElementChild.id"
+    ) == "notifications-form"
+
+    def boxes() -> dict[str, dict[str, float]]:
+        return page.evaluate(
+            """() => {
+                 const card = selector => document.querySelector(selector).getBoundingClientRect();
+                 const transport = card('#smtp-form .smtp-panel');
+                 const test = card('#smtp-form .test-email-panel');
+                 const appearance = card('#smtp-form .appearance-panel');
+                 return {
+                   transport: {x: transport.x, y: transport.y, width: transport.width},
+                   test: {x: test.x, y: test.y, width: test.width},
+                   appearance: {x: appearance.x, y: appearance.y, width: appearance.width},
+                 };
+               }"""
+        )
+
+    desktop = boxes()
+    # One logical column: same left edge and same width, stacked in order.
+    assert abs(desktop["transport"]["x"] - desktop["test"]["x"]) <= 1
+    assert abs(desktop["test"]["x"] - desktop["appearance"]["x"]) <= 1
+    assert abs(desktop["transport"]["width"] - desktop["test"]["width"]) <= 1
+    assert abs(desktop["test"]["width"] - desktop["appearance"]["width"]) <= 1
+    assert desktop["transport"]["y"] < desktop["test"]["y"] < desktop["appearance"]["y"]
+    # The right column is narrower than the full page: the card is no longer full-bleed.
+    page_width = page.evaluate("document.documentElement.clientWidth")
+    assert desktop["test"]["width"] < page_width * 0.75
+
+    # Saving the email configuration still works with an empty test recipient: the test card's
+    # own `required` check must not leak into the SMTP form's submission.
+    page.fill("#smtp-host", "smtp.layout.example")
+    page.fill("#smtp-from-address", "fortiupgrade@example.test")
+    page.fill("#smtp-app-url", "https://fortiupgrade.example/app/")
+    expect(page.locator("#test-email-recipient")).to_have_value("")
+    with page.expect_response(lambda r: r.url.endswith("/api/cert/smtp")) as saved:
+        page.click("#save-smtp-button")
+    assert saved.value.status == 200
+
+    page.set_viewport_size({"width": 390, "height": 900})
+    mobile = boxes()
+    assert abs(mobile["transport"]["x"] - mobile["test"]["x"]) <= 1
+    assert mobile["transport"]["y"] < mobile["test"]["y"] < mobile["appearance"]["y"]
+    assert page.evaluate(
+        "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
+    )
