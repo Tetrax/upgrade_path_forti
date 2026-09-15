@@ -60,8 +60,18 @@ Suppression de l'ancien état, après archivage vérifiable :
 La pile de production est celle du projet Compose `fortiupgrade` lancée depuis
 `/home/tetrax/workspace/Fortiupgrade/runtime/compose.yml`. Le nom de projet et tous
 les volumes nommés sont inchangés : la bascule ne recrée que les deux binds
-`data`/`docs`. Le rollback vers l'ancien chemin reste possible tant que les
-archives `runtime/rollback/` et l'image précédente sont conservées.
+`data`/`docs`.
+
+Rollback après cette consolidation : la **bascule d'image** reste la procédure
+normale — épingler le tag précédent dans `runtime/compose.yml` (`image:` des deux
+services) et relancer la pile ; aucune donnée n'est concernée par un changement
+d'image. En revanche, revenir à l'**ancien chemin de montage**
+`/home/tetrax/deploy/Fortiupgrade/{data,docs}` n'est plus possible, ce répertoire
+ayant été supprimé : les `compose.yml` archivés sous `runtime/rollback/` décrivent
+l'organisation pré-migration et ne sont conservés qu'à titre de preuve (leurs
+`source:` doivent être pointés sur `runtime/data` et `runtime/docs` pour être
+réutilisables). Revenir à un état de données antérieur reste possible via les
+sauvegardes de `/home/tetrax/backups/fortiupgrade/`.
 
 ### Matrice fonctionnelle et mécanismes retenus
 
