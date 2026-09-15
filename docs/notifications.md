@@ -20,6 +20,19 @@ Each transport then adapts that output to its own wire format:
 
 No second collector, token scheduler or parallel outbox is introduced.
 
+### Admin preview document
+
+The preview routes render the *same* authoritative HTML as a real notification, then adapt it
+for display only: `fortios_email_render.inline_image_data_uris()` replaces the renderer's
+`cid:` references with `data:` URIs, because a `cid:` cannot resolve outside a mail client.
+The preview is therefore served under an isolated policy
+(`default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:;
+frame-ancestors 'self'; base-uri 'none'; form-action 'none'`) — scripts, styles from other
+origins and any *network* image stay forbidden, so the document remains self-contained and
+cannot leak or fetch anything. The sendable message always keeps real CID parts
+(`multipart/related` for SMTP, inline `fileAttachment` for Graph); only the on-screen
+document carries data URIs.
+
 In Administration → Notifications, choose the transport, save, then test with an
 explicit recipient. **Tester la connexion** for Microsoft 365 actually acquires
 a token and submits a test message as the configured mailbox: a token-only check

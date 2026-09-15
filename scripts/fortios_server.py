@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import certctl
+import fortios_email_render
 import fortios_notify
 from cert_admin import (
     DEFAULT_CREDENTIALS,
@@ -162,7 +163,7 @@ REQUEST_SOCKET_TIMEOUT_SECONDS = 15
 EMAIL_PREVIEW_RENDER_PREFIX = "/api/cert/notifications/preview/render/"
 EMAIL_PREVIEW_CSP = (
     "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; "
-    "img-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+    "img-src data:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
 )
 
 # Persisted user-controlled text is deliberately bounded well above the current UI/data sizes,
@@ -1081,7 +1082,10 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 extra_headers={"Cache-Control": "no-store"},
             )
             return
-        html = preview.pop("html")
+        # The preview document must not fetch anything over the network (EMAIL_PREVIEW_CSP keeps
+        # img-src to data: only), so the renderer's own CID assets are inlined for display only.
+        # The sendable message keeps its real CID parts.
+        html = fortios_email_render.inline_image_data_uris(preview.pop("html"))
         token = self.email_previews.issue(session_id, html)
         preview["renderUrl"] = f"{EMAIL_PREVIEW_RENDER_PREFIX}{token}"
         self.write_json_response(preview, extra_headers={"Cache-Control": "no-store"})

@@ -577,3 +577,16 @@ def image_data_uri(image: InlineImage) -> str:
         f"data:{image.content_type};base64,"
         f"{base64.b64encode(image.content_bytes).decode('ascii')}"
     )
+
+
+def inline_image_data_uris(html_body: str) -> str:
+    """Return ``html_body`` with every ``cid:`` reference replaced by a ``data:`` URI.
+
+    Only the admin preview uses this: the preview document is served under a strict CSP with
+    no network image allowed, so the renderer's own assets must travel inside the document
+    itself. The email transports keep real ``Content-ID`` parts (SMTP ``multipart/related``,
+    Graph inline ``fileAttachment``) — never call this on a message that is going to be sent.
+    """
+    for image in load_inline_images():
+        html_body = html_body.replace(f"cid:{image.content_id}", image_data_uri(image))
+    return html_body

@@ -617,29 +617,47 @@ def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fo
 
     frame = page.frame(url=re.compile(r"/api/cert/notifications/preview/render/"))
     assert frame is not None
+    # The SNS renderer is a table-based email: no h1/h2 anchors. The intent of this test is
+    # unchanged -- the isolated preview document must really apply the renderer's CSS (font
+    # stack, 680px container, hero typography, severity colors, block borders) rather than
+    # showing unstyled markup.
     computed = frame.evaluate(
         """() => {
-          const title = document.querySelector('h1');
-          const container = title.parentElement;
-          const headings = [...document.querySelectorAll('h2')];
-          const critical = headings.find(element => element.textContent.includes('CRITICAL'));
-          const high = headings.find(element => element.textContent.includes('HIGH'));
-          const criticalBlock = critical.parentElement;
+          const container = [...document.querySelectorAll('table')].find(
+            table => getComputedStyle(table).maxWidth === '680px'
+          );
+          const title = [...document.querySelectorAll('div')].find(
+            element => element.children.length === 0
+              && element.textContent.includes('nouvelles vulnérabilités')
+          );
+          const counters = [...document.querySelectorAll('div')].filter(
+            element => ['CRITICAL', 'HIGH'].includes(element.textContent.trim())
+          );
+          const criticalLabel = counters.find(element => element.textContent.trim() === 'CRITICAL');
+          const highLabel = counters.find(element => element.textContent.trim() === 'HIGH');
+          const cveCells = [...document.querySelectorAll('td')].filter(
+            cell => cell.textContent.includes('CVE-2026-00001')
+          );
+          const cveBlock = cveCells[cveCells.length - 1].closest('table');
           return {
             maxWidth: getComputedStyle(container).maxWidth,
             fontFamily: getComputedStyle(container).fontFamily,
-            padding: getComputedStyle(container).padding,
-            criticalColor: getComputedStyle(critical).color,
-            highColor: getComputedStyle(high).color,
-            separatorStyle: getComputedStyle(criticalBlock).borderTopStyle,
-            separatorWidth: getComputedStyle(criticalBlock).borderTopWidth,
+            containerBackground: getComputedStyle(container).backgroundColor,
+            titleFontSize: getComputedStyle(title).fontSize,
+            titleColor: getComputedStyle(title).color,
+            criticalColor: getComputedStyle(criticalLabel.parentElement.querySelector('div')).color,
+            highColor: getComputedStyle(highLabel.parentElement.querySelector('div')).color,
+            separatorStyle: getComputedStyle(cveBlock).borderTopStyle,
+            separatorWidth: getComputedStyle(cveBlock).borderTopWidth,
           };
         }"""
     )
     assert computed == {
         "maxWidth": "680px",
-        "fontFamily": "Arial, sans-serif",
-        "padding": "20px",
+        "fontFamily": "Arial, Helvetica, sans-serif",
+        "containerBackground": "rgb(255, 255, 255)",
+        "titleFontSize": "26px",
+        "titleColor": "rgb(255, 255, 255)",
         "criticalColor": "rgb(180, 35, 24)",
         "highColor": "rgb(181, 71, 8)",
         "separatorStyle": "solid",
@@ -669,12 +687,27 @@ def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fo
     expect(page.locator("#email-preview-text")).to_contain_text(
         "CRITICAL — CVE-2026-00001"
     )
-    assert frame.locator("h2", has_text="CVE-2026-00001").count() == 1
-    first_cve_block = frame.locator("h2", has_text="CVE-2026-00001").locator("..")
-    expect(first_cve_block).to_contain_text("FortiGate / FortiOS")
-    expect(first_cve_block).to_contain_text("FortiManager")
+    assert frame.locator("h2", has_text="CVE-2026-00001").count() == 0
+    # Each CVE keeps its own block, carrying the products it affects (never a merged list).
+    block_text = frame.evaluate(
+        """(cveId) => {
+          const cells = [...document.querySelectorAll('td')].filter(
+            cell => cell.textContent.includes(cveId)
+          );
+          return cells[cells.length - 1].closest('table').textContent;
+        }""",
+        "CVE-2026-00001",
+    )
+    assert block_text.count("CVE-2026-00001") == 1
+    assert "FortiGate / FortiOS" in block_text
+    assert "FortiManager" in block_text
+    assert "CVE-2026-00002" not in block_text
     expect(frame.locator("body")).to_contain_text("FortiUpgrade")
     expect(frame.locator("body")).to_contain_text("3 nouvelles vulnérabilités")
+    # The renderer's own assets are inlined as data: URIs (img-src data:), never fetched.
+    assert frame.evaluate(
+        "[...document.images].every(image => image.src.startsWith('data:image/'))"
+    )
     assert csp_violations == []
 
 
@@ -735,7 +768,15 @@ def test_email_preview_keeps_appearance_html_inert(page, fortios_server):
     expect(frame.locator("body")).to_contain_text("<script>alert(1)</script>")
     expect(frame.locator("body")).to_contain_text("<img src=x onerror=alert(2)>")
     expect(frame.locator("body")).to_contain_text("<svg onload=alert(3)>")
-    assert frame.locator("script, img, svg").count() == 0
+    # Appearance text is escaped: it must create no script/svg, no event handler and no
+    # attacker-controlled image. The only <img> allowed is the renderer's own inlined asset.
+    assert frame.locator("script, svg").count() == 0
+    assert frame.evaluate(
+        "document.querySelectorAll('[onerror],[onload],[onclick]').length"
+    ) == 0
+    assert frame.evaluate(
+        "[...document.images].every(image => image.src.startsWith('data:image/'))"
+    )
     assert dialogs == []
 
 
