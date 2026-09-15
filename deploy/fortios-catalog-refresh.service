@@ -5,7 +5,7 @@ Description=FortiOS Upgrade Intelligence — catalog refresh (new models / new v
 Type=oneshot
 User=tetrax
 Group=tetrax
-WorkingDirectory=/home/tetrax/workspace/upgrade_path
+WorkingDirectory=/home/tetrax/workspace/Fortiupgrade
 # Optional SMTP notification config. The shared runner uses the host compatibility venv and
 # holds one lock across the catalog and compatibility phases.
 EnvironmentFile=-/etc/fortios-upgrade-intelligence.env

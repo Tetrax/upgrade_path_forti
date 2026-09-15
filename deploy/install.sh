@@ -5,7 +5,7 @@
 # sans jamais dupliquer de bloc nginx ni laisser le service tourner avec du code obsolète.
 set -euo pipefail
 
-REPO_ROOT="/home/tetrax/workspace/upgrade_path"
+REPO_ROOT="/home/tetrax/workspace/Fortiupgrade"
 NGINX_SITE_NAME="fortios-upgrade-intelligence.conf"
 NGINX_AVAILABLE="/etc/nginx/sites-available/$NGINX_SITE_NAME"
 NGINX_ENABLED="/etc/nginx/sites-enabled/$NGINX_SITE_NAME"

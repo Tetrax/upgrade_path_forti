@@ -242,10 +242,10 @@ démonstration de l'image, pas un export opérationnel. Seul `web` démarre ; le
 scheduler reste derrière le profil explicite `collection` pour éviter une
 collecte/envoi automatique pendant la recette.
 
-Sur le VPS, depuis ce worktree :
+Sur le VPS, depuis la copie de travail canonical :
 
 ```bash
-cd /home/tetrax/workspace/upgrade_path_microsoft365
+cd /home/tetrax/workspace/Fortiupgrade
 
 # Première préparation uniquement : certificat LOCAL de test, pas credential Azure.
 sudo install -d -m 0750 -o root -g 1000 /var/lib/fortiupgrade-m365-test/secrets

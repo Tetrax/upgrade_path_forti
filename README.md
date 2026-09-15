@@ -3,8 +3,10 @@
 Outil interne pour afficher le chemin de mise à niveau FortiOS recommandé par Fortinet, puis ajouter les informations utiles à l'ingénieur : problèmes connus, changements de comportement et actions obligatoires.
 
 La ligne autoritative du produit est **`main`** du dépôt
-`git@github.com:Tetrax/upgrade_path_forti.git`. Les worktrees spécialisés sont des
-archives de travail, pas des variantes à déployer. Certificats, reverse proxy,
+`git@github.com:Tetrax/upgrade_path_forti.git`, travaillée dans une seule copie
+canonical : `/home/tetrax/workspace/Fortiupgrade`, qui héberge aussi le runtime
+vivant dans `runtime/` (ignoré par Git). Les branches servent au travail en cours.
+Certificats, reverse proxy,
 notifications High/Critical et transports email sont intégrés dans cette même ligne.
 Voir la [cartographie de convergence et les validations](docs/delivery.md#convergence-des-branches).
 

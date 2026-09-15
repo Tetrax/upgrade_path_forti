@@ -5,20 +5,20 @@
 Audit du 2026-09-08 après `git fetch origin` : **`main` est la seule ligne
 autoritative**. Le socle `d2b8f9725c77df18175a8d08e416c199fd5cec1d` contient déjà
 les fonctionnalités des PR #3 à #11 (la PR #9 est remplacée par #10) et correspond au code du runtime personnel. La branche temporaire
-`integration/fortiupgrade-convergence`, worktree
-`/home/tetrax/workspace/upgrade_path_convergence`, part de ce socle, intègre par
+`integration/fortiupgrade-convergence`, alors ouverte dans le worktree
+`/home/tetrax/workspace/upgrade_path_convergence`, partait de ce socle, intégrait par
 merge les instructions `docs/agent-closeout-coherence@35f743b`, puis clôt les
-incohérences documentaires et protège l'état de notification corrompu contre une
-réinitialisation silencieuse. Elle ne crée pas une seconde ligne de release.
+incohérences documentaires et protégeait l'état de notification corrompu contre une
+réinitialisation silencieuse. Elle n'a pas créé une seconde ligne de release.
 
-### Cartographie Git initiale
+### Cartographie Git historique (worktrees supprimés le 2026-09-15)
 
-Tous les worktrees appartiennent à `git@github.com:Tetrax/upgrade_path_forti.git`.
+Tous ces worktrees appartenaient à `git@github.com:Tetrax/upgrade_path_forti.git`.
 Ancêtre commun des trois worktrees demandés : `13fd5bb3170aa9ed2c42a475de26eb89355866dc`.
-Certificats/CVE partagent ensuite `0ab5c6330ca3223a910d4b73801f17407f379d50`.
-Le stash commun est vide. Avance/retard ci-dessous : état avant cette clôture.
+Certificats/CVE partageaient ensuite `0ab5c6330ca3223a910d4b73801f17407f379d50`.
+Le stash commun est vide. Avance/retard : état avant cette clôture.
 
-| Worktree / branche | HEAD | Upstream ; avance/retard | Relation à main |
+| Worktree / branche (supprimé) | HEAD | Upstream ; avance/retard | Relation à main |
 | --- | --- | --- | --- |
 | `upgrade_path` / `fix/upgrade-path-no-downgrades` | `13fd5bb` | `origin/fix/upgrade-path-no-downgrades` ; 0/10 | ancêtre ; 0/28 |
 | `upgrade_path_cert_proxy` / `fix/cert-admin-reverse-proxy` | `ced3acc` | `origin/fix/upgrade-path-no-downgrades` ; 1/0 | 1/18 ; patch déjà adapté |
@@ -31,12 +31,37 @@ Rejouer `ced3acc` ferait inutilement conflit avec le serveur et les Compose int�
 La PR #9 (`8a20432`, rotation du mot de passe) est fermée et remplacée par la
 PR #10 (`c17c995`, compte et sécurité), pas une fonctionnalité abandonnée.
 
-Les autres worktrees actifs ont été vérifiés : compte (`c17c995`), First Run
-(`bd65829`), SMTP (`636ab81`), aperçu (`aa272cd`), CSP (`bad99f7`), livraison
-(`d2b8f97`) et releases détachées sont propres et déjà intégrés. La branche
-historique locale `main@7b6cffd` est obsolète ; la référence distante actualisée
-fait foi. Les anciens worktrees `/opt/data/worktrees/*` signalés prunables et les
-branches shelved/WIP restent conservés, sans nettoyage destructif.
+Les autres worktrees (compte, First Run, SMTP, aperçu, CSP, livraison, releases
+détachées) étaient propres et déjà intégrés : ils ont été supprimés avec le reste.
+Les copies disparues de `/opt/data/worktrees/*` ont été élaguées par
+`git worktree prune`. Les branches distantes mergées ont été supprimées ; seule
+`feature/admin-password-change` (repliée par la PR #10) reste non mergée.
+
+### Copie de travail unique (2026-09-15)
+
+`/home/tetrax/workspace/Fortiupgrade` est désormais la **seule** copie de travail
+FortiUpgrade du VPS : le dépôt Git sur `main` **et** l'hôte du runtime vivant placé
+dans `runtime/` (`compose.yml`, `data/`, `docs/` runtime, `rollback/`, `archive/`),
+ignoré par Git parce que les `data/` et `docs/` versionnés contiennent les
+échantillons et les guides : l'état vivant ne doit jamais être monté par-dessus.
+
+Suppression de l'ancien état, après archivage vérifiable :
+
+- bundle Git complet des branches et refs locales :
+  `runtime/archive/upgrade-path-legacy-20260915.bundle` (75 refs, historique complet) ;
+- patch des 18 fichiers modifiés non commités du worktree historique :
+  `runtime/archive/upgrade-path-legacy-uncommitted.patch` (+ liste `--porcelain --ignored`) ;
+- copie octet à octet de l'état persistant vers `runtime/data` et `runtime/docs`
+  (comparaison SHA-256 contre `runtime/archive/migration-baseline-20260915.json`) ;
+- l'ancien dossier de déploiement `/home/tetrax/deploy/Fortiupgrade`, les 16
+  worktrees, le clone obsolète `workspace/Fortiupgrade` et le clone
+  `workspace/Fortiupgrade-audit-fixes` ont été supprimés.
+
+La pile de production est celle du projet Compose `fortiupgrade` lancée depuis
+`/home/tetrax/workspace/Fortiupgrade/runtime/compose.yml`. Le nom de projet et tous
+les volumes nommés sont inchangés : la bascule ne recrée que les deux binds
+`data`/`docs`. Le rollback vers l'ancien chemin reste possible tant que les
+archives `runtime/rollback/` et l'image précédente sont conservées.
 
 ### Matrice fonctionnelle et mécanismes retenus
 

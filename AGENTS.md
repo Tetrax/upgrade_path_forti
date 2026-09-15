@@ -14,7 +14,7 @@ FortiUpgrade est :
 
 - un seul produit ;
 - un seul dépôt Git autoritatif ;
-- potentiellement plusieurs branches et worktrees.
+- une seule copie de travail canonical.
 
 Le dépôt autoritatif est :
 
@@ -22,17 +22,15 @@ Le dépôt autoritatif est :
 git@github.com:Tetrax/upgrade_path_forti.git
 ```
 
-Les worktrees sont des surfaces de travail. Ils ne constituent jamais des frontières fonctionnelles ou produit.
+La copie de travail canonical est :
 
-Les worktrees actuellement connus sont :
+```text
+/home/tetrax/workspace/Fortiupgrade
+```
 
-- `/home/tetrax/workspace/upgrade_path`
-- `/home/tetrax/workspace/upgrade_path_cert_proxy`
-- `/home/tetrax/workspace/upgrade_path_cve_notifications`
+Elle héberge à la fois les sources suivies par Git et le runtime vivant placé dans `runtime/` (fichier Compose, `data/`, `docs/` runtime, archives de rollback), lui-même ignoré par Git. Les branches servent au travail en cours ; un worktree temporaire doit être supprimé dès que sa branche est mergée. Aucune seconde copie FortiUpgrade, aucun worktree permanent et aucun dossier de déploiement parallèle ne doivent subsister.
 
-Cette liste décrit l’état actuel et peut évoluer. L’appartenance au produit doit être déterminée par Git, pas uniquement par le nom ou l’emplacement du répertoire.
-
-L’absence d’une fonctionnalité dans le worktree courant ne signifie pas qu’elle est absente de FortiUpgrade. Avant de créer une fonctionnalité ou une architecture, vérifier les autres branches et worktrees actifs afin d’identifier une implémentation existante ou un travail concurrent.
+L’absence d’une fonctionnalité dans la copie de travail courante ne signifie pas qu’elle est absente de FortiUpgrade. Avant de créer une fonctionnalité ou une architecture, vérifier les branches actives (`git branch -r`) afin d’identifier une implémentation existante ou un travail concurrent.
 
 Une fonctionnalité déjà présente ailleurs doit être intégrée, adaptée ou corrigée dans sa source autoritative plutôt que réimplémentée parallèlement.
 
