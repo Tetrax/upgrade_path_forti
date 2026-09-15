@@ -704,6 +704,13 @@ def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fo
     assert "CVE-2026-00002" not in block_text
     expect(frame.locator("body")).to_contain_text("FortiUpgrade")
     expect(frame.locator("body")).to_contain_text("3 nouvelles vulnérabilités")
+    # The products block states that each figure is a number of CVEs per product (not a share of
+    # the total): subtitle + explicit unit, "CVE" invariant in French.
+    expect(frame.locator("body")).to_contain_text("PRODUITS CONCERNÉS")
+    expect(frame.locator("body")).to_contain_text("Nombre de CVE par produit")
+    expect(frame.locator("body")).to_contain_text("FortiGate / FortiOS")
+    expect(frame.locator("body")).to_contain_text("2 CVE")
+    assert frame.evaluate("document.body.innerText.includes('CVEs')") is False
     # The renderer's own assets are inlined as data: URIs (img-src data:), never fetched.
     assert frame.evaluate(
         "[...document.images].every(image => image.src.startsWith('data:image/'))"

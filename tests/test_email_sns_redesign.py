@@ -129,6 +129,49 @@ class ScenarioBTests(unittest.TestCase):
         self.assertIn("High     : 2", text)
         self.assertIn("Total    : 3", text)
 
+    def test_products_summary_states_the_unit_and_keeps_the_counting_rule(self):
+        """The summary block must not read as "these figures add up to the total".
+
+        Each figure is a number of CVEs affecting that product; a CVE touching several products
+        is counted once per product, so the figures legitimately exceed the CVE total.
+        """
+        events = self._events()
+        _subject, text, html = render.compose_email(
+            events, app_url="https://x/app/", run_timestamp="2026-09-15T05:00:00Z", display_name="FortiUpgrade"
+        )
+        unit = "<span style='font-size:12px;font-weight:400;color:#6B6B73'> CVE</span>"
+        self.assertIn("PRODUITS CONCERNÉS", html)
+        self.assertIn("Nombre de CVE par produit", html)
+        self.assertIn("Produits concernés (nombre de CVE par produit)", text)
+        for label, count in (
+            ("FortiGate / FortiOS", 2),
+            ("FortiManager", 1),
+            ("FortiClient (plateforme non précisée)", 1),
+            ("FortiAnalyzer", 1),
+        ):
+            self.assertIn(f">{label}</td>", html)
+            self.assertIn(f">{count}{unit}</td>", html)
+            self.assertIn(f"{label} : {count} CVE", text)
+        # "CVE" is invariant in French: never "1 CVEs".
+        self.assertNotIn("CVEs", html)
+        self.assertNotIn("CVEs", text)
+        # Counting logic, severity counters and the CVE total are unchanged.
+        self.assertEqual(
+            render._product_counts(events),
+            [
+                ("FortiGate / FortiOS", 2),
+                ("FortiManager", 1),
+                ("FortiClient (plateforme non précisée)", 1),
+                ("FortiAnalyzer", 1),
+            ],
+        )
+        self.assertEqual(sum(count for _label, count in render._product_counts(events)), 5)
+        self.assertIn("Critical : 1", text)
+        self.assertIn("High     : 2", text)
+        self.assertIn("Total    : 3", text)
+        # The unit belongs to the product summary rows only (4 products here).
+        self.assertEqual(html.count(unit), 4)
+
 
 class ScenarioCTests(unittest.TestCase):
     """A single Critical CVE: grammar must be singular."""
@@ -153,6 +196,20 @@ class ScenarioCTests(unittest.TestCase):
         self.assertIn("1 nouvelle vulnérabilité détectée", text)
         self.assertNotIn("1 nouvelles vulnérabilités détectées", text)
         self.assertNotIn("détectées", text)
+
+    def test_products_summary_singular_keeps_the_invariant_unit(self):
+        events = self._events()
+        _subject, text, html = render.compose_email(
+            events, app_url="https://x/app/", run_timestamp="2026-09-15T05:00:00Z", display_name="FortiUpgrade"
+        )
+        self.assertIn("Nombre de CVE par produit", html)
+        self.assertIn("FortiGate / FortiOS : 1 CVE", text)
+        self.assertIn(
+            "1<span style='font-size:12px;font-weight:400;color:#6B6B73'> CVE</span>",
+            html,
+        )
+        self.assertNotIn("CVEs", text)
+        self.assertNotIn("CVEs", html)
 
 
 class SubjectGrammarTests(unittest.TestCase):
