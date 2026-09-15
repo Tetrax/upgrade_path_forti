@@ -1677,8 +1677,25 @@ def load_email_config(
     return config
 
 
+def transport_prerequisite_state(config: EmailConfig, transport: str) -> str:
+    """Prerequisite verdict for ``transport``, evaluated independently of the configured one.
+
+    The configured transport decides what the collector actually sends with, but the admin page
+    must show the verdict of the transport *currently selected in the form*. Each transport is
+    therefore evaluated on its own, reusing the single authoritative ``EmailConfig.is_complete()``
+    rules: an empty SMTP block never makes Microsoft 365 incomplete, and vice versa.
+    """
+    if transport not in (EMAIL_TRANSPORT_SMTP, EMAIL_TRANSPORT_MICROSOFT365):
+        return "incomplete"
+    candidate = (
+        config if transport == config.transport else replace(config, transport=transport)
+    )
+    return "operational" if candidate.is_complete() else "incomplete"
+
+
 def _microsoft365_public_status(config: EmailConfig) -> dict[str, Any]:
     return {
+        "state": transport_prerequisite_state(config, EMAIL_TRANSPORT_MICROSOFT365),
         "tenantId": config.graph_tenant_id,
         "clientId": config.graph_client_id,
         "from": config.graph_sender,
@@ -1699,7 +1716,10 @@ def _microsoft365_public_status(config: EmailConfig) -> dict[str, Any]:
 
 def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
     public = {
+        # ``state`` remains the verdict of the *configured* transport (what actually sends);
+        # ``smtpState`` lets the admin page show SMTP's own verdict while SMTP is selected.
         "state": "operational" if config.is_complete() else "incomplete",
+        "smtpState": transport_prerequisite_state(config, EMAIL_TRANSPORT_SMTP),
         "transport": config.transport,
         "host": config.smtp_host,
         "port": config.smtp_port,
@@ -1717,7 +1737,11 @@ def smtp_public_settings(
     public = {
         **settings.to_payload(),
         "source": settings.source,
+        # ``state`` is the verdict of the configured transport; ``smtpState`` is SMTP's own
+        # verdict, so the admin page can show the selected transport's state (never the other
+        # transport's prerequisites).
         "state": "operational" if config.is_complete() else "incomplete",
+        "smtpState": transport_prerequisite_state(config, EMAIL_TRANSPORT_SMTP),
         "previewSendReady": preview_config.is_complete(),
         "passwordConfigured": bool(
             config.smtp_password and not config.smtp_password_error

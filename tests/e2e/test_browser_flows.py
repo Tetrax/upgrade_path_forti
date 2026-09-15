@@ -10,7 +10,7 @@ import secrets
 
 from playwright.sync_api import expect
 
-from scripts import cert_admin
+from scripts import cert_admin, fortios_notify
 
 
 def select_path(page, *, current: str, target: str, model: str = "FGT60F") -> None:
@@ -914,7 +914,12 @@ def test_smtp_test_button_uses_backend_operational_state(page, fortios_server):
           allowInsecure: false, username: '', from: 'sender@example.com',
           appUrl: 'https://fortiupgrade.example/app/', timeout: 10,
           emailAppearance: {displayName: 'FortiUpgrade', introduction: '', signature: ''},
-          source: 'environment', state: 'incomplete', passwordConfigured: false
+          source: 'environment', state: 'incomplete', smtpState: 'incomplete',
+          passwordConfigured: false,
+          microsoft365: {state: 'incomplete', tenantId: '', clientId: '', from: '',
+            displayName: 'FortiUpgrade', mailboxIdentity: '',
+            clientSecretConfigured: false, canSetClientSecret: true,
+            clientSecretStorageState: 'available'}
         }})"""
     )
 
@@ -922,3 +927,76 @@ def test_smtp_test_button_uses_backend_operational_state(page, fortios_server):
         "Configuration incomplète"
     )
     expect(page.locator("#test-email-button")).to_be_disabled()
+
+
+def test_transport_indicator_follows_the_selected_transport(page, fortios_server):
+    """The status indicator must describe the transport selected in the form.
+
+    A recorded, complete Microsoft 365 configuration is complete even with an empty SMTP block;
+    switching the selector back and forth must show each transport's own verdict, and the saved
+    Microsoft 365 configuration must stay untouched.
+    """
+    fortios_notify.save_notification_settings(
+        fortios_server.data_dir / "notification-settings.json",
+        {
+            "enabled": True,
+            "minimumSeverity": "high",
+            "products": {
+                "fortigate-fortios": True,
+                "fortimanager": False,
+                "fortianalyzer": False,
+                "forticlient-ems": False,
+                "forticlient": {"windows": True, "macos": False, "linux": False},
+            },
+            "recipients": ["soc@example.com"],
+        },
+    )
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    # Microsoft 365 selected, filled and its secret recorded: no SMTP field is touched.
+    page.select_option("#email-transport", "microsoft365")
+    for field, value in (
+        ("m365-tenant-id", "11111111-2222-3333-4444-555555555555"),
+        ("m365-client-id", "66666666-7777-8888-9999-000000000000"),
+        ("m365-from-address", "fortiupgrade@example.test"),
+        ("m365-display-name", "FortiUpgrade — Alertes de sécurité Fortinet"),
+        ("m365-mailbox-identity", "fortiupgrade@example.test"),
+    ):
+        page.fill(f"#{field}", value)
+    page.fill("#m365-client-secret", "browser-graph-fixture")
+    with page.expect_response(lambda r: r.url.endswith("/api/cert/microsoft365/client-secret")) as secret:
+        page.click("#save-m365-secret-button")
+    assert secret.value.status == 200
+    with page.expect_response(lambda r: r.url.endswith("/api/cert/smtp")) as saved:
+        page.click("#save-smtp-button")
+    assert saved.value.status == 200
+
+    expect(page.locator("#smtp-status-label")).to_have_text("Configuration complète")
+    expect(page.locator("#smtp-status-dot")).to_have_class(re.compile(r"\bsuccess\b"))
+
+    # SMTP is empty: its own verdict is incomplete, without affecting the saved Microsoft 365
+    # configuration.
+    page.select_option("#email-transport", "smtp")
+    expect(page.locator("#smtp-status-label")).to_have_text("Configuration incomplète")
+    expect(page.locator("#smtp-status-dot")).to_have_class(re.compile(r"\bfailure\b"))
+    expect(page.locator("#test-email-button")).to_be_disabled()
+
+    # Back to Microsoft 365: complete again, and the reloaded page keeps the same verdict.
+    page.select_option("#email-transport", "microsoft365")
+    expect(page.locator("#smtp-status-label")).to_have_text("Configuration complète")
+    page.reload()
+    page.click("#notifications-tab")
+    expect(page.locator("#email-transport")).to_have_value("microsoft365")
+    expect(page.locator("#smtp-status-label")).to_have_text("Configuration complète")
+    expect(page.locator("#smtp-status-dot")).to_have_class(re.compile(r"\bsuccess\b"))
+
+    transport_settings = json.loads(
+        (fortios_server.data_dir / "email-transport-settings.json").read_text(encoding="utf-8")
+    )
+    assert transport_settings["transport"] == "microsoft365"
+    assert transport_settings["microsoft365"]["tenantId"] == "11111111-2222-3333-4444-555555555555"
+    assert "browser-graph-fixture" not in page.content()
+    assert not errors
