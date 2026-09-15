@@ -14,6 +14,7 @@ from typing import Any
 from unittest import mock
 
 from scripts import cert_admin
+from scripts import fortios_email_render as render
 from scripts import fortios_notify as notify
 from tests.test_cert_web import running_server
 from tests.test_smtp_admin import (
@@ -57,7 +58,7 @@ class EmailPreviewCompositionTests(unittest.TestCase):
         self.assertEqual(len(calls[0]), 1)
         self.assertEqual(
             preview["subject"],
-            "[FortiUpgrade][CRITICAL] 1 nouvelles vulnérabilités Fortinet",
+            "[FortiUpgrade] 1 nouvelle vulnérabilité Critical — FortiGate / FortiOS",
         )
         self.assertIn("Critical : 1", preview["text"])
         self.assertIn("High     : 0", preview["text"])
@@ -77,7 +78,7 @@ class EmailPreviewCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             preview["subject"],
-            "[FortiUpgrade][CRITICAL] 3 nouvelles vulnérabilités Fortinet",
+            "[FortiUpgrade] 3 nouvelles vulnérabilités — 1 Critical / 2 High",
         )
         for expected in (
             "Critical : 1",
@@ -292,13 +293,18 @@ class EmailPreviewApiTests(unittest.TestCase):
                     self.assertEqual(
                         response.headers["Content-Security-Policy"],
                         "default-src 'none'; script-src 'none'; "
-                        "style-src 'unsafe-inline'; img-src 'none'; "
+                        "style-src 'unsafe-inline'; img-src data:; "
                         "frame-ancestors 'self'; base-uri 'none'; form-action 'none'",
                     )
 
             self.assertTrue(rendered_html.startswith("<!doctype html>"))
             self.assertIn("CVE-2026-00001", rendered_html)
             self.assertIn("max-width:680px", rendered_html)
+            # The preview document stays self-contained: the renderer's own assets travel as
+            # data: URIs (img-src data:) because cid: cannot resolve outside a mail client, and
+            # nothing may be fetched over the network.
+            self.assertNotIn("cid:", rendered_html)
+            self.assertGreaterEqual(rendered_html.count("src='data:image/"), 2)
 
     def test_preview_document_is_bound_to_the_session_and_revoked_on_logout(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -523,12 +529,19 @@ class EmailPreviewApiTests(unittest.TestCase):
                 .strip(),
                 preview["text"].strip(),
             )
+            # The sent message carries real CID parts; the preview document is the same
+            # authoritative HTML with those assets inlined as data: URIs for display only.
             self.assertEqual(
-                message.get_body(preferencelist=("html",))
-                .get_content()
-                .replace("\r\n", "\n")
-                .strip(),
                 rendered_preview_html.strip(),
+                render.inline_image_data_uris(
+                    message.get_body(preferencelist=("html",))
+                    .get_content()
+                    .replace("\r\n", "\n")
+                ).strip(),
+            )
+            self.assertIn(
+                "cid:sns-logo",
+                message.get_body(preferencelist=("html",)).get_content(),
             )
             for path in protected_paths:
                 self.assertEqual(path.read_bytes(), before[path.name])

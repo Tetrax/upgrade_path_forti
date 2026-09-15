@@ -40,3 +40,6 @@ certificates/
 .claude/
 data/*.log
 data/fortios-data.generated.json
+
+# Local visual-preview artifacts (email renders, screenshots) — not for Git.
+.artifacts/

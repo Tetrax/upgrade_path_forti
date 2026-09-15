@@ -466,14 +466,14 @@ class SecurityEmailRenderingTests(unittest.TestCase):
         subject, text_body, html_body = composed
         self.assertEqual(
             subject,
-            "[FortiUpgrade][CRITICAL] 2 nouvelles vulnérabilités Fortinet",
+            "[FortiUpgrade] 2 nouvelles vulnérabilités — 1 Critical / 1 High",
         )
         self.assertIn("Critical : 1", text_body)
         self.assertIn("High     : 1", text_body)
         self.assertIn("CVE-2026-10001", text_body)
         self.assertIn("FortiManager", text_body)
         self.assertIn("CVE-2026-10002", html_body)
-        self.assertIn("Fortinet PSIRT", html_body)
+        self.assertIn("Voir l’advisory Fortinet →", html_body)
 
     def test_multiple_cves_are_sent_as_one_smtp_message(self) -> None:
         settings = notify.validate_notification_settings(settings_payload())
@@ -568,7 +568,7 @@ class WatchSettingsIntegrationTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             client.send_message.assert_called_once()
             message = client.send_message.call_args.args[0]
-            self.assertIn("[FortiUpgrade][HIGH]", message["Subject"])
+            self.assertIn("[FortiUpgrade] 1 nouvelle vulnérabilité — 1 High", message["Subject"])
             self.assertIn(
                 "CVE-2026-30001",
                 message.get_body(preferencelist=("plain",)).get_content(),
