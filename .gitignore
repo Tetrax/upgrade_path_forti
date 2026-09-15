@@ -43,3 +43,8 @@ data/fortios-data.generated.json
 
 # Local visual-preview artifacts (email renders, screenshots) — not for Git.
 .artifacts/
+
+# Canonical workspace runtime (live compose file, persistent data, runtime docs and
+# rollback archives). The repository's own data/ and docs/ track samples and guides, so the
+# live state must never be mounted over them.
+runtime/
