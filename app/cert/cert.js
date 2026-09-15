@@ -263,7 +263,23 @@ function updatePreviewSendAvailability() {
   );
 }
 
+function renderTransportStatus() {
+  // The indicator must describe the transport currently selected in the form, with its own
+  // prerequisites only: an empty SMTP block must never make Microsoft 365 look incomplete, and
+  // vice versa. Both verdicts come from the backend, which reuses EmailConfig.is_complete().
+  const transport = byId("email-transport").value;
+  const state = transport === "microsoft365"
+    ? savedSmtpSettings?.microsoft365?.state
+    : savedSmtpSettings?.smtpState;
+  const configured = state === "operational";
+  byId("smtp-status-label").textContent = configured
+    ? "Configuration complète"
+    : "Configuration incomplète";
+  byId("smtp-status-dot").className = `status-dot ${configured ? "success" : "failure"}`;
+}
+
 function updateEmailTransportUI() {
+  renderTransportStatus();
   const transport = byId("email-transport").value;
   const smtpSelected = transport === "smtp";
   const microsoft365Selected = transport === "microsoft365";
@@ -434,10 +450,9 @@ function renderSmtpSettings(payload) {
     byId("smtp-password-status").textContent += " — modification indisponible : stockage en lecture seule ou non configuré";
   }
   byId("smtp-password").value = "";
-  const operational = smtp.state === "operational";
-  byId("smtp-status-label").textContent = operational ? "Opérationnelle" : "Configuration incomplète";
-  byId("smtp-status-dot").className = `status-dot ${operational ? "success" : "failure"}`;
-  byId("test-email-button").disabled = !operational;
+  // The indicator follows the selected transport; the test button stays tied to the saved
+  // transport (both are applied by updateEmailTransportUI) because only the saved
+  // configuration actually sends.
   updateEmailTransportUI();
   updatePreviewSendAvailability();
   updateInsecureConfirmation();

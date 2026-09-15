@@ -66,6 +66,22 @@ def notification_settings() -> notify.NotificationSettings:
     )
 
 
+def alerts_payload() -> dict[str, object]:
+    """Canonical functional alert preferences, shaped as the admin page submits them."""
+    return {
+        "enabled": True,
+        "minimumSeverity": "high",
+        "products": {
+            "fortigate-fortios": True,
+            "fortimanager": False,
+            "fortianalyzer": False,
+            "forticlient-ems": False,
+            "forticlient": {"windows": True, "macos": False, "linux": False},
+        },
+        "recipients": ["soc@example.com"],
+    }
+
+
 def email_config(*, security: str = "starttls") -> notify.EmailConfig:
     return notify.EmailConfig(
         enabled=True,
@@ -992,6 +1008,182 @@ class SmtpAdminApiTests(unittest.TestCase):
             message = BytesParser(policy=policy.default).parsebytes(smtp.messages[0])
             self.assertEqual(message["Subject"], "[FortiUpgrade][TEST] Validation SMTP")
             self.assertEqual(message["To"], "smtp-test@example.com")
+
+    def test_transport_verdict_is_evaluated_per_transport_and_survives_reload(self) -> None:
+        """The status endpoint must expose each transport's own verdict.
+
+        Microsoft 365 completely configured with an empty SMTP block is *complete*; an SMTP
+        block that is completely configured is complete on its own too; and a selected transport
+        that really misses a prerequisite is reported incomplete.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            data_dir = root / "data"
+            data_dir.mkdir()
+            secret_path = root / "microsoft365-secrets" / "client-secret"
+            secret_path.parent.mkdir(mode=0o700)
+            password_path = root / "smtp-secrets" / "password"
+            password_path.parent.mkdir(mode=0o700)
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_TEST_DATA_DIR": str(data_dir),
+                "FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE": str(secret_path),
+                "FORTIOS_SMTP_PASSWORD_FILE": str(password_path),
+                # No SMTP host/from on purpose: the SMTP block starts empty.
+                "FORTIOS_SMTP_TIMEOUT": "12",
+                "FORTIOS_APP_URL": "https://fortiupgrade.example/app/",
+            }
+            graph_configuration = {
+                "transport": "microsoft365",
+                "microsoft365": {
+                    "tenantId": "11111111-2222-3333-4444-555555555555",
+                    "clientId": "66666666-7777-8888-9999-000000000000",
+                    "from": "fortiupgrade@example.com",
+                    "displayName": "FortiUpgrade — Alertes de sécurité Fortinet",
+                    "mailboxIdentity": "fortiupgrade@example.com",
+                },
+                "emailAppearance": smtp_payload()["emailAppearance"],
+            }
+            with running_server(environment) as base_url:
+                opener, csrf_token = authenticated_opener(base_url)
+
+                def post(path: str, body: dict[str, object]) -> dict[str, Any]:
+                    request = urllib.request.Request(
+                        f"{base_url}{path}",
+                        data=json.dumps(body).encode(),
+                        method="POST",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Origin": base_url,
+                            "X-CSRF-Token": csrf_token,
+                        },
+                    )
+                    with opener.open(request, timeout=3) as response:
+                        return json.load(response)
+
+                def reload_smtp() -> dict[str, Any]:
+                    with opener.open(f"{base_url}/api/cert/smtp", timeout=3) as response:
+                        return json.load(response)["smtp"]
+
+                post("/api/cert/notifications", alerts_payload())
+                post("/api/cert/microsoft365/client-secret", {"clientSecret": "graph-secret"})
+                written = post("/api/cert/smtp", graph_configuration)["smtp"]
+                reloaded = reload_smtp()
+
+                self.assertEqual(written["transport"], "microsoft365")
+                self.assertEqual(written["state"], "operational")
+                self.assertEqual(written["microsoft365"]["state"], "operational")
+                self.assertEqual(written["smtpState"], "incomplete")
+                self.assertEqual(reloaded["state"], "operational")
+                self.assertEqual(reloaded["microsoft365"]["state"], "operational")
+                self.assertEqual(reloaded["smtpState"], "incomplete")
+
+                # SMTP selected and complete, while Microsoft 365 is emptied: SMTP's own verdict
+                # is complete and the missing Graph fields only affect Microsoft 365.
+                smtp_written = post(
+                    "/api/cert/smtp",
+                    {
+                        "transport": "smtp",
+                        "smtp": smtp_payload(),
+                        "microsoft365": {
+                            "tenantId": "",
+                            "clientId": "",
+                            "from": "",
+                            "displayName": "FortiUpgrade",
+                            "mailboxIdentity": "",
+                        },
+                        "emailAppearance": smtp_payload()["emailAppearance"],
+                    },
+                )["smtp"]
+                post("/api/cert/smtp/password", {"password": "api-secret-value"})
+                smtp_reloaded = reload_smtp()
+
+                # A username without a password is not operational yet; the password write
+                # completes the SMTP prerequisites.
+                self.assertEqual(smtp_written["smtpState"], "incomplete")
+                self.assertEqual(smtp_written["microsoft365"]["state"], "incomplete")
+                self.assertEqual(smtp_reloaded["state"], "operational")
+                self.assertEqual(smtp_reloaded["smtpState"], "operational")
+                self.assertEqual(smtp_reloaded["microsoft365"]["state"], "incomplete")
+                self.assertTrue(smtp_reloaded["microsoft365"]["clientSecretConfigured"])
+
+                # A selected transport that really misses a prerequisite stays incomplete.
+                incomplete = post(
+                    "/api/cert/smtp",
+                    {
+                        **graph_configuration,
+                        "microsoft365": {
+                            **graph_configuration["microsoft365"],
+                            "tenantId": "",
+                            "clientId": "",
+                        },
+                    },
+                )["smtp"]
+
+            self.assertEqual(incomplete["microsoft365"]["state"], "incomplete")
+            self.assertEqual(incomplete["smtpState"], "operational")
+            self.assertNotIn("graph-secret", json.dumps(incomplete))
+            self.assertNotIn("api-secret-value", json.dumps(incomplete))
+            self.assertNotIn(str(secret_path), json.dumps(incomplete))
+
+    def test_cve_alert_master_switch_persists_on_and_off_across_reloads(self) -> None:
+        """The Alerts CVE checkbox value must survive a save + full reload, both ways."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            data_dir = root / "data"
+            data_dir.mkdir()
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_TEST_DATA_DIR": str(data_dir),
+            }
+            alerts = alerts_payload()
+            with running_server(environment) as base_url:
+                opener, csrf_token = authenticated_opener(base_url)
+
+                def save(enabled: bool) -> dict[str, Any]:
+                    request = urllib.request.Request(
+                        f"{base_url}/api/cert/notifications",
+                        data=json.dumps({**alerts, "enabled": enabled}).encode(),
+                        method="POST",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Origin": base_url,
+                            "X-CSRF-Token": csrf_token,
+                        },
+                    )
+                    with opener.open(request, timeout=3) as response:
+                        return json.load(response)["settings"]
+
+                def reload_settings() -> dict[str, Any]:
+                    with opener.open(f"{base_url}/api/cert/notifications", timeout=3) as response:
+                        return json.load(response)["settings"]
+
+                for target in (False, True, False):
+                    saved = save(target)
+                    reloaded = reload_settings()
+                    on_disk = json.loads(
+                        (data_dir / "notification-settings.json").read_text(encoding="utf-8")
+                    )
+                    with self.subTest(enabled=target):
+                        self.assertEqual(saved["enabled"], target)
+                        self.assertEqual(reloaded["enabled"], target)
+                        self.assertEqual(on_disk["enabled"], target)
+                        self.assertEqual(reloaded["recipients"], ["soc@example.com"])
+                        self.assertEqual(reloaded["minimumSeverity"], "high")
+
+            self.assertEqual(on_disk["enabled"], False)
 
 
 if __name__ == "__main__":

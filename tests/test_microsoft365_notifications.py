@@ -166,6 +166,83 @@ class Microsoft365ConfigurationTests(unittest.TestCase):
                 with self.subTest(overrides=overrides):
                     self.assertFalse(config.is_complete())
 
+    def test_microsoft365_verdict_ignores_an_empty_smtp_block(self) -> None:
+        """A recorded Microsoft 365 configuration is complete on its own.
+
+        The admin page shows the verdict of the transport currently selected in the form, so an
+        empty SMTP block must never make Microsoft 365 look incomplete (and the reported SMTP
+        verdict must still be its own).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = root / "secret"
+            secret.write_text("secret-value", encoding="utf-8")
+            smtp_settings, config = notify.load_smtp_snapshot(
+                graph_env(secret),
+                settings=notification_settings(),
+                smtp_settings_path=root / "smtp-settings.json",
+            )
+            public = notify.smtp_public_settings(smtp_settings, config)
+            status = notify.smtp_public_status(config)
+
+        self.assertEqual(config.smtp_host, "")
+        self.assertEqual(public["transport"], "microsoft365")
+        self.assertEqual(public["state"], "operational")
+        self.assertEqual(public["microsoft365"]["state"], "operational")
+        self.assertEqual(public["smtpState"], "incomplete")
+        self.assertEqual(status["state"], "operational")
+        self.assertEqual(status["microsoft365"]["state"], "operational")
+        self.assertEqual(status["smtpState"], "incomplete")
+        # The recorded secret is reported as a boolean, never as a value.
+        self.assertTrue(public["microsoft365"]["clientSecretConfigured"])
+        self.assertNotIn("secret-value", json.dumps(public))
+
+    def test_smtp_verdict_ignores_an_empty_microsoft365_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            password = root / "password"
+            password.write_text("smtp-secret-value", encoding="utf-8")
+            environment = {
+                "FORTIOS_SMTP_HOST": "smtp.example.test",
+                "FORTIOS_SMTP_PORT": "587",
+                "FORTIOS_SMTP_SECURITY": "starttls",
+                "FORTIOS_SMTP_USERNAME": "mailer@example.test",
+                "FORTIOS_SMTP_FROM": "fortiupgrade@example.test",
+                "FORTIOS_SMTP_PASSWORD_FILE": str(password),
+                "FORTIOS_SMTP_TIMEOUT": "12",
+                "FORTIOS_APP_URL": "https://upgrade.example.test/app/",
+            }
+            smtp_settings, config = notify.load_smtp_snapshot(
+                environment,
+                settings=notification_settings(),
+                smtp_settings_path=root / "smtp-settings.json",
+            )
+            public = notify.smtp_public_settings(smtp_settings, config)
+
+        self.assertEqual(config.transport, "smtp")
+        self.assertEqual(public["state"], "operational")
+        self.assertEqual(public["smtpState"], "operational")
+        self.assertEqual(public["microsoft365"]["state"], "incomplete")
+        self.assertNotIn("smtp-secret-value", json.dumps(public))
+
+    def test_selected_transport_missing_a_prerequisite_is_incomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            secret = root / "secret"
+            secret.write_text("secret-value", encoding="utf-8")
+            environment = graph_env(secret, FORTIOS_MICROSOFT365_TENANT_ID="")
+            _settings, config = notify.load_smtp_snapshot(
+                environment,
+                settings=notification_settings(),
+                smtp_settings_path=root / "smtp-settings.json",
+            )
+            verdicts = {
+                transport: notify.transport_prerequisite_state(config, transport)
+                for transport in ("smtp", "microsoft365")
+            }
+
+        self.assertEqual(verdicts["microsoft365"], "incomplete")
+
 class _FakeApiHandler:
     def __init__(self, payload: object, response: dict[str, object] | None = None) -> None:
         self.payload = payload
