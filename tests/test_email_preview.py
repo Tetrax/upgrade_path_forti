@@ -57,7 +57,7 @@ class EmailPreviewCompositionTests(unittest.TestCase):
         self.assertEqual(len(calls[0]), 1)
         self.assertEqual(
             preview["subject"],
-            "[FortiUpgrade][CRITICAL] 1 nouvelles vulnérabilités Fortinet",
+            "[FortiUpgrade] 1 nouvelle vulnérabilité Critical — FortiGate / FortiOS",
         )
         self.assertIn("Critical : 1", preview["text"])
         self.assertIn("High     : 0", preview["text"])
@@ -77,7 +77,7 @@ class EmailPreviewCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             preview["subject"],
-            "[FortiUpgrade][CRITICAL] 3 nouvelles vulnérabilités Fortinet",
+            "[FortiUpgrade] 3 nouvelles vulnérabilités — 1 Critical / 2 High",
         )
         for expected in (
             "Critical : 1",

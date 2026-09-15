@@ -6,10 +6,19 @@ FortiUpgrade uses the existing notification collector, checkpoint, and durable o
 
 `scripts/fortios_notify.py` owns composition and delivery for both **SMTP** and
 **Microsoft 365 / Azure**. The latter uses OAuth 2.0 client credentials and
-Microsoft Graph v1.0 `users/{mailboxIdentity}/sendMail`. Both transports submit the
-same multipart MIME email, preserving recipients, subjects, HTML/text templates,
-preview rendering, CVE rules and historical notification categories. No second
-collector, token scheduler or parallel outbox is introduced.
+Microsoft Graph v1.0 `users/{mailboxIdentity}/sendMail`. Both transports share the
+same business data and the single authoritative renderer
+`scripts/fortios_email_render.py`, which produces clean UTF-8 `(subject, text/plain, HTML)`.
+Each transport then adapts that output to its own wire format:
+
+- **SMTP** builds a `multipart/alternative` → `text/plain` + `multipart/related` →
+  `text/html` + inline CID images, with every part `Content-Transfer-Encoding: base64`
+  (never quoted-printable) under `policy.SMTP`.
+- **Microsoft Graph** sends JSON `body.contentType="HTML"` / `body.content` (raw UTF-8
+  HTML, not a pre-encoded MIME body) and attaches inline images as
+  `fileAttachment` with `contentId`/`isInline`.
+
+No second collector, token scheduler or parallel outbox is introduced.
 
 In Administration → Notifications, choose the transport, save, then test with an
 explicit recipient. **Tester la connexion** for Microsoft 365 actually acquires
@@ -20,6 +29,27 @@ preview routes never create notification events.
 
 See [the Microsoft 365 setup guide](microsoft365.md) for Entra registration,
 least-privilege Exchange RBAC, mounted credentials and the real-tenant checklist.
+
+## Encoding and MIME corruption (fixed)
+
+Emails historically arrived with visible quoted-printable artifacts (`For=iUpgrade`,
+`Forti=ate`, `R=C3=sumé`, `=strong>`, URLs broken by `=`). Root cause: Python's
+`email.message.EmailMessage` encoded the long UTF-8 HTML with
+`Content-Transfer-Encoding: quoted-printable`, whose `=` soft line-breaks leaked into the
+rendered body — and the Microsoft Graph transport then re-sent that pre-encoded MIME body
+as if it were plain HTML (`body.content`), while Outlook re-decoded what was already
+transport-encoded, producing double-encoding and corruption.
+
+The fix separates rendering from transport and eliminates quoted-printable on both paths:
+
+- the renderer emits clean UTF-8 text/HTML only;
+- SMTP parts are `base64` (no `=` soft-breaks), flattened under `policy.SMTP` (CRLF);
+- Graph receives raw UTF-8 HTML via `body.contentType="HTML"` / `body.content`, never a
+  pre-encoded MIME string.
+
+Regression tests in `tests/test_email_sns_redesign.py` assert the absence of `=C3`,
+`=E2`, `=strong`, `Forti=ate`, `sns=security` and `quoted-printable` in the final wire
+message, while still allowing legitimate `=` inside URLs and query strings.
 
 ## SMTP ownership
 

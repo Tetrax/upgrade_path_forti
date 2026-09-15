@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 import os
@@ -13,8 +12,6 @@ import urllib.error
 import urllib.parse
 from contextlib import redirect_stderr
 from dataclasses import replace
-from email import policy
-from email.parser import BytesParser
 from email.utils import format_datetime
 from pathlib import Path
 from typing import Any, Self
@@ -484,7 +481,7 @@ class Microsoft365GraphDeliveryTests(unittest.TestCase):
             smtp_settings_path=root / "smtp-settings.json",
         )
 
-    def test_send_uses_client_credentials_then_mime_sendmail_and_accepts_202(self) -> None:
+    def test_send_uses_client_credentials_then_json_sendmail_and_accepts_202(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             config = self._config(root)
@@ -530,15 +527,16 @@ class Microsoft365GraphDeliveryTests(unittest.TestCase):
         graph_request = urlopen.call_args_list[1].args[0]
         self.assertIn("/users/fortiupgrade%40example.test/sendMail", graph_request.full_url)
         self.assertEqual(graph_request.get_header("Authorization"), "Bearer access-token")
-        self.assertEqual(graph_request.get_header("Content-type"), "text/plain")
-        mime = BytesParser(policy=policy.default).parsebytes(
-            base64.b64decode(graph_request.data)
+        self.assertEqual(graph_request.get_header("Content-type"), "application/json")
+        payload = json.loads(graph_request.data.decode("utf-8"))
+        message = payload["message"]
+        self.assertEqual(message["subject"], "Subject from FortiUpgrade")
+        self.assertEqual(message["body"]["contentType"], "HTML")
+        self.assertIn("HTML body", message["body"]["content"])
+        self.assertEqual(
+            message["toRecipients"],
+            [{"emailAddress": {"address": "alerts@example.test"}}],
         )
-        self.assertEqual(mime["Subject"], "Subject from FortiUpgrade")
-        self.assertEqual(mime["To"], "alerts@example.test")
-        self.assertIn("Plain text body", mime.get_body(preferencelist=("plain",)).get_content())
-        self.assertIn("HTML body", mime.get_body(preferencelist=("html",)).get_content())
-        self.assertIn("FortiUpgrade Notifications", str(mime["From"]))
 
     def test_admin_test_email_performs_graph_send_not_token_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -560,9 +558,13 @@ class Microsoft365GraphDeliveryTests(unittest.TestCase):
         self.assertTrue(result.sent)
         self.assertEqual(urlopen.call_count, 2)
         graph_request = urlopen.call_args_list[1].args[0]
-        mime = BytesParser(policy=policy.default).parsebytes(base64.b64decode(graph_request.data))
-        self.assertEqual(mime["To"], "operator@example.test")
-        self.assertIn("Validation Microsoft 365", mime["Subject"])
+        payload = json.loads(graph_request.data.decode("utf-8"))
+        message = payload["message"]
+        self.assertEqual(
+            message["toRecipients"],
+            [{"emailAddress": {"address": "operator@example.test"}}],
+        )
+        self.assertIn("Validation Microsoft 365", message["subject"])
 
     def test_token_rejection_is_normalized_without_provider_body_or_secret(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

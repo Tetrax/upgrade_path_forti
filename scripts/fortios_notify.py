@@ -30,15 +30,16 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from email import policy as email_policy
 from email.message import EmailMessage
-from email.utils import formataddr, parsedate_to_datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import fortios_email_render
 from fortios_watch import (
     cross_process_lock,
     parse_health_timestamp,
@@ -46,6 +47,9 @@ from fortios_watch import (
     utc_now,
     write_json,
 )
+
+# SMTP serialization policy: CRLF line endings, matching what smtplib.send_message flattens with.
+SMTP_POLICY = email_policy.SMTP
 
 CATEGORY_CRITICAL = "CRITICAL"
 CATEGORY_DAILY = "DAILY"
@@ -2626,160 +2630,6 @@ def _format_event_lines(events: list[NotificationEvent]) -> list[str]:
     return lines
 
 
-def _affected_version_line(item: dict[str, Any]) -> str:
-    labels = _affected_product_labels([item])
-    label = ", ".join(labels) or str(item.get("product") or "Produit")
-    from_version = item.get("from")
-    to_version = item.get("to")
-    branch = item.get("branch")
-    if from_version and to_version and from_version != to_version:
-        scope = f"{from_version} à {to_version}"
-    elif from_version:
-        scope = str(from_version)
-    elif branch:
-        scope = f"branche {branch}"
-    else:
-        scope = "versions non précisées"
-    return f"{label} : {scope}"
-
-
-def _compose_security_text(
-    security_events: list[NotificationEvent], *, app_url: str, run_timestamp: str
-) -> str:
-    severities = Counter(event.severity for event in security_events)
-    product_counts: Counter[str] = Counter()
-    for event in security_events:
-        product_counts.update(set(event.details.get("productLabels") or []))
-
-    lines = [
-        f"{len(security_events)} nouvelles vulnérabilités High / Critical détectées",
-        "",
-        f"Critical : {severities['critical']}",
-        f"High     : {severities['high']}",
-        "",
-    ]
-    lines.extend(f"{label} : {count}" for label, count in product_counts.items())
-    lines.append("")
-
-    for event in security_events:
-        details = event.details
-        lines.extend(
-            [
-                f"{(event.severity or '').upper()} — {details.get('id', '?')}",
-                f"CVSS : {details.get('cvssScore') if details.get('cvssScore') is not None else 'Non précisé'}",
-                "",
-                "Produits concernés",
-            ]
-        )
-        lines.extend(str(label) for label in details.get("productLabels") or [])
-        lines.extend(["", "Versions affectées"])
-        lines.extend(
-            _affected_version_line(item) for item in details.get("affected") or []
-        )
-        lines.extend(
-            [
-                "",
-                "Versions corrigées",
-                "Non précisées dans le flux CVRF — consulter l’advisory Fortinet.",
-                "",
-                "Résumé",
-                str(details.get("title") or "Résumé non disponible"),
-                "",
-                "Fortinet PSIRT",
-                f"→ {details.get('url') or app_url}",
-                "",
-            ]
-        )
-    lines.extend([f"Application : {app_url}", f"Collecte : {run_timestamp}"])
-    return "\n".join(lines)
-
-
-def _compose_security_html(
-    security_events: list[NotificationEvent],
-    *,
-    app_url: str,
-    run_timestamp: str,
-    other_events: list[NotificationEvent] | None = None,
-) -> str:
-    severities = Counter(event.severity for event in security_events)
-    product_counts: Counter[str] = Counter()
-    for event in security_events:
-        product_counts.update(set(event.details.get("productLabels") or []))
-
-    product_rows = "".join(
-        f"<tr><td style='padding:3px 12px 3px 0'>{html.escape(label)}</td>"
-        f"<td style='padding:3px 0;font-weight:700'>{count}</td></tr>"
-        for label, count in product_counts.items()
-    )
-    sections: list[str] = []
-    for event in security_events:
-        details = event.details
-        severity = (event.severity or "high").upper()
-        color = "#b42318" if event.severity == "critical" else "#b54708"
-        products = "<br>".join(
-            html.escape(str(label)) for label in details.get("productLabels") or []
-        )
-        affected = "<br>".join(
-            html.escape(_affected_version_line(item))
-            for item in details.get("affected") or []
-        )
-        url = str(details.get("url") or app_url)
-        sections.append(
-            "<div style='border-top:1px solid #d0d5dd;padding:20px 0'>"
-            f"<h2 style='margin:0 0 10px;font-size:18px;color:{color}'>"
-            f"{html.escape(severity)} — {html.escape(str(details.get('id', '?')))}</h2>"
-            f"<p style='margin:0 0 14px'><strong>CVSS :</strong> "
-            f"{html.escape(str(details.get('cvssScore') if details.get('cvssScore') is not None else 'Non précisé'))}</p>"
-            "<p style='margin:0 0 4px'><strong>Produits concernés</strong></p>"
-            f"<p style='margin:0 0 14px'>{products}</p>"
-            "<p style='margin:0 0 4px'><strong>Versions affectées</strong></p>"
-            f"<p style='margin:0 0 14px'>{affected}</p>"
-            "<p style='margin:0 0 4px'><strong>Versions corrigées</strong></p>"
-            "<p style='margin:0 0 14px'>Non précisées dans le flux CVRF — consulter l’advisory Fortinet.</p>"
-            "<p style='margin:0 0 4px'><strong>Résumé</strong></p>"
-            f"<p style='margin:0 0 14px'>{html.escape(str(details.get('title') or 'Résumé non disponible'))}</p>"
-            f"<p style='margin:0'><a href='{html.escape(url, quote=True)}' "
-            "style='color:#175cd3'>Fortinet PSIRT → advisory</a></p></div>"
-        )
-
-    other_events = other_events or []
-    other_html = ""
-    if other_events:
-        shown = other_events[:MAX_EVENTS_PER_SECTION]
-        items = "".join(
-            f"<li style='margin-bottom:6px'>{html.escape(event.summary)}</li>"
-            for event in shown
-        )
-        if len(other_events) > len(shown):
-            items += (
-                f"<li>… et {len(other_events) - len(shown)} de plus "
-                "(liste tronquée).</li>"
-            )
-        other_html = (
-            "<div style='border-top:1px solid #d0d5dd;padding:18px 0'>"
-            "<h2 style='margin:0 0 10px;font-size:16px'>Autres événements</h2>"
-            f"<ul style='margin:0;padding-left:20px'>{items}</ul></div>"
-        )
-
-    return (
-        "<!doctype html><html><body style='margin:0;padding:0;background:#ffffff'>"
-        "<div style='max-width:680px;margin:0 auto;padding:20px;font-family:Arial,sans-serif;"
-        "font-size:14px;line-height:1.45;color:#101828'>"
-        f"<h1 style='margin:0 0 8px;font-size:22px'>{len(security_events)} nouvelles "
-        "vulnérabilités High / Critical détectées</h1>"
-        "<table role='presentation' style='border-collapse:collapse;margin:0 0 14px'>"
-        f"<tr><td style='padding:3px 16px 3px 0'>Critical</td><td style='font-weight:700'>{severities['critical']}</td></tr>"
-        f"<tr><td style='padding:3px 16px 3px 0'>High</td><td style='font-weight:700'>{severities['high']}</td></tr>"
-        "</table>"
-        f"<table role='presentation' style='border-collapse:collapse;margin:0 0 18px'>{product_rows}</table>"
-        f"{''.join(sections)}"
-        f"{other_html}"
-        f"<p style='color:#667085;font-size:12px'>Application : "
-        f"<a href='{html.escape(app_url, quote=True)}'>{html.escape(app_url)}</a><br>"
-        f"Collecte : {html.escape(run_timestamp)}</p></div></body></html>"
-    )
-
-
 def _apply_email_appearance(
     text_body: str,
     html_body: str,
@@ -2835,39 +2685,36 @@ def compose_email(
 ) -> tuple[str, str, str] | None:
     """Folds every event from a single run into one synthetic email (never one email per
     event, to avoid spamming) -- returns None if there's nothing to report.
+
+    Security (CVE) events are rendered by scripts/fortios_email_render.py, the single
+    authoritative renderer for the SNS identity. Non-security events (new versions, EOL,
+    health) are folded in as an "Autres événements" section; when only those exist, the
+    historical plain-text summary is kept unchanged.
     """
     if not events:
         return None
 
     security = [event for event in events if event.details.get("kind") == "cve"]
-    critical = [event for event in events if event.category == CATEGORY_CRITICAL]
-    daily = [event for event in events if event.category == CATEGORY_DAILY]
-    operations = [event for event in events if event.category == CATEGORY_OPERATIONS]
-
     if security:
-        highest = "CRITICAL" if any(event.severity == "critical" for event in security) else "HIGH"
-        subject = (
-            f"[FortiUpgrade][{highest}] {len(security)} nouvelles vulnérabilités Fortinet"
+        non_security = [event for event in events if event.details.get("kind") != "cve"]
+        display_name = (
+            appearance.display_name if appearance is not None else "FortiUpgrade"
         )
-        text_body = _compose_security_text(
-            security, app_url=app_url, run_timestamp=run_timestamp
-        )
-        non_security = [event for event in events if event not in security]
-        if non_security:
-            text_body += "\n\nAutres événements :\n" + "\n".join(
-                _format_event_lines(non_security)
-            )
-        html_body = _compose_security_html(
+        introduction = appearance.introduction if appearance is not None else ""
+        signature = appearance.signature if appearance is not None else ""
+        return fortios_email_render.compose_email(
             security,
             app_url=app_url,
             run_timestamp=run_timestamp,
-            other_events=non_security,
+            other_events=non_security or None,
+            display_name=display_name,
+            introduction=introduction,
+            signature=signature,
         )
-        if appearance is not None:
-            text_body, html_body = _apply_email_appearance(
-                text_body, html_body, appearance
-            )
-        return subject, text_body, html_body
+
+    critical = [event for event in events if event.category == CATEGORY_CRITICAL]
+    daily = [event for event in events if event.category == CATEGORY_DAILY]
+    operations = [event for event in events if event.category == CATEGORY_OPERATIONS]
     if critical:
         subject = f"[FortiOS Upgrade Intelligence] {len(critical)} nouvelle(s) CVE critique(s)"
     elif operations:
@@ -3333,7 +3180,9 @@ def _log_graph_result(stage: str, result: SmtpResult) -> None:
 
 def _send_microsoft365_email(
     config: EmailConfig,
-    message: EmailMessage,
+    subject: str,
+    text_body: str,
+    html_body: str | None,
     *,
     checks: list[str],
 ) -> SmtpResult:
@@ -3391,12 +3240,44 @@ def _send_microsoft365_email(
     endpoint = MICROSOFT365_SENDMAIL_ENDPOINT.format(
         sender=urllib.parse.quote(config.mailbox_identity, safe="")
     )
+    # Microsoft Graph sendMail uses JSON (body.contentType / body.content), never a pre-encoded
+    # MIME/quoted-printable representation. We send the renderer's clean UTF-8 HTML directly and
+    # attach any inline images (referenced by cid: in the HTML) as inline file attachments, so
+    # there is no MIME/QP confusion on this transport.
+    body_content_type = "HTML" if html_body else "Text"
+    body_content = html_body if html_body else text_body
+    message_payload: dict[str, Any] = {
+        "subject": subject,
+        "body": {"contentType": body_content_type, "content": body_content},
+        "toRecipients": [
+            {"emailAddress": {"address": address}} for address in config.smtp_to
+        ],
+    }
+    attachments: list[dict[str, Any]] = []
+    if html_body and "cid:" in html_body:
+        for image in fortios_email_render.load_inline_images():
+            attachments.append(
+                {
+                    "@odata.type": "#microsoft.graph.fileAttachment",
+                    "contentId": image.content_id,
+                    "contentType": image.content_type,
+                    "name": image.filename,
+                    "contentBytes": base64.b64encode(image.content_bytes).decode(
+                        "ascii"
+                    ),
+                    "isInline": True,
+                }
+            )
+    if attachments:
+        message_payload["attachments"] = attachments
     graph_request = urllib.request.Request(
         endpoint,
-        data=base64.b64encode(message.as_bytes()),
+        data=json.dumps({"message": message_payload}, ensure_ascii=False).encode(
+            "utf-8"
+        ),
         headers={
             "Authorization": f"Bearer {access_token}",
-            "Content-Type": "text/plain",
+            "Content-Type": "application/json",
             "Accept": "application/json",
         },
         method="POST",
@@ -3437,6 +3318,46 @@ def _send_microsoft365_email(
     )
     _log_graph_result("delivery", result)
     return result
+
+
+def _build_smtp_message(
+    config: EmailConfig,
+    subject: str,
+    text_body: str,
+    html_body: str | None,
+) -> Any:
+    """Build a clean UTF-8 multipart message for SMTP.
+
+    Structure: multipart/alternative -> [ text/plain, multipart/related -> [ text/html, inline
+    images ] ]. Every text part uses ``Content-Transfer-Encoding: base64`` (never quoted-printable,
+    whose ``=`` soft line breaks were the source of the historical ``For=iUpgrade``/``=C3=A9``
+    corruption) and a ``policy.SMTP`` (CRLF line endings). Images referenced by ``cid:`` in the
+    HTML are attached inline with the matching Content-ID.
+    """
+    message = EmailMessage(policy=SMTP_POLICY)
+    message["Subject"] = subject
+    message["From"] = config.smtp_from
+    message["To"] = ", ".join(config.smtp_to)
+    message.make_alternative()
+
+    plain = EmailMessage(policy=SMTP_POLICY)
+    plain.set_content(text_body, subtype="plain", cte="base64")
+    message.attach(plain)
+
+    if html_body:
+        related = EmailMessage(policy=SMTP_POLICY)
+        related.set_content(html_body, subtype="html", cte="base64")
+        if "cid:" in html_body:
+            for image in fortios_email_render.load_inline_images():
+                maintype, subtype = image.content_type.split("/", 1)
+                related.add_related(
+                    image.content_bytes,
+                    maintype=maintype,
+                    subtype=subtype,
+                    cid=image.content_id,
+                )
+        message.attach(related)
+    return message
 
 
 def send_email_result(
@@ -3492,19 +3413,17 @@ def send_email_result(
         "starttls" if config.smtp_starttls else "none"
     )
     try:
-        message = EmailMessage()
-        message["Subject"] = subject
         if config.transport == EMAIL_TRANSPORT_MICROSOFT365:
-            message["From"] = formataddr((config.display_name, config.sender))
-        else:
-            message["From"] = config.smtp_from
-        message["To"] = ", ".join(config.smtp_to)
-        message.set_content(text_body)
-        if html_body:
-            message.add_alternative(html_body, subtype="html")
+            return _send_microsoft365_email(
+                config, subject, text_body, html_body, checks=checks
+            )
 
-        if config.transport == EMAIL_TRANSPORT_MICROSOFT365:
-            return _send_microsoft365_email(config, message, checks=checks)
+        message = _build_smtp_message(
+            config,
+            subject,
+            text_body,
+            html_body,
+        )
 
         stage = "connection"
         if security == "tls":
