@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily fetch of the FortiUpgrade Trivy report from GitHub Actions
+
+[Timer]
+# Europe/Paris, not the VPS's UTC clock, so the schedule stays put across DST transitions.
+# 06:50 is after the 06:17 Paris CI scan; 12:30 is a safety net for a queued or failed morning
+# workflow. Both runs are idempotent — an artifact identical to the ingested one is not rewritten,
+# so the second occurrence costs nothing and leaves the state files byte-identical.
+OnCalendar=*-*-* 06:50:00 Europe/Paris
+OnCalendar=*-*-* 12:30:00 Europe/Paris
+Persistent=true
+
+[Install]
+WantedBy=timers.target

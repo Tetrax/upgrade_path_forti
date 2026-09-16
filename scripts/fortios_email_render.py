@@ -23,6 +23,7 @@ import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 # --- SNS Security palette ---------------------------------------------------
 # Observed from the official site / logo: near-black anthracite, white, and a very
@@ -123,6 +124,14 @@ def _severity_counts(security_events: list[Any]) -> dict[str, int]:
         if severity in counts:
             counts[severity] += 1
     return counts
+
+
+def severity_rank(severity: str) -> int:
+    """Index in BADGE_SEVERITY_LEVELS (most severe first); an unknown level ranks last."""
+    try:
+        return BADGE_SEVERITY_LEVELS.index(severity)
+    except ValueError:
+        return len(BADGE_SEVERITY_LEVELS)
 
 
 def _plural(n: int) -> str:
@@ -477,18 +486,9 @@ def compose_html_body(
     hero_title = _hero_title(total)
 
     # --- Summary counters ---------------------------------------------------
-    # One cell per level present. CRITICAL/HIGH/AU TOTAL keep their exact historical markup, so a
-    # High/Critical-only batch renders the same three cells as before; Medium/Low cells are only
-    # added when the configurable threshold actually retained such a CVE.
-    def _counter_cell(value: int, label: str, color: str) -> str:
-        return (
-            "<td style='text-align:center;padding:18px 12px'>"
-            f"<div style='font-size:34px;font-weight:800;color:{color};line-height:1'>"
-            f"{value}</div>"
-            f"<div style='margin-top:6px;font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};"
-            f"letter-spacing:1px'>{label}</div></td>"
-        )
-
+    # One cell per level present (shared markup, see _counter_cell). CRITICAL/HIGH/AU TOTAL keep
+    # their exact historical markup, so a High/Critical-only batch renders the same three cells as
+    # before; Medium/Low cells are only added when the configurable threshold retained such a CVE.
     counter_cells = _counter_cell(counts["critical"], "CRITICAL", SEVERITY_CRITICAL_TEXT)
     counter_cells += _counter_cell(counts["high"], "HIGH", SEVERITY_HIGH_TEXT)
     if counts["medium"]:
@@ -773,6 +773,357 @@ def release_items(events: list[Any]) -> list[ReleaseItem]:
 
 
 MAX_RELEASES_PER_EMAIL = 20
+# A scan can report dozens of findings; the email stays readable, and the rest stays in the
+# artifact the CTA points at.
+MAX_FINDINGS_PER_EMAIL = 20
+
+
+def _counter_cell(value: int, label: str, color: str) -> str:
+    """One summary-counter cell. Shared by the CVE and container-security emails."""
+    return (
+        "<td style='text-align:center;padding:18px 12px'>"
+        f"<div style='font-size:34px;font-weight:800;color:{color};line-height:1'>"
+        f"{value}</div>"
+        f"<div style='margin-top:6px;font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};"
+        f"letter-spacing:1px'>{label}</div></td>"
+    )
+
+
+# --- Container image security (Trivy) --------------------------------------------------------
+
+# The report page is the only external target this email may link to, and it always comes from the
+# CI that produced the report. Restricting the host keeps a hostile report OR ingestion metadata
+# from turning the CTA into an arbitrary outbound link.
+_REPORT_HOST = "github.com"
+
+
+def _report_url(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or parsed.netloc.lower() not in (_REPORT_HOST, f"www.{_REPORT_HOST}"):
+        return ""
+    return value
+
+
+def _container_hero_title(total: int) -> str:
+    plural = _plural(total)
+    return (
+        f"FortiUpgrade a détecté {total} nouvelle{plural} vulnérabilité{plural} "
+        f"corrigible{plural} dans l'image Docker."
+    )
+
+
+def container_security_items(events: list[Any]) -> list[Any]:
+    """The container events, most severe first, so the email always leads with what matters."""
+    return sorted(
+        events,
+        key=lambda event: (
+            severity_rank((event.severity or "unknown").lower()),
+            str(event.details.get("package") or ""),
+            str(event.details.get("id") or ""),
+        ),
+    )
+
+
+def _resolved_count(events: list[Any]) -> int:
+    """Findings fixed since the previous scan, carried by every event of the batch."""
+    for event in events:
+        value = event.details.get("resolvedCount")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return 0
+
+
+def compose_container_security_subject(events: list[Any]) -> str:
+    total = len(events)
+    plural = _plural(total)
+    return (
+        f"[FortiUpgrade] Sécurité de l'image — {total} nouvelle{plural} "
+        f"vulnérabilité{plural}"
+    )
+
+
+def _container_finding_text(event: Any) -> list[str]:
+    details = event.details
+    lines = [
+        f"{_severity_upper(event)} — {details.get('id', '?')}",
+        f"Package : {details.get('package') or '—'}",
+        f"Sévérité : {_severity_upper(event)}",
+        f"Version installée : {details.get('installedVersion') or '—'}",
+        f"Version corrigée : {details.get('fixedVersion') or '—'}",
+    ]
+    title = str(details.get("title") or "").strip()
+    if title:
+        lines.append(title)
+    url = _report_url(details.get("url")) or str(details.get("url") or "")
+    if url:
+        lines.append(f"Advisory : {url}")
+    lines.append("")
+    return lines
+
+
+def _container_context_text(events: list[Any]) -> list[str]:
+    details = events[0].details
+    lines = []
+    image = str(details.get("image") or "").strip()
+    commit = str(details.get("commit") or "").strip()
+    scanned_at = str(details.get("scannedAt") or "").strip()
+    if image:
+        lines.append(f"Image : {image}")
+    if commit:
+        lines.append(f"Commit : {commit}")
+    if scanned_at:
+        lines.append(f"Scan : {scanned_at}")
+    if lines:
+        lines.append("")
+    return lines
+
+
+def compose_container_security_text_body(
+    events: list[Any],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[Any] | None = None,
+    display_name: str,
+    introduction: str = "",
+    signature: str = "",
+) -> str:
+    items = container_security_items(events)
+    counts = _severity_counts(items)
+    resolved = _resolved_count(items)
+
+    lines: list[str] = [display_name]
+    if introduction:
+        lines.extend(["", introduction])
+    lines.extend(["", _container_hero_title(len(items)), ""])
+    lines.extend(
+        [
+            f"Critical : {counts['critical']}",
+            f"High     : {counts['high']}",
+            f"Total    : {len(items)}",
+            "",
+        ]
+    )
+    if resolved:
+        lines.extend(
+            [
+                f"Vulnérabilités corrigées depuis le dernier scan : {resolved}",
+                "",
+            ]
+        )
+    shown = items[:MAX_FINDINGS_PER_EMAIL]
+    for event in shown:
+        lines.extend(_container_finding_text(event))
+    if len(items) > len(shown):
+        lines.extend([f"... et {len(items) - len(shown)} autres (liste tronquée).", ""])
+    lines.extend(_container_context_text(items))
+    lines.extend(_other_events_text(other_events))
+    lines.extend(
+        [
+            "Cet email a été généré automatiquement par FortiUpgrade.",
+            "Merci de ne pas répondre à cet email.",
+            "",
+            f"FortiUpgrade : {app_url}",
+            f"Collecte : {run_timestamp}",
+        ]
+    )
+    if signature:
+        lines.extend(["", signature])
+    return "\n".join(lines)
+
+
+def _container_card_html(event: Any) -> str:
+    details = event.details
+    severity = _severity_upper(event)
+    title = str(details.get("title") or "").strip()
+    title_row = ""
+    if title:
+        title_row = (
+            "<tr><td colspan='2' style='padding:0 14px 10px'>"
+            f"<div style='font-size:13px;color:{SNS_BLACK};line-height:1.5'>"
+            f"{html.escape(title)}</div>"
+            "</td></tr>"
+        )
+    url = _report_url(details.get("url"))
+    link_row = ""
+    if url:
+        link_row = (
+            "<tr><td colspan='2' style='padding:4px 14px 14px'>"
+            f"<a href='{html.escape(url, quote=True)}' style='color:{SNS_BLACK};"
+            "font-size:14px;font-weight:700;text-decoration:underline'>"
+            "Voir l’advisory →</a>"
+            "</td></tr>"
+        )
+    version_row = (
+        "<tr><td colspan='2' style='padding:0 14px 12px'>"
+        f"<div style='font-size:13px;color:{SNS_GRAY_TEXT};line-height:1.6'>"
+        f"Version installée : {html.escape(str(details.get('installedVersion') or '—'))}<br>"
+        f"Version corrigée : {html.escape(str(details.get('fixedVersion') or '—'))}"
+        "</div></td></tr>"
+    )
+    return (
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        f"style='border-collapse:collapse;border:1px solid {SNS_GRAY_BORDER};margin:0 0 16px'>"
+        "<tr>"
+        f"{_severity_badge(severity)}"
+        f"<td style='padding:5px 14px;text-align:right;font-size:13px;color:{SNS_GRAY_TEXT}'>"
+        f"{html.escape(str(details.get('package') or ''))}</td>"
+        "</tr>"
+        "<tr><td colspan='2' style='padding:14px 14px 6px;font-size:16px;font-weight:700;"
+        f"color:{SNS_BLACK}'>{html.escape(str(details.get('id') or '?'))}</td></tr>"
+        f"{version_row}{title_row}{link_row}"
+        "</table>"
+    )
+
+
+def _container_context_html(events: list[Any]) -> str:
+    details = events[0].details
+    rows = [
+        ("Image analysée", str(details.get("image") or "")),
+        ("Commit", str(details.get("commit") or "")),
+        ("Date du scan", str(details.get("scannedAt") or "")),
+    ]
+    cells = "".join(
+        f"<div style='font-size:13px;color:{SNS_BLACK};line-height:1.6'>"
+        f"<span style='color:{SNS_GRAY_TEXT}'>{html.escape(label)} : </span>"
+        f"{html.escape(value or '—')}</div>"
+        for label, value in rows
+        if label != "Commit" or value
+    )
+    resolved = _resolved_count(events)
+    resolved_html = ""
+    if resolved:
+        resolved_html = (
+            f"<div style='margin-top:10px;font-size:13px;color:{SEVERITY_LOW_TEXT};"
+            "font-weight:700'>"
+            f"Vulnérabilités corrigées depuis le dernier scan : {resolved}</div>"
+        )
+    return (
+        "<tr><td style='padding:0 20px 12px'>"
+        f"<div style='background:{SNS_GRAY_BG};padding:16px 16px'>"
+        f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
+        "margin:0 0 8px'>CONTEXTE DU SCAN</div>"
+        f"{cells}{resolved_html}"
+        "</div></td></tr>"
+    )
+
+
+def _container_cta_html(events: list[Any], app_url: str) -> str:
+    report_url = _report_url(events[0].details.get("reportUrl"))
+    target = report_url or app_url
+    label = "VOIR LE RAPPORT TRIVY →" if report_url else "OUVRIR FORTIUPGRADE →"
+    return (
+        "<tr><td style='padding:8px 20px 22px'>"
+        f"<div style='font-size:13px;color:{SNS_GRAY_TEXT};line-height:1.5'>"
+        "Cet email a été généré automatiquement par FortiUpgrade.<br>"
+        "Merci de ne pas répondre à cet email.</div>"
+        f"<div style='margin-top:16px'><a href='{html.escape(target, quote=True)}' "
+        f"style='display:inline-block;background:{SNS_BLACK};color:{SNS_WHITE};"
+        "font-size:14px;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:3px'>"
+        f"{label}</a></div>"
+        "</td></tr>"
+    )
+
+
+def compose_container_security_html_body(
+    events: list[Any],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[Any] | None = None,
+    display_name: str,
+    introduction: str = "",
+    signature: str = "",
+) -> str:
+    items = container_security_items(events)
+    counts = _severity_counts(items)
+    run_date = run_timestamp[:10]
+    hero = _hero_html(
+        display_name=display_name,
+        hero_title=_container_hero_title(len(items)),
+        run_date=run_date,
+    )
+    counters = _counter_cell(counts["critical"], "CRITICAL", SEVERITY_CRITICAL_TEXT)
+    counters += _counter_cell(counts["high"], "HIGH", SEVERITY_HIGH_TEXT)
+    if counts["medium"]:
+        counters += _counter_cell(counts["medium"], "MEDIUM", SEVERITY_MEDIUM_TEXT)
+    if counts["low"]:
+        counters += _counter_cell(counts["low"], "LOW", SEVERITY_LOW_TEXT)
+    counters += _counter_cell(len(items), "AU TOTAL", SNS_BLACK)
+
+    shown = items[:MAX_FINDINGS_PER_EMAIL]
+    cards = "".join(_container_card_html(event) for event in shown)
+    if len(items) > len(shown):
+        cards += (
+            "<div style='margin:0 0 16px;font-size:13px;"
+            f"color:{SNS_GRAY_TEXT}'>… et {len(items) - len(shown)} autres "
+            "(liste tronquée).</div>"
+        )
+    return (
+        _document_head()
+        + f"<tr><td>{hero}</td></tr>"
+        + _introduction_html(introduction)
+        + "<tr><td style='padding:26px 20px 10px'>"
+        + f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
+        "margin:0 0 12px'>SYNTHÈSE</div>"
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        f"style='border-collapse:collapse;border:1px solid {SNS_GRAY_BORDER}'>"
+        f"<tr>{counters}</tr>"
+        "</table>"
+        "</td></tr>"
+        "<tr><td style='padding:24px 20px 6px'>"
+        + f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
+        "margin:0 0 14px'>DÉTAIL DES VULNÉRABILITÉS</div>"
+        + cards
+        + "</td></tr>"
+        + _container_context_html(items)
+        + _other_events_html(other_events)
+        + _container_cta_html(items, app_url)
+        + _footer_html(signature)
+        + _document_tail()
+    )
+
+
+def compose_container_security_email(
+    events: list[Any],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[Any] | None = None,
+    display_name: str,
+    introduction: str = "",
+    signature: str = "",
+) -> tuple[str, str, str]:
+    """Render container image findings into (subject, text_body, html_body) with the SNS identity.
+
+    Structurally separate from the Fortinet CVE email: no CVE badge component, no product
+    breakdown, and its own hero sentence. Only the identity (hero, logo, panther, palette, CTA,
+    Support footer) is shared, exactly like the release email.
+    """
+    if not events:
+        raise ValueError("Aucun événement de sécurité conteneur à rendre.")
+    subject = compose_container_security_subject(events)
+    text_body = compose_container_security_text_body(
+        events,
+        app_url=app_url,
+        run_timestamp=run_timestamp,
+        other_events=other_events,
+        display_name=display_name,
+        introduction=introduction,
+        signature=signature,
+    )
+    html_body = compose_container_security_html_body(
+        events,
+        app_url=app_url,
+        run_timestamp=run_timestamp,
+        other_events=other_events,
+        display_name=display_name,
+        introduction=introduction,
+        signature=signature,
+    )
+    return subject, text_body, html_body
 
 
 def _release_hero_title(total: int) -> str:

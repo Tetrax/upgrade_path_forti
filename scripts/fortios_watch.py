@@ -3050,6 +3050,47 @@ def main(argv: list[str]) -> int:
                     checkpoint_health, health_after, HEALTH_SOURCE_LABELS
                 )
 
+            # Container image security (Trivy) — a category of its own, ingested from the report the
+            # VPS sync downloaded next to the notification state. It commits its OWN state
+            # atomically (baseline + outbox in one write, see
+            # commit_container_security_transition) and therefore runs here, before the claim
+            # below, so a fresh finding is delivered in this same pass. Deliberately NOT gated by
+            # `master_notifications`: the scan state is recorded either way (disabling is a pause,
+            # not a buffer) and the administration displays it regardless of the switch.
+            container_settings_path = (
+                args.notification_settings_output.parent
+                / fortios_notify.CONTAINER_SECURITY_SETTINGS_FILENAME
+            )
+            container_settings, container_settings_error = (
+                fortios_notify.load_container_security_settings(container_settings_path)
+            )
+            if container_settings_error:
+                print(
+                    f"Sécurité conteneur : {container_settings_error}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            container_events, container_error = (
+                fortios_notify.ingest_container_security_report(
+                    args.notification_settings_output.parent / "trivy-report.json",
+                    args.notification_settings_output.parent / "trivy-report.meta.json",
+                    container_settings,
+                    history_path=args.notify_history_output,
+                    now=final_state["generatedAt"],
+                )
+            )
+            if container_error:
+                print(
+                    f"Sécurité conteneur : {container_error}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            if container_events:
+                print(
+                    f"Sécurité conteneur : {len(container_events)} nouvel(aux) événement(s).",
+                    flush=True,
+                )
+
             new_checkpoint = {
                 "versionsByProduct": {
                     product: sorted(versions)
@@ -3072,7 +3113,7 @@ def main(argv: list[str]) -> int:
                 # category neither blocks nor duplicates the other: each event belongs to exactly
                 # one batch and is removed from the outbox only when its own email was accepted.
                 for batch in fortios_notify.notification_batches(
-                    pending, notification_settings
+                    pending, notification_settings, container_security=container_settings
                 ):
                     composed = fortios_notify.compose_email(
                         list(batch.events),

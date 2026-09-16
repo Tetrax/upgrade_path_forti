@@ -1,0 +1,30 @@
+[Unit]
+Description=FortiOS Upgrade Intelligence — fetch the daily Trivy report from CI
+# Runs BEFORE the 07:00 Paris collector: the collector ingests whatever report is present, so the
+# scan must already be on disk when it starts. The workflow scans main at 04:17 UTC (06:17 Paris)
+# and takes a few minutes.
+#
+# Installed separately from deploy/install.sh on purpose: the live delivery is the Docker stack
+# (web + scheduler containers, see docs/delivery.md) and this unit is a HOST-side auxiliary of it,
+# not part of the retired systemd delivery that install.sh provisions.
+#
+# Install (as root):
+#   install -m 644 deploy/fortios-trivy-report-sync.service /etc/systemd/system/
+#   install -m 644 deploy/fortios-trivy-report-sync.timer /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now fortios-trivy-report-sync.timer
+#
+# Runs as tetrax: it owns runtime/data/ and must write there with the ownership the containers
+# expect (PUID/PGID 1000). It needs an authenticated `gh` for that user:
+#   sudo -u tetrax env HOME=/home/tetrax gh auth status
+# Without it the synchronization fails loudly (non-zero, one log line, nothing written) and the
+# application shows the report as stale after 48h — a visible symptom, never a silent one.
+
+[Service]
+Type=oneshot
+User=tetrax
+Group=tetrax
+WorkingDirectory=/home/tetrax/workspace/Fortiupgrade
+# No SMTP configuration on purpose: this unit never sends anything, it only publishes the report
+# that the application reads. Keeping the mail transport out of it means a broken mailbox can never
+# block the security scan from reaching the application.
+ExecStart=/usr/bin/python3 scripts/sync_trivy_report.py --data-dir /home/tetrax/workspace/Fortiupgrade/runtime/data

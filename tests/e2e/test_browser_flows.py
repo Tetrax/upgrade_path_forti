@@ -836,6 +836,153 @@ def test_cve_severity_threshold_offers_every_level_and_persists(page, fortios_se
     expect(page.locator("#minimum-severity")).to_have_value("low")
 
 
+def container_state(*findings, scanned_at: str | None = None) -> dict:
+    """A notification state holding an ingested Trivy report, as the ingestion would leave it."""
+    scanned_at = scanned_at or fortios_notify.utc_now()
+    state = fortios_notify._empty_notify_state()
+    state["containerSecurityState"] = {
+        "findings": {
+            f"trivy|cve|{cve}|{package}": {
+                "cve": cve,
+                "package": package,
+                "severity": severity,
+                "installedVersion": "1.0-1",
+                "fixedVersion": "1.0-2",
+                "firstSeenAt": scanned_at,
+                "lastSeenAt": scanned_at,
+                "resolvedAt": "",
+            }
+            for (cve, package, severity) in findings
+        },
+        "lastScanAt": scanned_at,
+        "image": "fortios-upgrade-intelligence:ci-scan",
+        "commit": "05926bb47750208331d9dda00513fd399234736d",
+        "ingestedAt": scanned_at,
+        "reportError": "",
+    }
+    return state
+
+
+def test_container_security_is_its_own_scope_and_persists(page, fortios_server):
+    """Its own switch, its own threshold, its own recipients — nothing shared with the CVE list."""
+    fortios_notify.save_notification_settings(
+        fortios_server.data_dir / "notification-settings.json",
+        {
+            "enabled": True,
+            "minimumSeverity": "high",
+            "products": {
+                "fortigate-fortios": True,
+                "fortimanager": True,
+                "fortianalyzer": True,
+                "forticlient-ems": True,
+                "forticlient": {"windows": True, "macos": True, "linux": True},
+            },
+            "recipients": ["soc@example.com"],
+        },
+    )
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    expect(page.locator("#container-security-form")).to_be_visible()
+    severity = page.locator("#container-minimum-severity")
+    assert severity.evaluate(
+        "select => [...select.options].map(option => option.value)"
+    ) == ["critical", "high"]
+    expect(severity).to_have_value("high")
+    expect(page.locator("#container-security-enabled")).not_to_be_checked()
+
+    page.check("#container-security-enabled")
+    page.fill("#container-recipient-list input[type=email]", "image@example.com")
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/container-security")
+    ) as saved:
+        page.click("#save-container-security-button")
+    settings = saved.value.json()["settings"]
+    assert settings == {
+        "enabled": True,
+        "minimumSeverity": "high",
+        "recipients": ["image@example.com"],
+    }
+    expect(page.locator("#container-security-message")).to_contain_text("Configuration enregistrée.")
+
+    # The CVE list is untouched: the two documents are independent.
+    expect(page.locator("#recipient-list input[type=email]")).to_have_value("soc@example.com")
+    assert len(page.locator("#recipient-list input[type=email]").all()) == 1
+
+    page.reload()
+    expect(page.locator("#admin-view")).to_be_visible()
+    page.click("#notifications-tab")
+    expect(page.locator("#container-security-enabled")).to_be_checked()
+    expect(page.locator("#container-recipient-list input[type=email]")).to_have_value(
+        "image@example.com"
+    )
+
+
+def test_container_security_refuses_to_enable_without_a_recipient(page, fortios_server):
+    """A green switch that would send nothing anywhere is refused, and nothing is persisted.
+
+    Two guards, both exercised: the browser's own `required` on the address field, then the panel's
+    explicit refusal once the row is gone — the state a configuration would really be in.
+    """
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+    page.check("#container-security-enabled")
+
+    # An empty address is caught by the browser before any request leaves the page.
+    page.fill("#container-recipient-list input[type=email]", "")
+    assert page.locator("#container-recipient-list input[type=email]").evaluate(
+        "input => input.checkValidity()"
+    ) is False
+    page.click("#save-container-security-button")
+    assert not (fortios_server.data_dir / "container-security-settings.json").exists()
+
+    # With no row at all, the panel refuses explicitly instead of saving a switch that sends nothing.
+    page.click("#container-recipient-list .recipient-remove")
+    page.click("#save-container-security-button")
+    expect(page.locator("#container-security-message")).to_contain_text("au moins un destinataire")
+    expect(page.locator("#container-security-enabled")).to_be_checked()
+    assert not (fortios_server.data_dir / "container-security-settings.json").exists()
+
+
+def test_container_security_report_state_never_reads_as_zero(page, fortios_server):
+    """"Aucun rapport" and "0 vulnérabilité" must be impossible to confuse."""
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+    expect(page.locator("#container-report-state")).to_contain_text("Aucun rapport")
+    details = page.locator("#container-report-details")
+    expect(details).to_contain_text("—")
+    expect(details).not_to_contain_text("Total actives0")
+
+    fortios_notify.write_json(
+        fortios_server.data_dir / "fortios-notify-history.json",
+        container_state(
+            ("CVE-2026-13221", "perl-base", "critical"),
+            ("CVE-2026-41992", "gzip", "high"),
+            ("CVE-2026-11822", "libsqlite3-0", "high"),
+        ),
+    )
+    page.reload()
+    expect(page.locator("#admin-view")).to_be_visible()
+    page.click("#notifications-tab")
+    expect(page.locator("#container-report-state")).to_contain_text("Rapport à jour")
+    details = page.locator("#container-report-details")
+    expect(details).to_contain_text("Critical")
+    expect(details).to_contain_text("Total actives")
+    expect(details).to_contain_text("3")
+    # The commit is shown shortened, enough to identify the scanned revision without wrapping.
+    expect(details).to_contain_text("05926bb47750")
+
+    # An old report is reported as stale rather than silently trusted.
+    fortios_notify.write_json(
+        fortios_server.data_dir / "fortios-notify-history.json",
+        container_state(("CVE-2026-13221", "perl-base", "critical"), scanned_at="2026-01-01T00:00:00Z"),
+    )
+    page.reload()
+    expect(page.locator("#admin-view")).to_be_visible()
+    page.click("#notifications-tab")
+    expect(page.locator("#container-report-state")).to_contain_text("Rapport obsolète")
+
+
 def test_release_recipients_can_be_detached_from_the_cve_list(page, fortios_server):
     """The dedicated release list is opt-in, validated, persisted and reflected in the preview."""
     login_cert_admin(page, fortios_server)

@@ -481,6 +481,12 @@ IMAGE_DIR = DATA_DIR / "advisory-images"
 NOTIFICATION_SETTINGS_PATH = DATA_DIR / "notification-settings.json"
 SMTP_SETTINGS_PATH = DATA_DIR / "smtp-settings.json"
 EMAIL_TRANSPORT_SETTINGS_PATH = DATA_DIR / "email-transport-settings.json"
+NOTIFY_HISTORY_PATH = DATA_DIR / "fortios-notify-history.json"
+# Container image security (Trivy): its own preferences document, and the report the VPS sync
+# downloads from the CI artifact next to them.
+CONTAINER_SECURITY_SETTINGS_PATH = DATA_DIR / "container-security-settings.json"
+CONTAINER_SECURITY_REPORT_PATH = DATA_DIR / "trivy-report.json"
+CONTAINER_SECURITY_REPORT_META_PATH = DATA_DIR / "trivy-report.meta.json"
 
 
 def referenced_image_filenames(description: str) -> set[str]:
@@ -690,6 +696,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_cert_status()
             elif url_path == "/api/cert/notifications":
                 self.handle_notification_settings_read()
+            elif url_path == "/api/cert/container-security":
+                self.handle_container_security_read()
             elif url_path == "/api/cert/smtp":
                 self.handle_smtp_settings_read()
             elif url_path.startswith(EMAIL_PREVIEW_RENDER_PREFIX):
@@ -929,6 +937,52 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             return
         self.write_json_response(
             self.notification_settings_response(settings),
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def container_security_response(self) -> dict[str, Any]:
+        """The container-security block: preferences AND what the last ingested report says.
+
+        The report verdict is built so "no report" can never be displayed as "0 vulnerability" —
+        see fortios_notify.container_security_status().
+        """
+        settings, error = fortios_notify.load_container_security_settings(
+            CONTAINER_SECURITY_SETTINGS_PATH
+        )
+        state, state_error = fortios_notify._container_security_state(
+            fortios_notify.load_notify_state(NOTIFY_HISTORY_PATH).get(
+                "containerSecurityState"
+            )
+        )
+        return fortios_notify.container_security_status(
+            settings, state, error=error or state_error
+        )
+
+    def handle_container_security_read(self) -> None:
+        if self.require_admin_session(csrf=False) is None:
+            return
+        self.write_json_response(
+            self.container_security_response(),
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_container_security_write(self) -> None:
+        if self.require_admin_session(csrf=True) is None:
+            return
+        try:
+            payload = self.read_json_body(max_bytes=64 * 1024)
+            fortios_notify.save_container_security_settings(
+                CONTAINER_SECURITY_SETTINGS_PATH, payload
+            )
+        except (TypeError, ValueError, OSError) as error:
+            self.write_json_response(
+                {"error": str(error)[:500]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        self.write_json_response(
+            self.container_security_response(),
             extra_headers={"Cache-Control": "no-store"},
         )
 
@@ -1428,6 +1482,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_microsoft365_client_secret_write()
             elif self.path == "/api/cert/notifications":
                 self.handle_notification_settings_write()
+            elif self.path == "/api/cert/container-security":
+                self.handle_container_security_write()
             elif self.path == "/api/cert/smtp":
                 self.handle_smtp_settings_write()
             elif url_path == "/api/cert/smtp/password":

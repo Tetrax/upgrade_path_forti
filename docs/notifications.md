@@ -229,6 +229,16 @@ it is rendered from the same production composer used for delivery.
 
 ## Notification rules
 
+### Container image security is a separate category
+
+Vulnerabilities of the application's own Docker image (Trivy) are **not** part of
+`notification-settings.json`. They have their own preferences document
+(`data/container-security-settings.json`), their own two-level threshold, their own recipient list
+and their own email, and they never fall back on the Fortinet recipient lists — in either
+direction. Full documentation: [container-security.md](container-security.md).
+
+This document below therefore describes the Fortinet/CVE and system categories only.
+
 ### Categories and switches
 
 `data/notification-settings.json` carries two independent functional switches:

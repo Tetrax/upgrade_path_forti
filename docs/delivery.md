@@ -295,6 +295,40 @@ not reuse operational recipients or credentials for a live test. Unit/mock
 OAuth/Graph success and Docker health do not prove tenant permission or mail
 delivery; real-tenant acceptance is a separate activation gate.
 
+### Container image security (Trivy) — rollback
+
+Rolling back an image that carries the container-security ingestion must restore, together with the
+image and the Compose file, the two documents that belong to that feature:
+
+| Element | Why |
+| --- | --- |
+| Image (previous immutable tag) | The feature only exists from the ingestion merge onward. |
+| `compose.yml` | The image tag is pinned there; a half-restored pair would silently run the wrong image. |
+| `runtime/data/container-security-settings.json` | The old image does not know this document. Left in place it is inert, but a later re-upgrade must not inherit a switch that was enabled in the meantime without a decision. |
+| `runtime/data/fortios-notify-history.json` | Carries `containerSecurityState`, the baseline the next scan is diffed against. |
+
+**An older image loses `containerSecurityState` on its first write.** Its `load_notify_state()`
+returns a fixed set of keys and its save path writes back exactly what it loaded, so the section is
+dropped the moment that image commits a notification state (checkpoint, outbox finalization, EOL
+transition). This is not corruption and needs no repair: the section is additive and its absence is
+a valid state.
+
+Consequence to accept before rolling back: **the baseline is lost, and the findings known at that
+moment become unknown again.** On the next ingestion, the first report after the rollback forward
+establishes a new baseline silently — no flood, because a first ingestion never notifies (see
+`docs/container-security.md`) — and only transitions observed after that point are alerted again.
+A vulnerability that appeared during the rollback window and is still present afterwards is
+therefore **not** reported: it is part of the new baseline. If that gap is unacceptable, capture the
+`containerSecurityState` section before the rollback and restore it into the history file after the
+roll-forward.
+
+The reverse order also holds and is safe: restoring the history file alone (without the image) gives
+an image that ignores the section, and the section is dropped at its next write as described above.
+
+The Trivy artifact files (`runtime/data/trivy-report.json` and `.meta.json`) are inputs, not state:
+keeping or removing them changes nothing for an image that does not read them, and the next daily
+sync republishes them.
+
 ## Migration to editable SMTP administration
 
 Before upgrading, stop only this Stack's scheduler and web for a consistent

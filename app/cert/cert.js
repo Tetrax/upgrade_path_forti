@@ -46,6 +46,8 @@ const recipientList = byId("recipient-list");
 const releaseRecipientList = byId("release-recipient-list");
 const releaseRecipientsShared = byId("release-recipients-shared");
 const releaseRecipientsBlock = byId("release-recipients-block");
+const containerSecurityForm = byId("container-security-form");
+const containerRecipientList = byId("container-recipient-list");
 const PRODUCT_CHECKBOXES = {
   "fortigate-fortios": "product-fortigate-fortios",
   fortimanager: "product-fortimanager",
@@ -595,6 +597,86 @@ function buildNotificationSettingsPayload() {
   };
 }
 
+// --- Sécurité de l'image Docker (Trivy) -------------------------------------------------------
+// Catégorie indépendante : son propre document de préférences, son propre endpoint, sa propre
+// liste de destinataires. Elle ne partage rien avec les alertes CVE ni avec les nouvelles versions
+// (c'est une propriété du produit, pas une préférence utilisateur).
+const CONTAINER_REPORT_STATES = {
+  absent: { label: "Aucun rapport ingéré", dot: "neutral" },
+  current: { label: "Rapport à jour", dot: "success" },
+  stale: { label: "Rapport obsolète", dot: "failure" },
+  invalid: { label: "Rapport refusé", dot: "failure" },
+};
+
+function formatContainerTimestamp(value) {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  return new Intl.DateTimeFormat("fr-FR", { dateStyle: "long", timeStyle: "short" }).format(parsed);
+}
+
+function formatContainerCount(value) {
+  // `null` (and not 0) means "no report": showing "0 vulnérabilité" without an ingested report
+  // would claim the image is clean when nothing was actually read.
+  return value === null || value === undefined ? "—" : String(value);
+}
+
+function renderContainerReportRow(label, value) {
+  const item = document.createElement("li");
+  const name = document.createElement("span");
+  name.textContent = label;
+  const content = document.createElement("span");
+  content.textContent = value;
+  item.append(name, content);
+  return item;
+}
+
+function renderContainerSecurity(payload) {
+  const settings = payload.settings;
+  const report = payload.report;
+  byId("container-security-enabled").checked = settings.enabled;
+  byId("container-minimum-severity").value = settings.minimumSeverity;
+  containerRecipientList.replaceChildren();
+  for (const recipient of settings.recipients) {
+    addRecipient(recipient, containerRecipientList);
+  }
+  if (!settings.recipients.length) addRecipient("", containerRecipientList);
+
+  const state = CONTAINER_REPORT_STATES[report.state] || CONTAINER_REPORT_STATES.absent;
+  const dot = byId("container-report-dot");
+  dot.className = `status-dot ${state.dot}`;
+  byId("container-report-state").textContent = state.label;
+  const details = byId("container-report-details");
+  details.replaceChildren(
+    renderContainerReportRow("Image analysée", report.image || "—"),
+    renderContainerReportRow("Commit", report.commit ? report.commit.slice(0, 12) : "—"),
+    renderContainerReportRow("Scan", formatContainerTimestamp(report.scannedAt)),
+    renderContainerReportRow("Ingéré", formatContainerTimestamp(report.ingestedAt)),
+    renderContainerReportRow("Critical", formatContainerCount(report.critical)),
+    renderContainerReportRow("High", formatContainerCount(report.high)),
+    renderContainerReportRow("Total actives", formatContainerCount(report.total)),
+    renderContainerReportRow("Corrigées au dernier scan", formatContainerCount(report.resolved))
+  );
+  byId("container-report-reason").textContent = report.reason || "";
+}
+
+async function loadContainerSecurity() {
+  try {
+    renderContainerSecurity(await apiRequest("container-security"));
+    setMessage("container-security-message", "");
+  } catch (error) {
+    setMessage("container-security-message", error.message);
+  }
+}
+
+function buildContainerSecurityPayload() {
+  return {
+    enabled: byId("container-security-enabled").checked,
+    minimumSeverity: byId("container-minimum-severity").value,
+    recipients: liveRecipients(containerRecipientList),
+  };
+}
+
 async function refreshSession() {
   try {
     const status = await apiRequest("status");
@@ -603,7 +685,11 @@ async function refreshSession() {
       return;
     }
     showAdmin(status);
-    await Promise.all([loadNotificationSettings(), loadSmtpSettings()]);
+    await Promise.all([
+      loadNotificationSettings(),
+      loadContainerSecurity(),
+      loadSmtpSettings(),
+    ]);
   } catch (error) {
     showLogin(error.status === 401 ? "" : error.message);
   }
@@ -915,6 +1001,39 @@ byId("add-release-recipient-button").addEventListener("click", () =>
   addRecipient("", releaseRecipientList)
 );
 releaseRecipientsShared.addEventListener("change", updateReleaseRecipientsVisibility);
+byId("add-container-recipient-button").addEventListener("click", () =>
+  addRecipient("", containerRecipientList)
+);
+
+containerSecurityForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = byId("save-container-security-button");
+  const payload = buildContainerSecurityPayload();
+  if (payload.enabled && payload.recipients.length === 0) {
+    // Explicit refusal rather than a green switch that sends nothing anywhere. The engine refuses
+    // the same combination, so this is a courtesy check, not the only guard.
+    setMessage(
+      "container-security-message",
+      "Renseignez au moins un destinataire pour activer les alertes de sécurité de l'image."
+    );
+    return;
+  }
+  button.disabled = true;
+  setMessage("container-security-message", "Enregistrement…");
+  try {
+    const result = await apiRequest("container-security", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    renderContainerSecurity(result);
+    setMessage("container-security-message", "Configuration enregistrée.", true);
+  } catch (error) {
+    setMessage("container-security-message", error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
 
 notificationsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
