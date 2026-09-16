@@ -9,6 +9,10 @@ FortiUpgrade uses the existing notification collector, checkpoint, and durable o
 Microsoft Graph v1.0 `users/{mailboxIdentity}/sendMail`. Both transports share the
 same business data and the single authoritative renderer
 `scripts/fortios_email_render.py`, which produces clean UTF-8 `(subject, text/plain, HTML)`.
+The renderer exposes two composers of the same SNS identity: the CVE email
+(`compose_email`) and the release email (`compose_release_email`), which reuses the SNS
+shell (hero, logo, panther, palette, CTA, Support footer) without the CVE business
+components (severity badge, Critical/High counters, per-CVE detail).
 Each transport then adapts that output to its own wire format:
 
 - **SMTP** builds a `multipart/alternative` → `text/plain` + `multipart/related` →
@@ -126,8 +130,8 @@ for SMTP administration.
 
 `FORTIOS_SMTP_STARTTLS` remains accepted only as a compatibility input for older local configurations. New deployments should set `FORTIOS_SMTP_SECURITY` and, for clear SMTP, explicitly set `FORTIOS_SMTP_ALLOW_INSECURE=true`.
 
-Functional notification preferences and recipients remain in `data/notification-settings.json`.
-A newly saved SMTP document has this non-secret shape:
+Functional notification preferences and recipients remain in `data/notification-settings.json`
+(`enabled`, `releaseNotificationsEnabled`, `minimumSeverity`, `products`, `recipients`). A newly saved SMTP document has this non-secret shape:
 
 ```json
 {
@@ -225,12 +229,37 @@ it is rendered from the same production composer used for delivery.
 
 ## Notification rules
 
+### Categories and switches
+
+`data/notification-settings.json` carries two independent functional switches:
+
+| Key | Scope |
+| --- | --- |
+| `enabled` | Historical scope: High/Critical CVEs **and** the system categories (end of support, repeated collection failures, recoveries, compatibility recovery). Not a CVE-only alias. |
+| `releaseNotificationsEnabled` | New Fortinet releases only. |
+
+Recipients, appearance and transport are shared by both categories, and one collection still
+produces at most one synthetic email. `releaseNotificationsEnabled` is **optional when
+loading**: a file written before it existed inherits `enabled`, so an upgrade never changes
+what an existing installation sends, never triggers the corrupt-configuration fallback and
+never loses recipients. An unknown key stays rejected. The release switch only gates
+`derive_version_events()`; `versionsByProduct` still advances while it is off, so re-enabling
+it never replays history.
+
+Release emails keep the stable `new-version|<product>|<product>|<version>` dedup key and are
+carried in `details` (`kind`, `product`, `productLabel`, `version`, `detectedAt`, optional
+`releaseNotesUrl`), so a pending outbox entry survives a retry and a version already sent is
+never re-notified.
+
 - New CVEs notify only when severity is `high` or `critical` and at least one configured product/model is affected.
 - A modified CVE notifies only when its severity crosses into `high` or `critical`. Re-publication, wording/CVSS edits, and unchanged monitored severity are quiet.
 - A CVE affecting several selected products is one event with one deduplication key and an aggregated affected-product section, not one email per product.
 - Initial checkpoint/bootstrap and catalog backfill are quiet. Incomplete or malformed snapshots do not invent a baseline event; a valid later snapshot can produce the real transition.
 - Disabling delivery continues to advance an existing notification reference without creating retroactive events, including legacy environment-only configuration (`FORTIOS_EMAIL_ENABLED=false` without `notification-settings.json`) and compatibility-only recovery. Pending outbox entries are retained, never sent while disabled, and remain eligible for retry after reactivation. Persisted functional settings, when present, remain authoritative and are not rewritten by this fallback.
 - EOL transitions bootstrap silently on first sight and notify once on a later `False -> True` transition.
+- New releases notify once per version newly present in the catalog for FortiGate/FortiOS, FortiManager or FortiAnalyzer — FortiClient and FortiClient EMS deliberately stay out of release notifications — and only while `releaseNotificationsEnabled` is on.
+- A release email shows the product, the version, the detection date and the Fortinet release-notes link when the catalog publishes one; several releases from one collection become one card each in the same email.
+- A release-only batch never uses the historical plain-text summary. A batch that also contains CVEs keeps the CVE email and lists the releases under "Autres événements", since one run still produces one email.
 - Outbox claims are durable and reclaimable after a stale worker claim. Failed sends remain pending for a later run; successful sends are protected by sent-key deduplication. Concurrent collectors cannot claim or send the same event twice.
 
 An existing unreadable or invalid notification history is not an initial activation.

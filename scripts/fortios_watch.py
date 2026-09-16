@@ -607,6 +607,29 @@ def versions_by_product(state: dict[str, Any]) -> dict[str, set[str]]:
     return result
 
 
+def release_notes_by_product(state: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """Map product id -> version -> Fortinet release-notes URL from the collected catalog.
+
+    Only what the catalog really publishes is returned: a firmware without a release-notes
+    link contributes no entry, and the notification renderer then simply shows no link.
+    """
+    result: dict[str, dict[str, str]] = {}
+    for product in state.get("products", []):
+        product_id = product.get("id")
+        if not product_id:
+            continue
+        versions = result.setdefault(product_id, {})
+        for model in product.get("models", []):
+            for firmware in model.get("firmwares", []):
+                version = firmware.get("version")
+                if not version or version in versions:
+                    continue
+                link = (firmware.get("links") or {}).get("release-notes")
+                if isinstance(link, str) and link.strip():
+                    versions[version] = link.strip()
+    return result
+
+
 def version_key(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
 
@@ -2408,6 +2431,7 @@ def main(argv: list[str]) -> int:
         )
         if (
             notification_settings.enabled
+            or notification_settings.release_notifications_enabled
             or args.notification_settings_output.exists()
             or args.notify_history_output.exists()
         ):
@@ -2915,10 +2939,18 @@ def main(argv: list[str]) -> int:
             settings=notification_settings,
             settings_path=args.notification_settings_output,
         )
+        # Two independent category gates. `enabled` keeps its historical meaning -- CVEs AND the
+        # system categories (EOL, repeated collection failures, recoveries) -- so it is named
+        # after that scope, never reduced to a CVE alias. releaseNotificationsEnabled only
+        # adds/removes the "nouvelle version" category, which is why its derivation is gated
+        # on its own flag.
+        master_notifications = email_config.enabled
+        release_notifications = email_config.release_notifications_enabled
         if (
             notification_settings is not None
-            and not email_config.enabled
             and notify_checkpoint is not None
+            and not master_notifications
+            and not release_notifications
         ):
             health_after = read_health_state(args.health_output).get("sources", {})
             cves_after_by_id = {
@@ -2946,8 +2978,8 @@ def main(argv: list[str]) -> int:
             )
         if (
             notification_settings is not None
-            and email_config.enabled
             and notify_checkpoint is not None
+            and (master_notifications or release_notifications)
         ):
             health_after = read_health_state(args.health_output).get("sources", {})
             notify_state = fortios_notify.load_notify_state(args.notify_history_output)
@@ -2973,24 +3005,28 @@ def main(argv: list[str]) -> int:
                     p.get("id"): p.get("label", p.get("id"))
                     for p in final_state.get("products", [])
                 }
-                events += fortios_notify.derive_version_events(
-                    checkpoint_versions,
-                    versions_by_product(final_state),
-                    product_labels,
-                )
-                newly_added_cves = [
-                    item
-                    for item in final_state.get("cves", [])
-                    if item.get("id") and item["id"] not in checkpoint_cves_by_id
-                ]
-                events += fortios_notify.derive_new_cve_events(
-                    newly_added_cves, notification_settings
-                )
-                events += fortios_notify.derive_cve_modification_events(
-                    checkpoint_cves_by_id,
-                    cves_after_by_id,
-                    notification_settings,
-                )
+                if release_notifications:
+                    events += fortios_notify.derive_version_events(
+                        checkpoint_versions,
+                        versions_by_product(final_state),
+                        product_labels,
+                        detected_at=final_state["generatedAt"],
+                        release_links=release_notes_by_product(final_state),
+                    )
+                if master_notifications:
+                    newly_added_cves = [
+                        item
+                        for item in final_state.get("cves", [])
+                        if item.get("id") and item["id"] not in checkpoint_cves_by_id
+                    ]
+                    events += fortios_notify.derive_new_cve_events(
+                        newly_added_cves, notification_settings
+                    )
+                    events += fortios_notify.derive_cve_modification_events(
+                        checkpoint_cves_by_id,
+                        cves_after_by_id,
+                        notification_settings,
+                    )
 
                 eol_events, eol_state_after = fortios_notify.derive_eol_events(
                     final_state.get("fortiosLifecycle", {}),
@@ -2999,17 +3035,20 @@ def main(argv: list[str]) -> int:
                 )
                 # Committed immediately (state + outbox entries in one write), not folded into
                 # the `events` list below -- see commit_eol_transition()'s docstring for why the
-                # two must never be persisted as separate writes.
+                # two must never be persisted as separate writes. EOL belongs to `enabled`'s
+                # historical scope, so with that switch off the transition is still recorded
+                # silently (re-enabling must not replay it) but produces no event.
                 fortios_notify.commit_eol_transition(
                     args.notify_history_output,
                     eol_state_after,
-                    eol_events,
+                    eol_events if master_notifications else [],
                     now=final_state["generatedAt"],
                 )
 
-            events += fortios_notify.derive_source_health_events(
-                checkpoint_health, health_after, HEALTH_SOURCE_LABELS
-            )
+            if master_notifications:
+                events += fortios_notify.derive_source_health_events(
+                    checkpoint_health, health_after, HEALTH_SOURCE_LABELS
+                )
 
             new_checkpoint = {
                 "versionsByProduct": {

@@ -308,7 +308,7 @@
           <div>
             <p class="eyebrow">Alertes PSIRT</p>
             <h2>Notifications de sécurité</h2>
-            <p>Configure les CVE High / Critical surveillées et leurs destinataires.</p>
+            <p>Configure les CVE High / Critical surveillées et les alertes de nouvelles versions, avec leurs destinataires communs.</p>
           </div>
         </div>
 
@@ -328,9 +328,9 @@
                 <select id="minimum-severity"><option value="high">High</option></select>
               </div>
               <section class="form-section" aria-labelledby="products-heading">
-                <h3 id="products-heading">Produits surveillés</h3>
+                <h3 id="products-heading">Produits surveillés pour les CVE</h3>
                 <fieldset class="product-fieldset">
-                  <legend class="sr-only">Sélection des produits surveillés</legend>
+                  <legend class="sr-only">Sélection des produits surveillés pour les CVE</legend>
                   <label><input id="product-fortigate-fortios" type="checkbox"> FortiGate / FortiOS</label>
                   <label><input id="product-fortimanager" type="checkbox"> FortiManager</label>
                   <label><input id="product-fortianalyzer" type="checkbox"> FortiAnalyzer</label>
@@ -340,11 +340,20 @@
                   <label><input id="product-forticlient-linux" type="checkbox"> FortiClient Linux</label>
                 </fieldset>
               </section>
+              <section class="form-section" aria-labelledby="release-alerts-heading">
+                <div class="result-heading">
+                  <h3 id="release-alerts-heading">Alertes nouvelles versions</h3>
+                  <label class="switch-control"><input id="release-notifications-enabled" type="checkbox"><span>ON</span></label>
+                </div>
+                <p class="panel-copy">Recevoir une notification lorsqu’une nouvelle version Fortinet est détectée.</p>
+                <p class="field-help">Releases actuellement prises en charge : FortiGate / FortiOS, FortiManager et FortiAnalyzer. Les destinataires sont communs aux deux catégories d’alertes.</p>
+              </section>
               <section class="form-section recipient-block" aria-labelledby="recipients-heading">
                 <div class="recipient-heading">
                   <h3 id="recipients-heading">Destinataires</h3>
                   <button class="btn" id="add-recipient-button" type="button">+ Ajouter un destinataire</button>
                 </div>
+                <p class="field-help">Communs aux alertes CVE et aux alertes de nouvelles versions.</p>
                 <div id="recipient-list"></div>
               </section>
               <button class="btn primary" id="save-notifications-button" type="submit">Enregistrer les alertes</button>
@@ -516,6 +525,8 @@
                     <button class="btn preview-scenario active" type="button" data-preview-scenario="single" aria-pressed="true">1 CVE</button>
                     <button class="btn preview-scenario" type="button" data-preview-scenario="multiple" aria-pressed="false">Plusieurs CVE</button>
                     <button class="btn preview-scenario" type="button" data-preview-scenario="multi-product" aria-pressed="false">Multi-produits</button>
+                    <button class="btn preview-scenario" type="button" data-preview-scenario="release" aria-pressed="false">Nouvelle version</button>
+                    <button class="btn preview-scenario" type="button" data-preview-scenario="release-multi" aria-pressed="false">Nouvelles versions (multi)</button>
                   </div>
                 </fieldset>
                 <div class="field">

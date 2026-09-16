@@ -565,13 +565,24 @@ def test_notifications_admin_exposes_grouped_smtp_and_email_appearance(page, for
 
     for heading in (
         "Alertes CVE",
-        "Produits surveillés",
+        "Produits surveillés pour les CVE",
+        "Alertes nouvelles versions",
         "Destinataires",
         "Configuration SMTP",
         "Apparence des emails",
         "Test d’envoi",
     ):
         expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
+
+    # Two independent category switches, sharing one recipient list.
+    expect(page.locator("#notifications-enabled")).to_have_count(1)
+    expect(page.locator("#release-notifications-enabled")).to_have_count(1)
+    expect(
+        page.get_by_text(
+            "Releases actuellement prises en charge : FortiGate / FortiOS, FortiManager et "
+            "FortiAnalyzer. Les destinataires sont communs aux deux catégories d’alertes."
+        )
+    ).to_be_visible()
 
     expect(page.locator("#smtp-security option")).to_have_count(3)
     assert page.locator("#smtp-security option").evaluate_all(
@@ -597,7 +608,10 @@ def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fo
     page.click("#notifications-tab")
 
     scenario_buttons = page.locator("[data-preview-scenario]")
-    expect(scenario_buttons).to_have_count(3)
+    expect(scenario_buttons).to_have_count(5)
+    assert scenario_buttons.evaluate_all(
+        "buttons => buttons.map(button => button.dataset.previewScenario)",
+    ) == ["single", "multiple", "multi-product", "release", "release-multi"]
     expect(page.locator("#send-preview-email-button")).to_have_text(
         "Envoyer cet aperçu par email"
     )
@@ -715,6 +729,59 @@ def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fo
     assert frame.evaluate(
         "[...document.images].every(image => image.src.startsWith('data:image/'))"
     )
+
+    # The release scenario goes through the same production renderer in the same isolated
+    # document: SNS identity, one card per release, and none of the CVE business components.
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/notifications/preview")
+    ) as release_response:
+        page.click('[data-preview-scenario="release"]')
+    release_preview = release_response.value.json()
+
+    expect(page.locator("#email-preview-subject")).to_have_text(release_preview["subject"])
+    expect(page.locator("#email-preview-subject")).to_contain_text("Nouvelle version")
+    expect(page.locator("#email-preview-text")).to_contain_text("FortiGate / FortiOS")
+    expect(page.locator("#email-preview-text")).to_contain_text("8.0.1")
+    expect(page.locator("#email-preview-frame")).to_have_attribute(
+        "src", release_preview["renderUrl"]
+    )
+    # frame_locator follows the iframe's current document (auto-waiting) instead of matching a
+    # frame URL that is already one navigation behind.
+    release_frame = page.frame_locator("#email-preview-frame")
+    expect(release_frame.locator("body")).to_contain_text(
+        "Une nouvelle version Fortinet est disponible."
+    )
+    release_rendered = release_frame.locator("body").evaluate(
+        """(body) => {
+          const tables = [...body.querySelectorAll('table')];
+          const hero = tables.find(
+            table => getComputedStyle(table).backgroundColor === 'rgb(11, 11, 13)'
+          );
+          const card = [...tables].reverse().find(
+            table => table.textContent.includes('NOUVELLE VERSION')
+          );
+          return {
+            heroBackground: getComputedStyle(hero).backgroundColor,
+            cardBorderWidth: getComputedStyle(card).borderTopWidth,
+            imagesInlined: [...body.querySelectorAll('img')].every(
+              image => image.src.startsWith('data:image/')
+            ),
+            text: body.innerText,
+          };
+        }"""
+    )
+    assert release_rendered["heroBackground"] == "rgb(11, 11, 13)"
+    assert release_rendered["cardBorderWidth"] == "1px"
+    assert release_rendered["imagesInlined"] is True
+    assert "Une nouvelle version Fortinet est disponible." in release_rendered["text"]
+    assert "FortiGate / FortiOS" in release_rendered["text"]
+    assert "NOUVELLE VERSION" in release_rendered["text"]
+    assert "Détectée le" in release_rendered["text"]
+    assert "OUVRIR FORTIUPGRADE" in release_rendered["text"]
+    assert "ÉQUIPE SUPPORT" in release_rendered["text"]
+    # No CVE component leaked into the release email.
+    assert "CVSS" not in release_rendered["text"]
+    assert "vulnérabilit" not in release_rendered["text"]
     assert csp_violations == []
 
 

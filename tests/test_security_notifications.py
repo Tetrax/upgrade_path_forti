@@ -39,10 +39,23 @@ PRODUCT_SELECTIONS = {
 }
 
 
-def settings_payload(*, enabled: bool = True, selected: set[str] | None = None) -> dict[str, Any]:
+def settings_payload(
+    *,
+    enabled: bool = True,
+    selected: set[str] | None = None,
+    release_notifications: bool | None = None,
+) -> dict[str, Any]:
+    """The canonical saved payload, including the explicit release switch.
+
+    ``release_notifications`` defaults to mirroring ``enabled``, which is what a legacy file
+    without the key resolves to; pass it explicitly to exercise the asymmetric combinations.
+    """
     selected = set(PRODUCT_SELECTIONS) if selected is None else selected
+    if release_notifications is None:
+        release_notifications = enabled
     return {
         "enabled": enabled,
+        "releaseNotificationsEnabled": release_notifications,
         "minimumSeverity": "high",
         "products": {
             "fortigate-fortios": "fortigate-fortios" in selected,
@@ -57,6 +70,13 @@ def settings_payload(*, enabled: bool = True, selected: set[str] | None = None) 
         },
         "recipients": ["security@example.com"],
     }
+
+
+def legacy_settings_payload(*, enabled: bool = True) -> dict[str, Any]:
+    """The four-key shape persisted before release notifications existed."""
+    payload = settings_payload(enabled=enabled)
+    payload.pop("releaseNotificationsEnabled")
+    return payload
 
 
 def cve(
@@ -96,6 +116,59 @@ class NotificationSettingsTests(unittest.TestCase):
             self.assertEqual(loaded, expected)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), settings_payload())
             self.assertEqual(list(path.parent.glob("notification-settings.json.tmp-*")), [])
+
+    def test_legacy_four_key_settings_inherit_release_notifications_and_keep_recipients(
+        self,
+    ) -> None:
+        """A file saved before release notifications existed must load unchanged.
+
+        The release switch inherits `enabled`, no corrupt-configuration fallback is triggered,
+        the existing recipients survive, and loading never rewrites the file.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notification-settings.json"
+            raw = json.dumps(legacy_settings_payload())
+            path.write_text(raw, encoding="utf-8")
+
+            settings = notify.load_notification_settings(path, env={})
+
+            self.assertTrue(settings.enabled)
+            self.assertTrue(settings.release_notifications_enabled)
+            self.assertEqual(settings.recipients, ("security@example.com",))
+            self.assertEqual(path.read_text(encoding="utf-8"), raw)
+            self.assertEqual(list(path.parent.glob("notification-settings.json.corrupt-*")), [])
+            # The next save makes the switch explicit without changing any decision.
+            self.assertTrue(settings.to_payload()["releaseNotificationsEnabled"])
+
+    def test_legacy_disabled_four_key_settings_inherit_a_disabled_release_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notification-settings.json"
+            path.write_text(json.dumps(legacy_settings_payload(enabled=False)), encoding="utf-8")
+
+            settings = notify.load_notification_settings(path, env={})
+
+            self.assertFalse(settings.enabled)
+            self.assertFalse(settings.release_notifications_enabled)
+
+    def test_explicit_release_only_configuration_round_trips(self) -> None:
+        """The asymmetric combination the UI allows: CVE off, releases on."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notification-settings.json"
+            payload = settings_payload(enabled=False, release_notifications=True)
+
+            notify.save_notification_settings(path, payload)
+            settings = notify.load_notification_settings(path, env={})
+
+            self.assertFalse(settings.enabled)
+            self.assertTrue(settings.release_notifications_enabled)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), payload)
+
+    def test_unknown_notification_setting_keys_are_still_rejected(self) -> None:
+        for key in ("releaseNotifications", "releaseNotificationEnabled", "releaseEnabled"):
+            payload = settings_payload()
+            payload[key] = True
+            with self.assertRaises(ValueError):
+                notify.validate_notification_settings(payload)
 
     def test_invalid_persisted_settings_are_archived_and_fall_back_safely(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -776,6 +849,13 @@ class NotificationAdminWebTests(unittest.TestCase):
         self.assertIn("Certificats", body)
         self.assertIn("Notifications de sécurité", body)
         self.assertIn("Envoyer un email de test", body)
+        # The two independent category switches and the release preview scenario are exposed.
+        self.assertIn("Alertes CVE", body)
+        self.assertIn("Alertes nouvelles versions", body)
+        self.assertIn("Produits surveillés pour les CVE", body)
+        self.assertIn('id="release-notifications-enabled"', body)
+        self.assertIn('data-preview-scenario="release"', body)
+        self.assertIn("Recevoir une notification lorsqu’une nouvelle version Fortinet est détectée.", body)
 
     def test_settings_api_requires_the_existing_admin_session(self) -> None:
         with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url, self.assertRaises(

@@ -463,6 +463,7 @@ function renderSmtpSettings(payload) {
 function renderNotificationSettings(payload) {
   const settings = payload.settings;
   byId("notifications-enabled").checked = settings.enabled;
+  byId("release-notifications-enabled").checked = settings.releaseNotificationsEnabled;
   byId("minimum-severity").value = settings.minimumSeverity;
   for (const [product, checkboxId] of Object.entries(PRODUCT_CHECKBOXES)) {
     byId(checkboxId).checked = settings.products[product];
@@ -537,6 +538,7 @@ function buildNotificationSettingsPayload() {
   }
   return {
     enabled: byId("notifications-enabled").checked,
+    releaseNotificationsEnabled: byId("release-notifications-enabled").checked,
     minimumSeverity: byId("minimum-severity").value,
     products,
     recipients,
