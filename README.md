@@ -540,6 +540,17 @@ uv venv .venv-test && uv pip install --python .venv-test/bin/python -r requireme
 
 Chaque test lance sa propre instance isolée de `scripts/fortios_server.py` (port libre, répertoire `data/` temporaire — jamais `data/fortios-data.generated.json` ni `data/advisory-images/` réels), avec les appels Fortinet remplacés par une réponse simulée déterministe (`FORTIOS_TEST_DATA_DIR` / `FORTIOS_E2E_MOCK_NETWORK` / `FORTIOS_E2E_MOCK_RESPONSE_FILE`, inertes tant que ces variables ne sont pas positionnées — aucun effet en production). Capture d'écran, vidéo et trace Playwright conservées uniquement en cas d'échec. Le workflow GitHub Actions (`.github/workflows/tests.yml`) lance les deux suites à chaque push/PR, sans secret SMTP réel ni appel PSIRT/Fortinet.
 
+### Contrôles CI : bloquants et informatif
+
+Contrôles **bloquants** (un échec rend le run rouge) : Ruff, tests unitaires, Playwright, construction/push de l'image.
+
+Le scan **Trivy** de l'image (`security-scan`) est un contrôle **informatif** : il analyse systématiquement les paquets OS et les dépendances Python (`severity: HIGH,CRITICAL`, `ignore-unfixed: true`) mais **ne fait jamais échouer le run**. Les vulnérabilités sont publiées dans le résumé de l'étape (`scripts/trivy_report.py` → `$GITHUB_STEP_SUMMARY` : compteurs Critical/High, paquet, CVE, version installée, version corrigée), dans une annotation `::warning::`, et dans l'artefact **`trivy-report`** (`trivy.json`, conservé 30 jours). Un rapport absent ou illisible est signalé comme tel — jamais confondu avec « aucune vulnérabilité ».
+
+Deux conséquences assumées et documentées dans l'en-tête du workflow :
+
+- `ignore-unfixed: true` : seules les vulnérabilités **disposant d'un correctif** sont remontées, pour que chaque alerte soit actionnable (rafraîchir l'image de base épinglée par digest, ou monter le paquet). Une vulnérabilité sans correctif ne produirait qu'une alerte sans action possible.
+- le run reste **vert** même avec des findings : un pipeline rouge à chaque build masquerait les régressions réelles. Pour rendre Trivy bloquant, mettre `exit-code: 1` sur l'étape de scan et retirer `if-no-files-found: warn` de l'upload.
+
 ## Planification
 
 Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h00 heure de Paris (CET/CEST, résolu par systemd — le VPS lui-même tourne en UTC), en deux étapes :

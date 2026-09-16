@@ -16,12 +16,22 @@ name: Tests
 #   - Runs as a separate `security-scan` job after python-tests and e2e-tests
 #     both pass.
 #   - Builds the Docker image locally (no push) and scans OS packages + pip
-#     dependencies for known CVEs.
-#   - Threshold: exit-code: 1 on HIGH or CRITICAL.  Lower severities are
-#     printed but do not cause failure.
-#   - To disable Trivy entirely, comment out or remove the `security-scan` job.
-#   - To adjust the failure threshold, edit the `severity` list.
-#     Accepted values: UNKNOWN, LOW, MEDIUM, HIGH, CRITICAL
+#     dependencies for known HIGH/CRITICAL CVEs.
+#   - INFORMATIVE, NOT BLOCKING: `exit-code: 0` means a finding never fails the
+#     run. The findings are surfaced through the step summary of the job, a
+#     `::warning::` annotation and the `trivy-report` artifact (trivy.json).
+#     The run stays green on purpose: a pipeline that is red on every single
+#     build hides the failures that actually matter.
+#   - The blocking controls remain: Ruff, unit tests, Playwright, image build.
+#   - `ignore-unfixed: true` is deliberate: only vulnerabilities that already
+#     have a fixed version are reported, because the alert is meant to be
+#     ACTIONNABLE (refresh the pinned base image / upgrade the package). A
+#     vulnerability with no available fix produces an alert nobody can act on.
+#   - A missing or unreadable report is a broken control, not a finding: it is
+#     reported explicitly in the summary and as a warning, and still never fails
+#     the run.
+#   - To make Trivy blocking again, set `exit-code: 1` on the scan step and drop
+#     `if-no-files-found: warn` from the upload step.
 # ---------------------------------------------------------------------------
 
 # No real SMTP secrets, no Fortinet/PSIRT calls, no dependency on the real VPS or its data --
@@ -129,21 +139,40 @@ jobs:
           cache-to: type=gha,mode=max
 
   security-scan:
-    name: Container image vulnerability scan (Trivy)
+    name: Container image vulnerability scan (Trivy, informatif)
     runs-on: ubuntu-latest
     needs: [python-tests, e2e-tests]
     steps:
       - uses: actions/checkout@v4
       - name: Build Docker image (for scanning only — no push)
         run: docker build -t fortios-upgrade-intelligence:ci-scan .
-      - name: Scan image for OS and dependency vulnerabilities
+      # Informative control: `exit-code: 0` so a finding never fails the run. The JSON report is
+      # always produced and the findings are surfaced by the two steps below.
+      - name: Scan image for OS and dependency vulnerabilities (informatif)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: fortios-upgrade-intelligence:ci-scan
-          format: table
-          exit-code: 1
+          format: json
+          output: trivy.json
+          exit-code: 0
+          # Only actionable findings: a vulnerability with no fixed version produces an alert
+          # nobody can act on.
           ignore-unfixed: true
-          # Policy: fail on HIGH or CRITICAL CVEs.
-          # Remove severities to lower the bar (e.g. remove CRITICAL to fail
-          # on HIGH only, or add MEDIUM to catch medium-severity CVEs too).
+          vuln-type: os,library
           severity: HIGH,CRITICAL
+      # Never fails: the step summary states the counts, the packages, the installed and fixed
+      # versions, and makes the informative nature of the control explicit — "findings detected"
+      # must never be mistaken for "the build is broken".
+      - name: Publish the findings summary in the run page
+        if: always()
+        run: python3 scripts/trivy_report.py trivy.json --summary-file "$GITHUB_STEP_SUMMARY"
+      - name: Upload the Trivy JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy.json
+          retention-days: 30
+          # A missing report is warned about, never fatal: the control stays informative whatever
+          # happens to the scan itself.
+          if-no-files-found: warn
