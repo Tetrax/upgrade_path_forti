@@ -75,8 +75,16 @@ Deux commutateurs fonctionnels indépendants, persistés dans `data/notification
 
 - `enabled` — portée **historique** : les CVE **et** les catégories système (fin de support, échecs répétés de collecte, retours à la normale, reprise de compatibilité). Ce n’est pas un alias des CVE ; le réduire à cette seule catégorie casserait les notifications système existantes.
 - `releaseNotificationsEnabled` — les alertes de **nouvelles versions** uniquement.
+- `releaseRecipientsShared` — `true` par défaut : les nouvelles versions utilisent la liste `recipients`.
+- `releaseRecipients` — liste dédiée aux nouvelles versions, utilisée uniquement si `releaseRecipientsShared` est `false` ; elle est alors obligatoirement non vide.
 
-Les destinataires, l’apparence et le transport restent communs aux deux catégories, et une collecte produit toujours au maximum un email synthétique.
+Les trois clés de release sont **optionnelles** au chargement : un fichier antérieur hérite de `enabled` / `true` / `[]`. Un partage désactivé avec une liste dédiée vide est **refusé** explicitement (jamais de repli silencieux vers les destinataires CVE, jamais d’email sans destinataire).
+
+### Routage de livraison
+
+Les événements sont regroupés en **un email par liste de destinataires effective** : CVE et catégories système vers `recipients`, nouvelles versions vers la liste effective des releases. Quand les deux listes sont identiques, un seul email groupé est conservé (comportement historique) ; quand elles diffèrent, deux emails distincts sont produits. Chaque lot est composé, livré, finalisé ou relâché **indépendamment** : un échec sur une catégorie ne bloque ni ne duplique l’autre, et la catégorie déjà délivrée n’est jamais renvoyée. Clés de déduplication, point de contrôle, réclamations et concurrence restent inchangés.
+
+L’apparence et le transport restent communs aux deux catégories. Les destinataires le sont par défaut, et peuvent être rendus dédiés aux nouvelles versions (`releaseRecipientsShared: false`). Une collecte produit alors un email par liste de destinataires effective, et au maximum un par catégorie.
 
 Un fichier `notification-settings.json` écrit avant l’existence de `releaseNotificationsEnabled` n’en contient pas la clé : il l’hérite alors de `enabled`. Le chargement d’un fichier légitime ne doit ni déclencher la reprise « configuration corrompue », ni perdre les destinataires existants, ni réécrire le fichier. Le champ est **optionnel** au chargement ; les véritables clés inconnues restent rejetées.
 

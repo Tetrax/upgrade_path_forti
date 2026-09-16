@@ -34,7 +34,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -3067,20 +3067,31 @@ def main(argv: list[str]) -> int:
                 transport=email_config.transport,
             )
             if pending:
-                composed = fortios_notify.compose_email(
-                    pending,
-                    app_url=email_config.app_url,
-                    run_timestamp=final_state["generatedAt"],
-                    appearance=email_config.email_appearance,
-                )
-                if composed:
+                # One delivery per effective recipient list. Releases with a dedicated list are
+                # delivered separately (and finalized/released separately), so a failure on one
+                # category neither blocks nor duplicates the other: each event belongs to exactly
+                # one batch and is removed from the outbox only when its own email was accepted.
+                for batch in fortios_notify.notification_batches(
+                    pending, notification_settings
+                ):
+                    composed = fortios_notify.compose_email(
+                        list(batch.events),
+                        app_url=email_config.app_url,
+                        run_timestamp=final_state["generatedAt"],
+                        appearance=email_config.email_appearance,
+                    )
+                    if not composed:
+                        continue
                     subject, text_body, html_body = composed
                     result = fortios_notify.deliver_email_result(
-                        email_config, subject, text_body, html_body
+                        replace(email_config, smtp_to=batch.recipients),
+                        subject,
+                        text_body,
+                        html_body,
                     )
                     if result.sent:
                         fortios_notify.finalize_sent_events(
-                            args.notify_history_output, pending
+                            args.notify_history_output, list(batch.events)
                         )
                     else:
                         fortios_notify.release_claim(

@@ -567,20 +567,22 @@ def test_notifications_admin_exposes_grouped_smtp_and_email_appearance(page, for
         "Alertes CVE",
         "Produits surveillés pour les CVE",
         "Alertes nouvelles versions",
-        "Destinataires",
+        "Destinataires CVE",
         "Configuration SMTP",
         "Apparence des emails",
         "Test d’envoi",
     ):
         expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible()
 
-    # Two independent category switches, sharing one recipient list.
+    # Two independent category switches, plus the opt-in dedicated release list.
     expect(page.locator("#notifications-enabled")).to_have_count(1)
     expect(page.locator("#release-notifications-enabled")).to_have_count(1)
+    expect(page.locator("#release-recipients-shared")).to_be_checked()
+    expect(page.locator("#release-recipients-block")).to_be_hidden()
     expect(
         page.get_by_text(
             "Releases actuellement prises en charge : FortiGate / FortiOS, FortiManager et "
-            "FortiAnalyzer. Les destinataires sont communs aux deux catégories d’alertes."
+            "FortiAnalyzer."
         )
     ).to_be_visible()
 
@@ -594,6 +596,84 @@ def test_notifications_admin_exposes_grouped_smtp_and_email_appearance(page, for
     expect(page.locator("#smtp-password")).not_to_be_disabled()
     expect(page.locator("#replace-smtp-password-button")).to_have_count(0)
     expect(page.locator("#delete-smtp-password-button")).to_have_count(0)
+
+
+def test_release_recipients_can_be_detached_from_the_cve_list(page, fortios_server):
+    """The dedicated release list is opt-in, validated, persisted and reflected in the preview."""
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    shared = page.locator("#release-recipients-shared")
+    block = page.locator("#release-recipients-block")
+    cve_rows = page.locator("#recipient-list input[type=email]")
+    release_rows = page.locator("#release-recipient-list input[type=email]")
+
+    # Default: shared, so no second list is displayed at all.
+    expect(shared).to_be_checked()
+    expect(block).to_be_hidden()
+    expect(page.get_by_role("heading", name="Destinataires CVE", exact=True)).to_be_visible()
+    expect(page.locator("#preview-recipients-hint")).to_contain_text("aucun destinataire")
+
+    cve_rows.first.fill("support@sns-security.fr")
+
+    # Detaching reveals the dedicated list and seeds one empty row.
+    shared.uncheck()
+    expect(block).to_be_visible()
+    expect(
+        page.get_by_role("heading", name="Destinataires nouvelles versions", exact=True)
+    ).to_be_visible()
+    expect(release_rows).to_have_count(1)
+
+    # An empty dedicated list is refused explicitly: removing every row must never save a
+    # configuration that would deliver releases nowhere.
+    page.locator("#release-recipient-list .recipient-remove").first.click()
+    expect(release_rows).to_have_count(0)
+    page.click("#save-notifications-button")
+    expect(page.locator("#notifications-message")).to_contain_text("au moins un destinataire")
+    # The preview hint still describes the CVE scenario currently selected.
+    expect(page.locator("#preview-recipients-hint")).to_contain_text("support@sns-security.fr")
+    page.click("#add-release-recipient-button")
+    expect(release_rows).to_have_count(1)
+    release_rows.first.fill("firmware@sns-security.fr")
+    # The hint follows the selected scenario: release previews announce the release list,
+    # CVE previews the CVE list.
+    page.click('[data-preview-scenario="release"]')
+    expect(page.locator("#preview-recipients-hint")).to_contain_text("firmware@sns-security.fr")
+    page.click('[data-preview-scenario="single"]')
+    expect(page.locator("#preview-recipients-hint")).to_contain_text("support@sns-security.fr")
+
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/notifications")
+    ) as saved:
+        page.click("#save-notifications-button")
+    payload = saved.value.json()["settings"]
+    assert payload["releaseRecipientsShared"] is False
+    assert payload["releaseRecipients"] == ["firmware@sns-security.fr"]
+    assert payload["recipients"] == ["support@sns-security.fr"]
+
+    # Reload: both lists and the detached switch persist.
+    page.reload()
+    expect(page.locator("#admin-view")).to_be_visible()
+    page.click("#notifications-tab")
+    expect(page.locator("#release-recipients-shared")).not_to_be_checked()
+    expect(page.locator("#release-recipients-block")).to_be_visible()
+    expect(page.locator("#release-recipient-list input[type=email]").first).to_have_value(
+        "firmware@sns-security.fr"
+    )
+    expect(page.locator("#recipient-list input[type=email]").first).to_have_value(
+        "support@sns-security.fr"
+    )
+
+    # Re-sharing hides the block again while keeping the dedicated list stored.
+    page.locator("#release-recipients-shared").check()
+    expect(page.locator("#release-recipients-block")).to_be_hidden()
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/notifications")
+    ) as reshared:
+        page.click("#save-notifications-button")
+    reshared_payload = reshared.value.json()["settings"]
+    assert reshared_payload["releaseRecipientsShared"] is True
+    assert reshared_payload["releaseRecipients"] == ["firmware@sns-security.fr"]
 
 
 def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fortios_server):

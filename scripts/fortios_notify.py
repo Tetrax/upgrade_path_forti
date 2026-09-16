@@ -123,7 +123,11 @@ _NOTIFICATION_SETTINGS_REQUIRED_KEYS = (
     "products",
     "recipients",
 )
-_NOTIFICATION_SETTINGS_OPTIONAL_KEYS = ("releaseNotificationsEnabled",)
+_NOTIFICATION_SETTINGS_OPTIONAL_KEYS = (
+    "releaseNotificationsEnabled",
+    "releaseRecipientsShared",
+    "releaseRecipients",
+)
 _NOTIFICATION_SETTINGS_ALLOWED_KEYS = frozenset(
     (*_NOTIFICATION_SETTINGS_REQUIRED_KEYS, *_NOTIFICATION_SETTINGS_OPTIONAL_KEYS)
 )
@@ -151,6 +155,8 @@ def _default_notification_settings_payload() -> dict[str, Any]:
             "forticlient": {key: True for key in _FORTICLIENT_PLATFORM_KEYS},
         },
         "recipients": [],
+        "releaseRecipientsShared": True,
+        "releaseRecipients": [],
     }
 
 
@@ -164,6 +170,16 @@ class NotificationSettings:
     # keeps its historical meaning for CVEs and for the system categories (EOL, collection
     # health, recovery). See fortios_watch's notification block for the derivation gates.
     release_notifications_enabled: bool = False
+    # Release recipients are shared with the CVE list by default; a dedicated list is only used
+    # when sharing is explicitly disabled (and then it must not be empty).
+    release_recipients_shared: bool = True
+    release_recipients: tuple[str, ...] = ()
+
+    def release_recipients_effective(self) -> tuple[str, ...]:
+        """Recipients the release category actually delivers to."""
+        if self.release_recipients_shared:
+            return self.recipients
+        return self.release_recipients
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -175,6 +191,8 @@ class NotificationSettings:
                 "forticlient": dict(self.products["forticlient"]),
             },
             "recipients": list(self.recipients),
+            "releaseRecipientsShared": self.release_recipients_shared,
+            "releaseRecipients": list(self.release_recipients),
         }
 
     def selected_product_keys(self) -> dict[str, bool]:
@@ -188,6 +206,30 @@ class NotificationSettings:
             }
         )
         return selected
+
+
+def _normalize_recipients(value: Any, *, label: str) -> tuple[str, ...]:
+    """Validate, trim and de-duplicate one recipient list.
+
+    ``label`` only shapes the error text so each list names itself; the rules (<=50, non-empty
+    after trim, valid address, no case-insensitive duplicate) are identical for every list.
+    """
+    if not isinstance(value, list) or len(value) > 50:
+        raise ValueError("Liste de destinataires invalide (50 maximum).")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise TypeError(f"Chaque {label} doit être une adresse email.")
+        address = item.strip()
+        if not _EMAIL_ADDRESS_RE.fullmatch(address):
+            raise ValueError(f"Adresse email {label} invalide : {address or '?'}.")
+        folded = address.casefold()
+        if folded in seen:
+            raise ValueError(f"Adresse email {label} dupliquée : {address}.")
+        seen.add(folded)
+        normalized.append(address)
+    return tuple(normalized)
 
 
 def validate_notification_settings(payload: Any) -> NotificationSettings:
@@ -227,22 +269,24 @@ def validate_notification_settings(payload: Any) -> NotificationSettings:
     if any(not isinstance(forticlient[key], bool) for key in _FORTICLIENT_PLATFORM_KEYS):
         raise ValueError("Chaque plateforme FortiClient doit être un booléen.")
 
-    recipients = payload["recipients"]
-    if not isinstance(recipients, list) or len(recipients) > 50:
-        raise ValueError("Liste de destinataires invalide (50 maximum).")
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for value in recipients:
-        if not isinstance(value, str):
-            raise TypeError("Chaque destinataire doit être une adresse email.")
-        address = value.strip()
-        if not _EMAIL_ADDRESS_RE.fullmatch(address):
-            raise ValueError(f"Adresse email destinataire invalide : {address or '?'}.")
-        folded = address.casefold()
-        if folded in seen:
-            raise ValueError(f"Adresse email destinataire dupliquée : {address}.")
-        seen.add(folded)
-        normalized.append(address)
+    recipients = _normalize_recipients(payload["recipients"], label="destinataire")
+    # Both release-recipient keys are optional: a settings file written before them inherits
+    # `releaseRecipientsShared = true`, so releases keep delivering to the CVE list exactly as
+    # they did, and nothing is rewritten.
+    release_recipients_shared = payload.get("releaseRecipientsShared", True)
+    if not isinstance(release_recipients_shared, bool):
+        raise TypeError("Le champ releaseRecipientsShared doit être un booléen.")
+    release_recipients = _normalize_recipients(
+        payload.get("releaseRecipients", []), label="destinataire de nouvelle version"
+    )
+    if not release_recipients_shared and not release_recipients:
+        # Refused explicitly: silently falling back to `recipients` would deliver releases to a
+        # list the operator deliberately detached, and silently sending nothing would hide the
+        # misconfiguration.
+        raise ValueError(
+            "Liste de destinataires de nouvelles versions obligatoire lorsque le partage avec "
+            "les alertes CVE est désactivé."
+        )
 
     return NotificationSettings(
         enabled=payload["enabled"],
@@ -251,8 +295,10 @@ def validate_notification_settings(payload: Any) -> NotificationSettings:
             **{key: products[key] for key in _SETTINGS_PRODUCT_KEYS},
             "forticlient": dict(forticlient),
         },
-        recipients=tuple(normalized),
+        recipients=recipients,
         release_notifications_enabled=release_notifications_enabled,
+        release_recipients_shared=release_recipients_shared,
+        release_recipients=release_recipients,
     )
 
 
@@ -260,8 +306,11 @@ def _legacy_settings_from_env(env: dict[str, str]) -> NotificationSettings:
     payload = _default_notification_settings_payload()
     # An environment-only installation has no settings file either: it inherits release
     # notifications from FORTIOS_EMAIL_ENABLED exactly like a legacy file inherits them from
-    # `enabled`, so migrating to this version keeps sending what it already sent.
+    # `enabled`, and keeps the shared CVE recipient list, so migrating to this version keeps
+    # sending what it already sent.
     payload.pop("releaseNotificationsEnabled", None)
+    payload.pop("releaseRecipientsShared", None)
+    payload.pop("releaseRecipients", None)
     payload["enabled"] = _env_bool(env, "FORTIOS_EMAIL_ENABLED", False)
     payload["recipients"] = [
         address.strip()
@@ -2776,6 +2825,49 @@ def _is_release_event(event: NotificationEvent) -> bool:
     return event.details.get("kind") == "release" or event.dedup_key.startswith(
         "new-version|"
     )
+
+
+@dataclass(frozen=True)
+class NotificationBatch:
+    """Events sharing one effective recipient list, and therefore one email."""
+
+    recipients: tuple[str, ...]
+    events: tuple[NotificationEvent, ...]
+
+
+def notification_batches(
+    events: list[NotificationEvent], settings: NotificationSettings
+) -> list[NotificationBatch]:
+    """Partition claimed events into the emails they must actually produce.
+
+    Everything that is not a release (CVEs and the system categories: EOL, collection health,
+    recoveries) delivers to the configured ``recipients``. Releases deliver to their effective
+    list, which is the same list unless the operator detached them.
+
+    When both groups resolve to the same recipients they are merged back into a single grouped
+    email, so the historical "one synthetic email per collection" behaviour is preserved for the
+    default (shared) configuration.
+
+    Every event belongs to exactly one batch: the caller finalizes or releases each batch on its
+    own, which is what lets one category fail without blocking or duplicating the other while
+    leaving the dedup key, outbox, claim and retry guarantees untouched.
+    """
+    release = [event for event in events if _is_release_event(event)]
+    other = [event for event in events if not _is_release_event(event)]
+    if not release:
+        return [NotificationBatch(settings.recipients, tuple(other))] if other else []
+
+    release_recipients = settings.release_recipients_effective()
+    if not other:
+        return [NotificationBatch(release_recipients, tuple(release))]
+    if release_recipients == settings.recipients:
+        return [NotificationBatch(settings.recipients, tuple(events))]
+    # CVEs and system events first, then releases: a deterministic order, and the security email
+    # is delivered before the informational one.
+    return [
+        NotificationBatch(settings.recipients, tuple(other)),
+        NotificationBatch(release_recipients, tuple(release)),
+    ]
 
 
 def compose_email(

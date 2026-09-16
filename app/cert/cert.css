@@ -149,6 +149,9 @@
 .recipient-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .recipient-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-bottom: 8px; }
 .recipient-remove { color: var(--danger); }
+.checkbox-inline { display: flex; align-items: center; gap: 9px; margin: 14px 0 0; color: var(--ink); font-weight: 700; }
+.checkbox-inline input { width: 17px; height: 17px; accent-color: var(--info); }
+.subheading { margin: 18px 0 10px; color: var(--ink); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
 .compact-field-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, .45fr); gap: 0 12px; }
 .compact-field-grid .field-wide { grid-column: 1 / -1; }
 .smtp-status { display: flex; align-items: center; gap: 9px; margin: 0; }
