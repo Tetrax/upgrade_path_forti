@@ -39,11 +39,25 @@ REAL_FINDINGS = (
 
 
 def report_payload(findings=REAL_FINDINGS) -> dict:
+    """The real document, verified against the artifact of run 35136948219.
+
+    Note the shapes that only the real report teaches: `Metadata` carries `ImageID` /`RepoTags` /
+    `Reference` but NO `RepoDigests`, and a clean package result carries `"Vulnerabilities": 0`
+    rather than omitting the key.
+    """
     return {
         "SchemaVersion": 2,
         "ArtifactName": "fortios-upgrade-intelligence:ci-scan",
         "ArtifactType": "container_image",
-        "Metadata": {"OS": {"Family": "debian", "Name": "13.6"}, "ImageID": "sha256:abc"},
+        "CreatedAt": "2026-09-16T18:55:13.964726549Z",
+        "Trivy": {"Version": "0.70.0"},
+        "Metadata": {
+            "OS": {"Family": "debian", "Name": "13.6"},
+            "ImageID": "sha256:81f3d7795c799fae45b1c994301881b06ceee4831a03f8067abf678a04811caa",
+            "RepoTags": ["fortios-upgrade-intelligence:ci-scan"],
+            "Reference": "fortios-upgrade-intelligence:ci-scan",
+            "Size": 211329024,
+        },
         "Results": [
             {
                 "Target": "fortios-upgrade-intelligence:ci-scan (debian 13.6)",
@@ -64,10 +78,11 @@ def report_payload(findings=REAL_FINDINGS) -> dict:
                 ],
             },
             {
-                # A clean Python package result: no `Vulnerabilities` key at all in the real report.
-                "Target": "usr/local/lib/python3.12/site-packages/pdfplumber-0.11.10.dist-info/METADATA",
+                # A clean language-package result: 0, not a missing key, in the real report.
+                "Target": "Python",
                 "Class": "lang-pkgs",
                 "Type": "python-pkg",
+                "Vulnerabilities": 0,
             },
         ],
     }
