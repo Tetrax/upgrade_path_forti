@@ -136,6 +136,100 @@ def test_admin_can_set_a_pending_recovery_email_without_smtp(page, fortios_serve
     expect(page.locator("#recovery-email-message")).to_contain_text("SMTP")
 
 
+def test_account_tab_responsive_layout_keeps_the_actions_inside_the_card(page, fortios_server):
+    """The account card is a real responsive layout (presentation only, no functional change).
+
+    - desktop: the card uses the admin shell width and the summary is a 2 columns x 2 rows grid;
+    - the three account actions always stay inside the panel, in spec order, the destructive one
+      last and still styled as the danger button;
+    - mobile: a single column, full-width buttons, and no horizontal overflow anywhere.
+    """
+    login_cert_admin(page, fortios_server)
+    page.click("#account-tab")
+    expect(page.get_by_role("heading", name="Compte & sécurité", exact=True)).to_be_visible()
+
+    def geometry():
+        return page.evaluate(
+            """() => {
+              const rect = (el) => {
+                const r = el.getBoundingClientRect();
+                return {
+                  left: Math.round(r.left), right: Math.round(r.right),
+                  top: Math.round(r.top), bottom: Math.round(r.bottom),
+                  width: Math.round(r.width),
+                };
+              };
+              const panel = document.querySelector('.account-panel');
+              return {
+                panel: rect(panel),
+                buttons: Array.from(document.querySelectorAll('.account-primary-actions .btn')).map((btn) => ({
+                  id: btn.id,
+                  danger: btn.classList.contains('danger'),
+                  clipped: btn.scrollWidth > btn.clientWidth + 1,
+                  ...rect(btn),
+                })),
+                cells: Array.from(document.querySelectorAll('.account-summary > div')).map(rect),
+                columns: getComputedStyle(document.querySelector('.account-summary'))
+                  .gridTemplateColumns.split(' ').filter(Boolean).length,
+                overflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+              };
+            }"""
+        )
+
+    def assert_actions_inside_the_card(state, label):
+        assert [button["id"] for button in state["buttons"]] == [
+            "change-password-button",
+            "change-recovery-email-button",
+            "revoke-all-sessions-button",
+        ], label
+        assert state["buttons"][-1]["danger"] is True, label
+        for button in state["buttons"]:
+            assert state["panel"]["left"] - 1 <= button["left"], (label, button)
+            assert button["right"] <= state["panel"]["right"] + 1, (label, button)
+            assert button["clipped"] is False, (label, button)
+        assert state["overflowX"] <= 0, label
+
+    # Desktop: the card fills the admin shell width — never again the former 620px frame — and the
+    # summary keeps its 2 x 2 layout with roomy cells.
+    for width, height in ((1920, 1080), (1440, 900)):
+        page.set_viewport_size({"width": width, "height": height})
+        desktop = geometry()
+        assert_actions_inside_the_card(desktop, f"{width}x{height}")
+        assert desktop["panel"]["width"] >= 900, desktop["panel"]
+        assert desktop["columns"] == 2, desktop["columns"]
+        first, second, third, fourth = desktop["cells"]
+        assert abs(first["top"] - second["top"]) <= 1
+        assert abs(third["top"] - fourth["top"]) <= 1
+        assert third["top"] >= first["bottom"] - 1
+        assert second["left"] >= first["right"] - 1
+        assert fourth["left"] >= third["right"] - 1
+        # "Dernière modification : 10 septembre 2026" / "1 session active" stay readable: no cell is
+        # compressed into an absurd width.
+        assert min(cell["width"] for cell in desktop["cells"]) >= 320, desktop["cells"]
+        # The three actions share one row at these widths (wrapping stays allowed, it is just not
+        # needed here).
+        assert abs(desktop["buttons"][0]["top"] - desktop["buttons"][2]["top"]) <= 1
+
+    # 1024x800: still two columns, still fully contained.
+    page.set_viewport_size({"width": 1024, "height": 800})
+    tablet = geometry()
+    assert_actions_inside_the_card(tablet, "1024x800")
+    assert tablet["columns"] == 2, tablet["columns"]
+
+    # Mobile: one column, every action a full-width row, no overflow.
+    page.set_viewport_size({"width": 390, "height": 844})
+    mobile = geometry()
+    assert_actions_inside_the_card(mobile, "390x844")
+    assert mobile["columns"] == 1, mobile["columns"]
+    first, second, third, fourth = mobile["cells"]
+    assert first["top"] < second["top"] < third["top"] < fourth["top"]
+    assert abs(first["left"] - second["left"]) <= 1
+    buttons = mobile["buttons"]
+    assert buttons[0]["top"] < buttons[1]["top"] < buttons[2]["top"]
+    assert abs(buttons[0]["width"] - buttons[2]["width"]) <= 1
+    assert buttons[0]["width"] >= mobile["panel"]["width"] - 44
+
+
 def test_forgot_password_view_always_shows_the_generic_result(page, fortios_server):
     page.goto(f"{fortios_server.base_url}/cert/")
     page.click("#forgot-password-button")
