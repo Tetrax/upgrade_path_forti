@@ -1018,6 +1018,13 @@ def test_system_tab_two_cards_stack_without_overflow(page, fortios_server):
     login_cert_admin(page, fortios_server)
     page.click("#system-tab")
 
+    # Une seule grille, exactement deux enfants directs : une imbrication redondante produirait le
+    # même rendu tout en faussant silencieusement toute future règle de grille.
+    assert page.locator("#system-section .system-columns").count() == 1
+    assert page.locator("#system-section .system-columns > *").evaluate_all(
+        "els => els.map(el => el.tagName.toLowerCase() + (el.id ? '#' + el.id : ''))"
+    ) == ["form#container-security-form", "section"]
+
     tracks_per_width: dict[int, int] = {}
     for width in (1920, 1440, 1024, 390):
         page.set_viewport_size({"width": width, "height": 1000})
