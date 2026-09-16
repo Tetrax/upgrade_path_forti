@@ -237,17 +237,38 @@ it is rendered from the same production composer used for delivery.
 | --- | --- |
 | `enabled` | Historical scope: High/Critical CVEs **and** the system categories (end of support, repeated collection failures, recoveries, compatibility recovery). Not a CVE-only alias. |
 | `releaseNotificationsEnabled` | New Fortinet releases only. |
+| `releaseRecipientsShared` | `true` (default, and what a file without the key resolves to): releases deliver to `recipients`. |
+| `releaseRecipients` | Dedicated release list, used only when `releaseRecipientsShared` is `false`; then it must not be empty. |
 
-Recipients, appearance and transport are shared by both categories, and one collection still
-produces at most one synthetic email. `releaseNotificationsEnabled` is **optional when
-loading**: a file written before it existed inherits `enabled`, so an upgrade never changes
-what an existing installation sends, never triggers the corrupt-configuration fallback and
-never loses recipients. An unknown key stays rejected. The release switch only gates
-`derive_version_events()`; `versionsByProduct` still advances while it is off, so re-enabling
-it never replays history.
+`releaseNotificationsEnabled`, `releaseRecipientsShared` and `releaseRecipients` are all
+**optional when loading**: a file written before them inherits `enabled` / `true` / `[]`, so an
+upgrade never changes what an existing installation sends, never triggers the
+corrupt-configuration fallback and never loses recipients. An unknown key stays rejected.
+`releaseNotificationsEnabled` only gates `derive_version_events()`; `versionsByProduct` still
+advances while it is off, so re-enabling it never replays history.
 
-Release emails keep the stable `new-version|<product>|<product>|<version>` dedup key and are
-carried in `details` (`kind`, `product`, `productLabel`, `version`, `detectedAt`, optional
+Disabling the share with an empty dedicated list is **refused** (`400` from the API, explicit
+message in the form): the engine never falls back silently to the CVE list and never builds an
+email without recipients.
+
+### Delivery routing
+
+Events are grouped into one email per **effective recipient list**:
+
+| Situation | Result |
+| --- | --- |
+| CVEs/system + releases, same effective recipients | one grouped email (historical behaviour) |
+| CVEs/system + releases, different recipients | two emails: the CVE email to `recipients`, the release email to `releaseRecipients` |
+| Releases only | one email to the effective release list |
+| CVEs/system only | one email to `recipients` |
+
+Each batch is composed, delivered, finalized or released on its own. A failed batch stays in the
+outbox with its retry metadata while the successful one is removed and recorded in `sentKeys`, so
+a partial failure neither blocks nor duplicates the other category, and no event can be sent
+twice. Dedup keys, the checkpoint, claims and concurrency guarantees are untouched.
+
+Release emails keep the stable `new-version|<product>|<product>|<version>` dedup key and carry
+their structured details (`kind`, `product`, `productLabel`, `version`, `detectedAt`, optional
 `releaseNotesUrl`), so a pending outbox entry survives a retry and a version already sent is
 never re-notified.
 
@@ -259,7 +280,7 @@ never re-notified.
 - EOL transitions bootstrap silently on first sight and notify once on a later `False -> True` transition.
 - New releases notify once per version newly present in the catalog for FortiGate/FortiOS, FortiManager or FortiAnalyzer — FortiClient and FortiClient EMS deliberately stay out of release notifications — and only while `releaseNotificationsEnabled` is on.
 - A release email shows the product, the version, the detection date and the Fortinet release-notes link when the catalog publishes one; several releases from one collection become one card each in the same email.
-- A release-only batch never uses the historical plain-text summary. A batch that also contains CVEs keeps the CVE email and lists the releases under "Autres événements", since one run still produces one email.
+- A release-only batch never uses the historical plain-text summary. When a batch also contains CVEs, it keeps the CVE email and lists the releases under "Autres événements" — which is what happens while the recipient lists are shared; with a dedicated release list the releases get their own release email instead.
 - Outbox claims are durable and reclaimable after a stale worker claim. Failed sends remain pending for a later run; successful sends are protected by sent-key deduplication. Concurrent collectors cannot claim or send the same event twice.
 
 An existing unreadable or invalid notification history is not an initial activation.

@@ -346,14 +346,23 @@
                   <label class="switch-control"><input id="release-notifications-enabled" type="checkbox"><span>ON</span></label>
                 </div>
                 <p class="panel-copy">Recevoir une notification lorsqu’une nouvelle version Fortinet est détectée.</p>
-                <p class="field-help">Releases actuellement prises en charge : FortiGate / FortiOS, FortiManager et FortiAnalyzer. Les destinataires sont communs aux deux catégories d’alertes.</p>
+                <label class="checkbox-inline">
+                  <input id="release-recipients-shared" type="checkbox" checked>
+                  Utiliser les mêmes destinataires que les alertes CVE
+                </label>
+                <div id="release-recipients-block" hidden>
+                  <h4 class="subheading" id="release-recipients-heading">Destinataires nouvelles versions</h4>
+                  <div id="release-recipient-list"></div>
+                  <button class="btn" id="add-release-recipient-button" type="button">+ Ajouter un destinataire</button>
+                </div>
+                <p class="field-help">Releases actuellement prises en charge : FortiGate / FortiOS, FortiManager et FortiAnalyzer.</p>
               </section>
               <section class="form-section recipient-block" aria-labelledby="recipients-heading">
                 <div class="recipient-heading">
-                  <h3 id="recipients-heading">Destinataires</h3>
+                  <h3 id="recipients-heading">Destinataires CVE</h3>
                   <button class="btn" id="add-recipient-button" type="button">+ Ajouter un destinataire</button>
                 </div>
-                <p class="field-help">Communs aux alertes CVE et aux alertes de nouvelles versions.</p>
+                <p class="field-help">Utilisés par les alertes CVE et les notifications système (fin de support, échecs de collecte).</p>
                 <div id="recipient-list"></div>
               </section>
               <button class="btn primary" id="save-notifications-button" type="submit">Enregistrer les alertes</button>
@@ -528,6 +537,7 @@
                     <button class="btn preview-scenario" type="button" data-preview-scenario="release" aria-pressed="false">Nouvelle version</button>
                     <button class="btn preview-scenario" type="button" data-preview-scenario="release-multi" aria-pressed="false">Nouvelles versions (multi)</button>
                   </div>
+                  <p class="field-help" id="preview-recipients-hint"></p>
                 </fieldset>
                 <div class="field">
                   <label for="preview-email-recipient">Destinataire de l’aperçu</label>

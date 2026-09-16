@@ -43,6 +43,9 @@ const validationBadge = byId("validation-badge");
 const notificationsForm = byId("notifications-form");
 const smtpForm = byId("smtp-form");
 const recipientList = byId("recipient-list");
+const releaseRecipientList = byId("release-recipient-list");
+const releaseRecipientsShared = byId("release-recipients-shared");
+const releaseRecipientsBlock = byId("release-recipients-block");
 const PRODUCT_CHECKBOXES = {
   "fortigate-fortios": "product-fortigate-fortios",
   fortimanager: "product-fortimanager",
@@ -213,7 +216,7 @@ function showAdminSection(section) {
   }
 }
 
-function addRecipient(value = "") {
+function addRecipient(value = "", target = recipientList) {
   const row = document.createElement("div");
   row.className = "recipient-row";
   const input = document.createElement("input");
@@ -224,13 +227,49 @@ function addRecipient(value = "") {
   input.placeholder = "security@example.com";
   input.value = value;
   input.setAttribute("aria-label", "Adresse email destinataire");
+  input.addEventListener("input", () => updatePreviewRecipientsHint());
   const remove = document.createElement("button");
   remove.type = "button";
   remove.className = "btn recipient-remove";
   remove.textContent = "Supprimer";
-  remove.addEventListener("click", () => row.remove());
+  remove.addEventListener("click", () => {
+    row.remove();
+    updatePreviewRecipientsHint();
+  });
   row.append(input, remove);
-  recipientList.append(row);
+  target.append(row);
+}
+
+function liveRecipients(list) {
+  return [...list.querySelectorAll("input[type=email]")]
+    .map((input) => input.value.trim())
+    .filter(Boolean);
+}
+
+function updateReleaseRecipientsVisibility() {
+  const shared = releaseRecipientsShared.checked;
+  releaseRecipientsBlock.hidden = shared;
+  if (!shared && releaseRecipientList.querySelectorAll("input[type=email]").length === 0) {
+    addRecipient("", releaseRecipientList);
+  }
+  updatePreviewRecipientsHint();
+}
+
+function currentPreviewRecipients() {
+  const releaseScenario = selectedPreviewScenario.startsWith("release");
+  if (releaseScenario && !releaseRecipientsShared.checked) {
+    return liveRecipients(releaseRecipientList);
+  }
+  return liveRecipients(recipientList);
+}
+
+function updatePreviewRecipientsHint() {
+  const hint = byId("preview-recipients-hint");
+  if (!hint) return;
+  const recipients = currentPreviewRecipients();
+  hint.textContent = recipients.length
+    ? `Destinataires effectifs : ${recipients.join(", ")}`
+    : "Destinataires effectifs : aucun destinataire configuré.";
 }
 
 function smtpSecurityLabel(security) {
@@ -474,6 +513,12 @@ function renderNotificationSettings(payload) {
   recipientList.replaceChildren();
   for (const recipient of settings.recipients) addRecipient(recipient);
   if (!settings.recipients.length) addRecipient();
+  releaseRecipientsShared.checked = settings.releaseRecipientsShared;
+  releaseRecipientList.replaceChildren();
+  for (const recipient of settings.releaseRecipients) {
+    addRecipient(recipient, releaseRecipientList);
+  }
+  updateReleaseRecipientsVisibility();
 }
 
 async function loadNotificationSettings() {
@@ -542,6 +587,8 @@ function buildNotificationSettingsPayload() {
     minimumSeverity: byId("minimum-severity").value,
     products,
     recipients,
+    releaseRecipientsShared: releaseRecipientsShared.checked,
+    releaseRecipients: liveRecipients(releaseRecipientList),
   };
 }
 
@@ -861,17 +908,31 @@ passwordChangeForm.addEventListener("submit", async (event) => {
   }
 });
 byId("add-recipient-button").addEventListener("click", () => addRecipient());
+byId("add-release-recipient-button").addEventListener("click", () =>
+  addRecipient("", releaseRecipientList)
+);
+releaseRecipientsShared.addEventListener("change", updateReleaseRecipientsVisibility);
 
 notificationsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = byId("save-notifications-button");
+  const payload = buildNotificationSettingsPayload();
+  if (!payload.releaseRecipientsShared && payload.releaseRecipients.length === 0) {
+    // Explicit refusal instead of saving a configuration that would send releases nowhere (or,
+    // worse, silently to the CVE list the operator just detached).
+    setMessage(
+      "notifications-message",
+      "Renseignez au moins un destinataire pour les alertes de nouvelles versions, ou réactivez le partage avec les alertes CVE."
+    );
+    return;
+  }
   button.disabled = true;
   setMessage("notifications-message", "Enregistrement…");
   try {
     const result = await apiRequest("notifications", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(buildNotificationSettingsPayload()),
+      body: JSON.stringify(payload),
     });
     renderNotificationSettings(result);
     setMessage("notifications-message", "Configuration enregistrée.", true);
@@ -898,6 +959,7 @@ for (const button of document.querySelectorAll("[data-preview-scenario]")) {
       candidate.classList.toggle("active", selected);
       candidate.setAttribute("aria-pressed", String(selected));
     }
+    updatePreviewRecipientsHint();
     void renderEmailPreview();
   });
 }

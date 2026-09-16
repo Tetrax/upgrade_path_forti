@@ -44,11 +44,14 @@ def settings_payload(
     enabled: bool = True,
     selected: set[str] | None = None,
     release_notifications: bool | None = None,
+    release_recipients_shared: bool = True,
+    release_recipients: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The canonical saved payload, including the explicit release switch.
+    """The canonical saved payload, including the explicit release switches.
 
     ``release_notifications`` defaults to mirroring ``enabled``, which is what a legacy file
     without the key resolves to; pass it explicitly to exercise the asymmetric combinations.
+    ``release_recipients`` only matters when ``release_recipients_shared`` is false.
     """
     selected = set(PRODUCT_SELECTIONS) if selected is None else selected
     if release_notifications is None:
@@ -69,13 +72,16 @@ def settings_payload(
             },
         },
         "recipients": ["security@example.com"],
+        "releaseRecipientsShared": release_recipients_shared,
+        "releaseRecipients": list(release_recipients or []),
     }
 
 
 def legacy_settings_payload(*, enabled: bool = True) -> dict[str, Any]:
-    """The four-key shape persisted before release notifications existed."""
+    """The four-key shape persisted before any release-notification key existed."""
     payload = settings_payload(enabled=enabled)
-    payload.pop("releaseNotificationsEnabled")
+    for key in ("releaseNotificationsEnabled", "releaseRecipientsShared", "releaseRecipients"):
+        payload.pop(key)
     return payload
 
 
