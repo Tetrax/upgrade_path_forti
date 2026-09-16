@@ -233,6 +233,13 @@ Tout changement de schéma, de conteneur, de montage ou de stockage doit :
 - conserver les secrets et certificats hors de l’image ;
 - disposer d’un rollback simple vers la version précédente.
 
+Un retour vers une image antérieure à un durcissement du schéma de
+`data/notification-settings.json` exige de restaurer le fichier de préférences de
+cette version : l'ancien validateur rejette une clé inconnue et perd alors les
+destinataires et les commutateurs. Le fichier de préférences fait donc partie du
+jeu de rollback au même titre que l'image et la configuration, et ne doit jamais
+être supprimé pour faire disparaître un diagnostic.
+
 L’image, la configuration et les données nécessaires au retour arrière doivent rester disponibles jusqu’à validation réelle du nouveau déploiement. Les détails de migration et d’exploitation appartiennent à la documentation de déploiement, pas à ce fichier.
 
 ## Documentation d’architecture

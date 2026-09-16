@@ -344,6 +344,23 @@ Disable sending before rollback if that is not intended. Do not restore an older
 checkpoint/history over events accepted since the upgrade. Keep the previous
 image and SMTP environment available; see [delivery.md](delivery.md).
 
+### Notification preferences and image downgrade
+
+The new→old direction is the only hazardous one. An image older than the
+separated CVE/release switches validates `data/notification-settings.json`
+strictly and rejects the newer keys, so it can report a configuration problem
+instead of the intended preferences. Before reverting to such an image:
+
+- restore the `notification-settings.json` captured with that version (every
+  timestamped rollback directory keeps its own copy);
+- retain the current file for a later re-upgrade instead of deleting it: it
+  holds the recipients and the switches, and deleting it to silence a
+  diagnostic loses the configuration;
+- never roll back the image alone when the switch schema changed in between.
+
+The reverse direction is safe by design: a document written before the new keys
+keeps loading unchanged, because those keys are optional at load time.
+
 ## Local verification
 
 Use the repository test interpreter and the focused notification suite:
