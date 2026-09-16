@@ -70,6 +70,13 @@ métadonnées qui porte le commit du run, et c'est lui que l'email affiche comme
   correspond pas : le rapport précédent et ses métadonnées restent en place, et l'application
   continue d'afficher le dernier scan connu (marqué obsolète par son âge) plutôt que de le perdre.
 
+## Où se règlent ces préférences
+
+Dans l'administration, onglet **Système** : la carte **Sécurité de l'image Docker** porte l'interrupteur, le seuil et
+les destinataires, et la carte **Rapport Trivy** affiche l'état du dernier rapport ingéré. Les deux cartes sont côte à
+côte sur un écran large et empilées en dessous ; les alertes Fortinet et la chaîne email restent dans l'onglet
+**Notifications**, dont le périmètre est inchangé.
+
 ## Préférences
 
 - `enabled` : active la catégorie. Désactivée, la collecte continue d'ingérer le rapport et
