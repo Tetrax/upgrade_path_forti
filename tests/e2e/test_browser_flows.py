@@ -829,7 +829,7 @@ def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fo
     # frame URL that is already one navigation behind.
     release_frame = page.frame_locator("#email-preview-frame")
     expect(release_frame.locator("body")).to_contain_text(
-        "Une nouvelle version Fortinet est disponible."
+        "FortiUpgrade a détecté une nouvelle version Fortinet disponible au téléchargement."
     )
     release_rendered = release_frame.locator("body").evaluate(
         """(body) => {
@@ -853,7 +853,10 @@ def test_email_preview_uses_isolated_document_with_real_computed_styles(page, fo
     assert release_rendered["heroBackground"] == "rgb(11, 11, 13)"
     assert release_rendered["cardBorderWidth"] == "1px"
     assert release_rendered["imagesInlined"] is True
-    assert "Une nouvelle version Fortinet est disponible." in release_rendered["text"]
+    assert (
+        "FortiUpgrade a détecté une nouvelle version Fortinet disponible au téléchargement."
+        in release_rendered["text"]
+    )
     assert "FortiGate / FortiOS" in release_rendered["text"]
     assert "NOUVELLE VERSION" in release_rendered["text"]
     assert "Détectée le" in release_rendered["text"]
@@ -996,6 +999,7 @@ def test_smtp_admin_edits_configuration_and_appearance(page, fortios_server):
     page.fill("#smtp-timeout", "18")
     page.fill("#email-display-name", "FortiUpgrade E2E")
     page.fill("#email-introduction", "Introduction E2E")
+    page.fill("#release-email-introduction", "Introduction release E2E")
     page.fill("#email-signature", "Signature E2E")
 
     with page.expect_response(
@@ -1024,7 +1028,48 @@ def test_smtp_admin_edits_configuration_and_appearance(page, fortios_server):
     expect(page.locator("#smtp-timeout")).to_have_value("18")
     expect(page.locator("#email-display-name")).to_have_value("FortiUpgrade E2E")
     expect(page.locator("#email-introduction")).to_have_value("Introduction E2E")
+    expect(page.locator("#release-email-introduction")).to_have_value(
+        "Introduction release E2E"
+    )
     expect(page.locator("#email-signature")).to_have_value("Signature E2E")
+
+
+def test_release_preview_uses_its_own_introduction_and_plural_sentence(page, fortios_server):
+    """The release paragraph is independent from the CVE one, with an automatic fallback."""
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    # Both paragraphs are exposed, separately labelled, in the appearance section.
+    expect(page.get_by_text("Introduction alertes CVE", exact=True)).to_be_visible()
+    expect(page.get_by_text("Introduction nouvelles versions", exact=True)).to_be_visible()
+
+    cve_intro = "Introduction CVE E2E."
+    release_intro = "Introduction release E2E."
+    page.fill("#email-introduction", cve_intro)
+    page.fill("#release-email-introduction", "")
+
+    # Empty release paragraph: the renderer writes the sentence, agreeing with the count.
+    page.click('[data-preview-scenario="release-multi"]')
+    expect(page.locator("#email-preview-text")).to_contain_text(
+        "FortiUpgrade a détecté 2 nouvelles versions Fortinet disponibles au téléchargement."
+    )
+    assert cve_intro not in (page.locator("#email-preview-text").text_content() or "")
+
+    page.click('[data-preview-scenario="release"]')
+    expect(page.locator("#email-preview-text")).to_contain_text(
+        "FortiUpgrade a détecté une nouvelle version Fortinet disponible au téléchargement."
+    )
+
+    # A configured release paragraph applies to releases and never leaks into CVE previews.
+    page.fill("#release-email-introduction", release_intro)
+    page.click('[data-preview-scenario="release"]')
+    expect(page.locator("#email-preview-text")).to_contain_text(release_intro)
+
+    page.click('[data-preview-scenario="single"]')
+    expect(page.locator("#email-preview-text")).to_contain_text(cve_intro)
+    assert release_intro not in (page.locator("#email-preview-text").text_content() or "")
+
+    # Persistence of both paragraphs is covered by the SMTP appearance save/reload test."""
 
 
 def test_smtp_admin_is_labelled_and_has_no_horizontal_overflow(page, fortios_server):

@@ -509,11 +509,13 @@ class EmailAppearance:
     display_name: str
     introduction: str
     signature: str
+    release_introduction: str = ""
 
     def to_payload(self) -> dict[str, str]:
         return {
             "displayName": self.display_name,
             "introduction": self.introduction,
+            "releaseIntroduction": self.release_introduction,
             "signature": self.signature,
         }
 
@@ -1175,25 +1177,36 @@ def _default_email_appearance() -> EmailAppearance:
 
 
 def validate_email_appearance(payload: Any) -> EmailAppearance:
-    if not isinstance(payload, dict) or set(payload) != {
-        "displayName",
-        "introduction",
-        "signature",
-    }:
+    """Validate one appearance document.
+
+    ``releaseIntroduction`` is optional: a document saved before it existed keeps loading
+    unchanged and simply inherits the empty default, which means "use the renderer's automatic
+    release text". ``introduction`` keeps its historical meaning (the CVE email paragraph), so an
+    upgrade never rewrites what an existing installation already sends for CVEs and never loses
+    the stored custom text.
+    """
+    required_keys = ("displayName", "introduction", "signature")
+    optional_keys = ("releaseIntroduction",)
+    if not isinstance(payload, dict) or set(payload) - set(required_keys + optional_keys) or (
+        not set(required_keys) <= set(payload)
+    ):
         raise ValueError("Apparence des emails invalide.")
     if any(
         not isinstance(payload[key], str)
-        for key in ("displayName", "introduction", "signature")
+        for key in required_keys + optional_keys
+        if key in payload
     ):
         raise TypeError("Les champs d'apparence doivent être des chaînes.")
     if not payload["displayName"].strip() or len(payload["displayName"]) > 100:
         raise ValueError("Nom affiché invalide.")
-    if len(payload["introduction"]) > 2000 or len(payload["signature"]) > 2000:
-        raise ValueError("Le contenu personnalisé des emails est trop long.")
+    for key in ("introduction", "releaseIntroduction", "signature"):
+        if len(payload.get(key, "")) > 2000:
+            raise ValueError("Le contenu personnalisé des emails est trop long.")
     return EmailAppearance(
         display_name=payload["displayName"].strip(),
         introduction=payload["introduction"].strip(),
         signature=payload["signature"].strip(),
+        release_introduction=payload.get("releaseIntroduction", "").strip(),
     )
 
 
@@ -2915,7 +2928,10 @@ def compose_email(
         display_name = (
             appearance.display_name if appearance is not None else "FortiUpgrade"
         )
-        introduction = appearance.introduction if appearance is not None else ""
+        # The release category has its own paragraph: the historical `introduction` is written for
+        # vulnerability alerts, so a release email uses the release one, and falls back to the
+        # renderer's automatic plural-aware sentence when it is empty.
+        introduction = appearance.release_introduction if appearance is not None else ""
         signature = appearance.signature if appearance is not None else ""
         return fortios_email_render.compose_release_email(
             release,

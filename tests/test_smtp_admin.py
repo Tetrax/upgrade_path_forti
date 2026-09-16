@@ -42,6 +42,7 @@ def smtp_payload(**overrides: object) -> dict[str, object]:
         "emailAppearance": {
             "displayName": "FortiUpgrade",
             "introduction": "Alerte de sécurité Fortinet.",
+            "releaseIntroduction": "",
             "signature": "Équipe sécurité",
         },
     }
@@ -397,6 +398,7 @@ class SmtpSettingsPersistenceTests(unittest.TestCase):
             "emailAppearance": {
                 "displayName": "Graph appearance",
                 "introduction": "Graph intro",
+                "releaseIntroduction": "",
                 "signature": "Graph signature",
             },
         }
@@ -434,6 +436,7 @@ class SmtpSettingsPersistenceTests(unittest.TestCase):
             "emailAppearance": {
                 "displayName": "Shared appearance",
                 "introduction": "Shared intro",
+                "releaseIntroduction": "",
                 "signature": "Shared signature",
             },
             "smtp": smtp_payload(),
@@ -465,6 +468,7 @@ class SmtpSettingsPersistenceTests(unittest.TestCase):
             "emailAppearance": {
                 "displayName": "Shared appearance",
                 "introduction": "Shared intro",
+                "releaseIntroduction": "",
                 "signature": "Shared signature",
             },
         }
@@ -497,6 +501,7 @@ class SmtpSettingsPersistenceTests(unittest.TestCase):
             "emailAppearance": {
                 "displayName": "Repaired appearance",
                 "introduction": "Repaired intro",
+                "releaseIntroduction": "",
                 "signature": "Repaired signature",
             },
             "smtp": smtp_payload(),
@@ -540,7 +545,12 @@ class SmtpSettingsPersistenceTests(unittest.TestCase):
             persisted = json.loads(path.read_text(encoding="utf-8"))
             loaded = notify.load_smtp_settings(path, env=environment)
 
-        self.assertEqual(persisted, {"emailAppearance": appearance})
+        # The legacy three-key appearance is normalised on write: `releaseIntroduction` is added
+        # empty (the renderer's automatic text) and the transport still comes from the environment.
+        self.assertEqual(
+            persisted,
+            {"emailAppearance": notify.validate_email_appearance(appearance).to_payload()},
+        )
         self.assertEqual(saved, loaded)
         self.assertEqual(saved.host, "smtp.environment.example")
         self.assertEqual(saved.port, 2525)
