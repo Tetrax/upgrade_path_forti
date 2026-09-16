@@ -972,7 +972,7 @@ def read_password(password_stdin: bool) -> tuple[str, str]:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Configurer le compte administrateur de /cert."
+        description="Configurer le compte administrateur de /admin.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("setup", "reset"):

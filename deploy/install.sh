@@ -77,4 +77,4 @@ if [ ! -f /etc/fortios-upgrade-intelligence.env ]; then
   echo "  remplir, puis relancer ce script (jamais de vrai secret dans le dépôt Git)."
 fi
 
-echo "OK — https://valdev.me:3001/app/"
+echo "OK — https://valdev.me:3001/ (administration : https://valdev.me:3001/admin/)"

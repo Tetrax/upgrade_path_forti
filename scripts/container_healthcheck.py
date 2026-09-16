@@ -94,7 +94,7 @@ def main() -> int:
 
     port = int(os.environ.get("FORTIOS_HEALTHCHECK_PORT", "8000"))
     with urllib.request.urlopen(
-        f"{scheme}://127.0.0.1:{port}/app/",
+        f"{scheme}://127.0.0.1:{port}/",
         timeout=5,
         context=context,
     ) as response:

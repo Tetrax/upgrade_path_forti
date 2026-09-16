@@ -39,6 +39,34 @@ Upgrade_path/
   docs/
 ```
 
+### URLs
+
+```text
+https://<host>/               application principale (chemins d'upgrade, CVE, état des données)
+https://<host>/alerte/        alertes internes
+https://<host>/forticlient/   versions et compatibilité FortiClient / EMS
+https://<host>/admin/         administration : Certificats, Notifications, Compte, SMTP, Microsoft 365
+```
+
+Les API et les données gardent leurs URL internes, indépendantes de la navigation :
+`/api/cert/*`, `/api/official-path`, `/api/advisories`, `/api/advisory-images`,
+`/api/compatibilities` et `/data/*`. Elles ne sont jamais redirigées ni renommées, et le cookie de
+session de l'administration reste `Path=/api/cert`.
+
+Les anciennes URL restent utilisables, en **redirection 302** avec la query string conservée :
+
+```text
+/app[/<reste>]        → /         (302)
+/app/cert[/<reste>]   → /admin/   (302)
+/cert[/<reste>]       → /admin/   (302)
+```
+
+302 et jamais 301/308 : une redirection permanente est mise en cache par le navigateur presque
+définitivement, ce qui casserait un retour arrière vers une image ne connaissant que `/app/` et
+`/cert/`. La query string est recopiée à l'identique — `/cert/verify-email?token=…` redirige vers
+`/admin/verify-email?token=…` — pour que les liens de récupération déjà envoyés par email restent
+opérants. Aucune redirection n'est appliquée à `/api/*` ni à `/data/*`.
+
 ## Lancer l'interface
 
 Pour que **Afficher le chemin** puisse interroger Fortinet en direct, lancer le serveur local depuis la racine :
@@ -52,11 +80,11 @@ L'endpoint borne les appels Fortinet à deux requêtes simultanées par défaut.
 Puis ouvrir :
 
 ```text
-http://localhost:8000/app/
+http://localhost:8000/
 ```
 
 La page privée de gestion des certificats peut également être testée entièrement
-hors Docker sur `http://127.0.0.1:8000/cert/`. Elle utilise un compte
+hors Docker sur `http://127.0.0.1:8000/admin/`. Elle utilise un compte
 administrateur unique, une session `HttpOnly`, un jeton CSRF et le moteur de
 validation de `scripts/certctl.py`. Si aucun compte n'existe, un parcours First
 Run côté web permet de le créer avec une adresse de récupération optionnelle.
@@ -141,11 +169,11 @@ python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --tool-
 
 Contrairement à FortiGate (scraping des release notes), cette commande utilise directement les endpoints JSON de l'Upgrade Path Tool (`/upgrade-tool/products/<slug>.json` pour la liste des modèles, puis `/upgrade-tool/upgrade-path` pour les versions/builds par modèle) — plus rapide et plus fiable, mais uniquement disponible pour les produits que l'outil connaît.
 
-Dans l'interface (outil principal comme page `/app/alerte/`), un sélecteur **Produit** permet de basculer entre FortiGate/FortiOS, FortiAnalyzer et FortiManager. Chaque alerte interne est rattachée à un seul produit ; la liste des alertes se filtre par produit par défaut (option "Tous les produits" disponible).
+Dans l'interface (outil principal comme page `/alerte/`), un sélecteur **Produit** permet de basculer entre FortiGate/FortiOS, FortiAnalyzer et FortiManager. Chaque alerte interne est rattachée à un seul produit ; la liste des alertes se filtre par produit par défaut (option "Tous les produits" disponible).
 
 ## FortiClient et FortiClient EMS
 
-FortiClient (Windows/macOS/Linux) et FortiClient EMS n'existent pas dans l'Upgrade Path Tool public de Fortinet (vérifié dans son propre code) — **pas de chemin recommandé automatique** pour ces deux produits. En revanche, l'outil récupère leur catalogue de versions et permet de leur créer des alertes internes, exactement comme les autres produits (sélecteur **Produit** sur `/app/alerte/`).
+FortiClient (Windows/macOS/Linux) et FortiClient EMS n'existent pas dans l'Upgrade Path Tool public de Fortinet (vérifié dans son propre code) — **pas de chemin recommandé automatique** pour ces deux produits. En revanche, l'outil récupère leur catalogue de versions et permet de leur créer des alertes internes, exactement comme les autres produits (sélecteur **Produit** sur `/alerte/`).
 
 Pour récupérer le catalogue FortiClient/EMS :
 
@@ -155,15 +183,15 @@ python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --forti
 
 Chaque plateforme FortiClient (Windows, macOS, Linux) est traitée comme un "modèle" du produit `forticlient`, chacune avec ses propres versions/builds (scrapés depuis leurs release notes publiques respectives). FortiClient EMS est un produit séparé (`forticlient-ems`) avec un seul modèle.
 
-### Page `/app/forticlient/` — versions et compatibilité EMS ↔ FortiClient
+### Page `/forticlient/` — versions et compatibilité EMS ↔ FortiClient
 
 ```text
-http://localhost:8000/app/forticlient/
+http://localhost:8000/forticlient/
 ```
 
 En plus d'afficher un résumé du catalogue de versions connues, cette page permet d'enregistrer des **combinaisons EMS ↔ FortiClient qui fonctionnent bien** (testées en prod), pour éviter de retester à chaque fois : choisir une version d'EMS, cocher une ou plusieurs versions FortiClient compatibles, ajouter une note et une source. Modifier/supprimer une combinaison fonctionne comme pour les alertes.
 
-Les **alertes internes** créées pour FortiClient ou FortiClient EMS s'affichent aussi sur cette page (lecture seule), pour tout avoir au même endroit. Elles se créent et se modifient toujours depuis `/app/alerte/` — le bouton "Modifier dans Alertes internes" de chaque carte y renvoie directement, pré-filtré sur le bon produit via `?product=forticlient` ou `?product=forticlient-ems` dans l'URL (ce paramètre fonctionne sur `/app/alerte/` en général, pas seulement depuis cette page).
+Les **alertes internes** créées pour FortiClient ou FortiClient EMS s'affichent aussi sur cette page (lecture seule), pour tout avoir au même endroit. Elles se créent et se modifient toujours depuis `/alerte/` — le bouton "Modifier dans Alertes internes" de chaque carte y renvoie directement, pré-filtré sur le bon produit via `?product=forticlient` ou `?product=forticlient-ems` dans l'URL (ce paramètre fonctionne sur `/alerte/` en général, pas seulement depuis cette page).
 
 La grille de compatibilité **officielle** de Fortinet (publiée en PDF, `FortiClient_ems-compatibility-matrix.pdf`) est importée automatiquement chaque jour par le timer systemd (voir Planification ci-dessous). Elle peut aussi être relancée à la main :
 
@@ -248,7 +276,7 @@ devient un chemin recommandé stocké pour le modèle `FGT90G`.
 ### Depuis l'interface (recommandé)
 
 ```text
-http://localhost:8000/app/alerte/
+http://localhost:8000/alerte/
 ```
 
 Cette page permet à un ingénieur de déclarer une alerte interne (titre, description, sévérité, moment) en cochant une ou plusieurs versions FortiOS concernées, et en choisissant si elle s'applique à tous les boîtiers ou à une sélection précise. L'alerte est envoyée à l'endpoint local `POST /api/advisories`, qui l'ajoute dans `data/fortios-data.generated.json`. Elle s'affiche ensuite automatiquement dans l'outil principal dès qu'un chemin d'upgrade passe par une des versions concernées, pour un modèle concerné.
@@ -261,7 +289,7 @@ Le champ description accepte une mise en forme légère, avec aperçu en direct 
 - une ligne vide pour démarrer un nouveau paragraphe
 - coller (Ctrl+V) ou glisser une image dans le champ, ou utiliser le bouton Image, pour insérer une capture d'écran (PNG/JPEG/GIF/WEBP, 8 Mo max)
 
-Le rendu (dans `/app/alerte/` comme dans l'outil principal) est toujours construit en DOM à partir de ce texte brut, jamais en interprétant du HTML.
+Le rendu (dans `/alerte/` comme dans l'outil principal) est toujours construit en DOM à partir de ce texte brut, jamais en interprétant du HTML.
 
 Les images sont envoyées à `POST /api/advisory-images`, stockées dans `data/advisory-images/` (non versionné dans Git — voir `.gitignore`, pour ne pas alourdir le dépôt avec des captures potentiellement sensibles) et référencées dans la description via `![alt](/data/advisory-images/...)`. Supprimer une alerte supprime aussi les images qu'elle référence, et modifier une alerte supprime celles qui ne sont plus référencées dans la nouvelle description (une image encore utilisée par une autre alerte n'est jamais supprimée).
 
@@ -291,7 +319,7 @@ adv-7.4.11-traffic-redirect,fortigate-fortios,FGT90G,7.4.11,,,important,Option a
 end",Base interne SNS
 ```
 
-Puis lancer `python3 scripts/fortios_watch.py --base data/fortios-data.generated.json`. La colonne `version` ne prend qu'une seule version par ligne ; pour cibler plusieurs versions avec la même alerte, passer par la page `/app/alerte/` (colonne `versions`, tableau) ou dupliquer la ligne CSV.
+Puis lancer `python3 scripts/fortios_watch.py --base data/fortios-data.generated.json`. La colonne `version` ne prend qu'une seule version par ligne ; pour cibler plusieurs versions avec la même alerte, passer par la page `/alerte/` (colonne `versions`, tableau) ou dupliquer la ligne CSV.
 
 ## CVE PSIRT Fortinet
 
@@ -299,8 +327,8 @@ En plus des alertes internes (bugs remontés par l'équipe), l'outil croise auto
 
 Affichage :
 
-- Sur l'outil principal (`/app/`), chaque version du chemin affiche un badge `🛡 CVE-xxxx-xxxxx` si elle est concernée, et une section dédiée liste les CVE du chemin avec sévérité CVSS, score, lien vers la fiche PSIRT, et indique si le chemin choisi corrige la CVE ou si la version cible reste vulnérable.
-- Sur `/app/forticlient/`, les cartes de combinaisons EMS ↔ FortiClient affichent la même pastille et le même détail si l'une des versions du couple est concernée.
+- Sur l'outil principal (`/`), chaque version du chemin affiche un badge `🛡 CVE-xxxx-xxxxx` si elle est concernée, et une section dédiée liste les CVE du chemin avec sévérité CVSS, score, lien vers la fiche PSIRT, et indique si le chemin choisi corrige la CVE ou si la version cible reste vulnérable.
+- Sur `/forticlient/`, les cartes de combinaisons EMS ↔ FortiClient affichent la même pastille et le même détail si l'une des versions du couple est concernée.
 
 Collecte (`scripts/fortios_watch.py`) :
 
@@ -316,7 +344,7 @@ Une CVE n'est retenue que si elle touche au moins un des 5 produits suivis par l
 
 Écrit par `scripts/fortios_watch.py` (une source par étape de collecte) et par `scripts/import_forticlient_compat.py` (source `compat-matrix`, exécuté dans une étape séparée APRÈS `fortios_watch.py` — voir "Planification" plus bas), sous le même verrou interprocessus que le catalogue principal (`cross_process_lock`). Une source « ignorée » (flag désactivé, ou `--skip-network`) n'est jamais comptée comme un échec ; un échec n'efface jamais la date du dernier succès connu ; l'écriture de l'état de santé ne peut jamais faire échouer la collecte elle-même — un fichier corrompu, tronqué ou de structure invalide est traité comme un état vide (jamais une exception qui interromprait la collecte), et archivé aside (`fortios-health.json.corrupt-<timestamp>`) pour diagnostic plutôt que silencieusement écrasé.
 
-Affiché dans `/app/` sous le bandeau de briefing : section repliable « État des données » avec un point vert/orange/rouge par source (rouge = échecs répétés ou données de plus de 48h, orange = source vieillissante/ignorée/échec isolé, vert = collecte récente réussie), un bandeau d'avertissement si une source est en rouge, et le détail complet par source dans un tableau replié par défaut. Le point global du bandeau (`#healthSummaryDot`) reflète TOUTES les sources, pas seulement `daily-run` : comme `compat-matrix` tourne dans une étape séparée après que `fortios_watch.py` a déjà figé son propre statut `daily-run`, un échec de `compat-matrix` seul doit quand même faire passer le point global au rouge — `daily-run` structurellement ne peut pas savoir ce qu'une étape ultérieure va faire.
+Affiché dans `/` sous le bandeau de briefing : section repliable « État des données » avec un point vert/orange/rouge par source (rouge = échecs répétés ou données de plus de 48h, orange = source vieillissante/ignorée/échec isolé, vert = collecte récente réussie), un bandeau d'avertissement si une source est en rouge, et le détail complet par source dans un tableau replié par défaut. Le point global du bandeau (`#healthSummaryDot`) reflète TOUTES les sources, pas seulement `daily-run` : comme `compat-matrix` tourne dans une étape séparée après que `fortios_watch.py` a déjà figé son propre statut `daily-run`, un échec de `compat-matrix` seul doit quand même faire passer le point global au rouge — `daily-run` structurellement ne peut pas savoir ce qu'une étape ultérieure va faire.
 
 ## Notifications email
 
@@ -436,7 +464,7 @@ Chaque collecte réserve («&nbsp;réclame&nbsp;») les entrées de l'outbox qui
 
 Un fichier `fortios-notify-history.json` existant mais corrompu, tronqué, illisible ou de structure invalide est conservé en place, sans réinitialisation. Les notifications restent suspendues avec une erreur nettoyée ; la collecte continue indépendamment. **Récupération :** conserver ce fichier ainsi que la dernière sauvegarde valide, puis réconcilier checkpoint, outbox et clés d'envoi avant reprise. Ne pas supprimer l'historique comme remède : un nouvel amorçage est silencieux et ne reconstruit pas les événements en attente perdus ; restaurer un ancien checkpoint sans réconciliation peut aussi rejouer des événements déjà envoyés. Les anciennes archives `.corrupt-*` doivent aussi être conservées pour cette réconciliation. Voir [rollback et données persistantes](docs/delivery.md#update--rollback).
 
-L'interface privée `/cert/` expose les onglets **Certificats** et **Notifications** avec la même session administrateur, le même contrôle d'origine et le même jeton CSRF. La section **Configuration SMTP** permet de modifier et d'enregistrer le transport non secret : STARTTLS, TLS implicite, ou mode clair explicitement autorisé. Le mot de passe est saisi séparément dans un champ masqué et n'est jamais relu ; un champ vide le conserve. Les paramètres d'apparence (introduction, nom et signature) entourent le contenu de sécurité généré et ne peuvent pas retirer les CVE, produits, versions, avertissements ou liens obligatoires.
+L'interface privée `/admin/` expose les onglets **Certificats** et **Notifications** avec la même session administrateur, le même contrôle d'origine et le même jeton CSRF. La section **Configuration SMTP** permet de modifier et d'enregistrer le transport non secret : STARTTLS, TLS implicite, ou mode clair explicitement autorisé. Le mot de passe est saisi séparément dans un champ masqué et n'est jamais relu ; un champ vide le conserve. Les paramètres d'apparence (introduction, nom et signature) entourent le contenu de sécurité généré et ne peuvent pas retirer les CVE, produits, versions, avertissements ou liens obligatoires.
 
 Dans **Apparence des emails**, les scénarios fictifs **1 CVE**, **Plusieurs CVE** et **Multi-produits** sont construits uniquement en mémoire par le backend. La route administrateur `/api/cert/notifications/preview` transmet ces événements au renderer autoritatif `fortios_notify.compose_email()` et retourne son vrai sujet, son HTML et son alternative texte ; l'interface n'embarque aucun second template. `/api/cert/notifications/send-preview` recompose les mêmes données et les envoie avec le moteur SMTP existant, même lorsque les notifications sont désactivées. Cet envoi de prévisualisation reste soumis à la session, au contrôle d'origine, au CSRF et au rate limiting des tests SMTP. Il n'écrit ni catalogue, ni paramètres de notification, ni checkpoint, ni outbox, ni `sentKeys`, ni `eolState`. Rollback : retirer ces deux routes et les contrôles d'aperçu ne nécessite aucune migration de données persistantes.
 
@@ -619,7 +647,7 @@ bouton d'import Portainer attend l'archive Docker `.tar` produite par
    FORTIOS_SMTP_STARTTLS=true
    FORTIOS_SMTP_TIMEOUT=10
    FORTIOS_SMTP_FROM=fortiupgrade@example.com
-   FORTIOS_APP_URL=https://upgrade-path.example.internal/app/
+   FORTIOS_APP_URL=https://upgrade-path.example.internal/
    ```
 
    Ce sont des valeurs d'exemple sans secret réel. Ne jamais créer de variable
@@ -649,12 +677,12 @@ préfixés par le nom de la Stack, généralement `upgrade-path_fortios-data` et
 #### 4. Vérifier puis basculer
 
 1. Aller dans **Containers** et ouvrir les logs de `upgrade-path-web-1` : la
-   ligne `FortiOS Upgrade Intelligence: http://0.0.0.0:8000/app/` doit apparaître.
+   ligne `FortiOS Upgrade Intelligence: http://0.0.0.0:8000/` doit apparaître.
 2. Ouvrir les logs de `upgrade-path-scheduler-1` : il doit annoncer le prochain
    créneau de collecte.
 3. Conserver `FORTIOS_RUN_ON_START=0` : les données migrées restent intactes et
    le scheduler attend 07:00/15:30 Europe/Paris.
-4. Accéder depuis le LAN à `http://<IP_LOCALE_DE_LA_VM>:8000/app/`. Autoriser
+4. Accéder depuis le LAN à `http://<IP_LOCALE_DE_LA_VM>:8000/`. Autoriser
    TCP/8000 uniquement depuis les VLAN/sous-réseaux internes nécessaires au
    firewall de la VM. Le TLS direct avec certificat de PKI interne peut ensuite
    être activé sans ajouter de reverse proxy.
@@ -675,7 +703,7 @@ FORTIOS_HTTP_PORT=8000
 ```
 
 Puis cliquer **Update the stack**. L'application sera accessible depuis le LAN
-sur `http://<IP_LOCALE_DE_LA_VM>:8000/app/` (l'IP de la VM, jamais celle du
+sur `http://<IP_LOCALE_DE_LA_VM>:8000/` (l'IP de la VM, jamais celle du
 conteneur). Autoriser le port 8000 uniquement depuis les VLAN/sous-réseaux
 internes nécessaires au niveau du firewall de la VM. Ce mode est du HTTP sans
 TLS ni authentification supplémentaire : les échanges ne sont pas chiffrés et

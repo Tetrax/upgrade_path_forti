@@ -48,7 +48,7 @@ def _wait_until_ready(base_url: str, process: subprocess.Popen, timeout: float) 
             output = process.stdout.read() if process.stdout else ""
             raise RuntimeError(f"fortios_server.py exited early (code {process.returncode}):\n{output}")
         try:
-            with urllib.request.urlopen(f"{base_url}/app/index.html", timeout=1) as response:
+            with urllib.request.urlopen(f"{base_url}/index.html", timeout=1) as response:
                 if response.status == 200:
                     return
         except (urllib.error.URLError, ConnectionError, TimeoutError) as error:
@@ -165,7 +165,7 @@ def fortios_server(tmp_path: Path):
 def app_page(page, fortios_server):
     """A page already navigated to the isolated app, with the catalog loaded."""
     page.on("dialog", lambda dialog: dialog.accept())  # window.confirm() on delete flows
-    page.goto(f"{fortios_server.base_url}/app/")
+    page.goto(f"{fortios_server.base_url}/")
     # state="attached" (not the default "visible"): an <option> element is never considered
     # "visible" by modern Playwright (it only renders inside its closed <select> popup), so the
     # default wait_for_selector() state would time out here even once the catalog has genuinely

@@ -204,7 +204,7 @@ def post_password_change(
 class CertificateWebTests(unittest.TestCase):
     def test_certificate_page_is_hidden_on_plain_http_by_default(self) -> None:
         with running_server({}) as base_url:
-            for path in ("/cert/", "/app/cert/"):
+            for path in ("/admin/", "/admin/cert.js", "/admin/verify-email"):
                 with self.subTest(path=path):
                     with self.assertRaises(urllib.error.HTTPError) as raised:
                         urllib.request.urlopen(f"{base_url}{path}", timeout=2)
@@ -214,7 +214,7 @@ class CertificateWebTests(unittest.TestCase):
     def test_local_development_flag_exposes_the_certificate_login_page(self) -> None:
         with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url:
             try:
-                response = urllib.request.urlopen(f"{base_url}/cert/", timeout=2)
+                response = urllib.request.urlopen(f"{base_url}/admin/", timeout=2)
             except urllib.error.HTTPError as error:
                 response = error
             with response:
@@ -227,9 +227,9 @@ class CertificateWebTests(unittest.TestCase):
 
     def test_certificate_page_contains_the_first_run_account_form(self) -> None:
         with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url:
-            with urllib.request.urlopen(f"{base_url}/cert/", timeout=2) as response:
+            with urllib.request.urlopen(f"{base_url}/admin/", timeout=2) as response:
                 body = response.read().decode("utf-8")
-            with urllib.request.urlopen(f"{base_url}/cert/cert.js", timeout=2) as response:
+            with urllib.request.urlopen(f"{base_url}/admin/cert.js", timeout=2) as response:
                 script = response.read().decode("utf-8")
 
         self.assertIn("Première configuration", body)
@@ -1653,6 +1653,164 @@ class CertificateWebTests(unittest.TestCase):
                     opener.open(upload, timeout=3)
 
             self.assertEqual(raised.exception.code, 403)
+
+
+def request_without_following_redirects(url: str, timeout: float = 5) -> tuple[int, str | None]:
+    """Return (status, Location) for one request, never following a redirection chain."""
+
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(url, timeout=timeout) as response:
+            return response.status, response.headers.get("Location")
+    except urllib.error.HTTPError as error:
+        with error:
+            error.read()
+        return error.code, error.headers.get("Location")
+
+
+class RootAndAdminUrlTests(unittest.TestCase):
+    """The application is served from "/" and the administration from "/admin/", while /app/* and
+    /cert/* keep working as 302 redirects with the query string preserved."""
+
+    def test_legacy_prefixes_redirect_in_a_single_hop(self) -> None:
+        cases = {
+            "/app": "/",
+            "/app/": "/",
+            "/app/index.html": "/index.html",
+            "/app/alerte/": "/alerte/",
+            "/app/forticlient/": "/forticlient/",
+            "/app/shared.css": "/shared.css",
+            "/app/cert": "/admin/",
+            "/app/cert/": "/admin/",
+            "/app/cert/cert.js": "/admin/cert.js",
+            "/cert": "/admin/",
+            "/cert/": "/admin/",
+            "/cert/cert.js": "/admin/cert.js",
+            "/cert/microsoft365-help": "/admin/microsoft365-help",
+            "/cert/microsoft365-guide.md": "/admin/microsoft365-guide.md",
+        }
+        # No session and no TLS: a legacy redirection must never depend on either — the target
+        # itself stays gated by certificate_ui_available().
+        with running_server({}) as base_url:
+            for path, expected in cases.items():
+                with self.subTest(path=path):
+                    status, location = request_without_following_redirects(base_url + path)
+                    self.assertEqual(status, 302)
+                    self.assertEqual(location, expected)
+
+    def test_recovery_links_keep_their_query_string(self) -> None:
+        token = "t" * 43
+        cases = {
+            f"/cert/verify-email?token={token}": f"/admin/verify-email?token={token}",
+            "/cert/reset-password?token=abc123": "/admin/reset-password?token=abc123",
+            "/cert/microsoft365-guide.md?download=1": "/admin/microsoft365-guide.md?download=1",
+        }
+        with running_server({}) as base_url:
+            for path, expected in cases.items():
+                with self.subTest(path=path):
+                    status, location = request_without_following_redirects(base_url + path)
+                    self.assertEqual(status, 302)
+                    self.assertEqual(location, expected)
+
+    def test_redirects_land_on_a_final_page_without_a_loop(self) -> None:
+        with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url:
+            for path in ("/app", "/app/", "/app/alerte/", "/app/forticlient/", "/cert/", "/app/cert/"):
+                hops = 0
+                url = base_url + path
+                status = 0
+                for _ in range(5):
+                    status, location = request_without_following_redirects(url)
+                    if status != 302:
+                        break
+                    hops += 1
+                    url = urllib.parse.urljoin(url, str(location))
+                with self.subTest(path=path):
+                    self.assertEqual(hops, 1)
+                    self.assertEqual(status, 200)
+
+    def test_api_and_data_paths_are_never_redirected(self) -> None:
+        with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url:
+            for path in (
+                "/data/fortios-data.sample.json",
+                "/api/official-path",
+                "/api/advisories",
+                "/api/cert/status",
+            ):
+                with self.subTest(path=path):
+                    status, location = request_without_following_redirects(base_url + path)
+                    self.assertNotEqual(status, 302)
+                    self.assertIsNone(location)
+
+    def test_root_serves_the_application_and_its_assets(self) -> None:
+        with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url, urllib.request.urlopen(
+            f"{base_url}/", timeout=5
+        ) as response:
+            body = response.read().decode("utf-8")
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers.get("Location"), None)
+            self.assertIn("FortiOS Upgrade Intelligence", body)
+            self.assertIn('id="productSelect"', body)
+            for path in ("/shared.css", "/advisory-matching.js", "/alerte/", "/forticlient/", "/index.html"):
+                with self.subTest(path=path):
+                    asset = urllib.request.urlopen(f"{base_url}{path}", timeout=5)
+                    with asset:
+                        self.assertEqual(asset.status, 200)
+
+    def test_repository_files_outside_app_are_not_served(self) -> None:
+        with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url:
+            for path in (
+                "/scripts/fortios_server.py",
+                "/AGENTS.md",
+                "/.git/config",
+                "/deploy/install.sh",
+                "/pytest.ini",
+            ):
+                with self.subTest(path=path):
+                    with self.assertRaises(urllib.error.HTTPError) as raised:
+                        urllib.request.urlopen(f"{base_url}{path}", timeout=5)
+                    self.assertEqual(raised.exception.code, 404)
+
+    def test_admin_tree_keeps_the_strict_security_headers(self) -> None:
+        for path in ("/admin/", "/admin/cert.js"):
+            with self.subTest(path=path), running_server(
+                {"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}
+            ) as base_url, urllib.request.urlopen(f"{base_url}{path}", timeout=5) as response:
+                headers = response.headers
+            self.assertEqual(headers["Cache-Control"], "no-store")
+            self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
+            self.assertEqual(headers["Referrer-Policy"], "no-referrer")
+            self.assertEqual(headers["X-Frame-Options"], "DENY")
+            self.assertEqual(
+                headers["Content-Security-Policy"],
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "img-src 'self'; connect-src 'self'; base-uri 'none'; "
+                "frame-ancestors 'none'; form-action 'self'",
+            )
+
+    def test_admin_spa_uses_root_relative_assets_and_admin_links(self) -> None:
+        with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url, urllib.request.urlopen(
+            f"{base_url}/admin/", timeout=5
+        ) as response:
+            body = response.read().decode("utf-8")
+
+        self.assertIn('href="/shared.css"', body)
+        self.assertIn('href="/admin/microsoft365-guide.md"', body)
+        self.assertNotIn("/app/shared.css", body)
+        self.assertNotIn('href="/app/"', body)
+
+    def test_recovery_pages_are_served_under_admin(self) -> None:
+        with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url:
+            for path in (f"/admin/verify-email?token={'t' * 43}", f"/admin/reset-password?token={'t' * 43}"):
+                with self.subTest(path=path):
+                    page_response = urllib.request.urlopen(f"{base_url}{path}", timeout=5)
+                    with page_response:
+                        body = page_response.read().decode("utf-8")
+                    self.assertEqual(page_response.status, 200)
+                    self.assertIn('id="login-form"', body)
 
 
 if __name__ == "__main__":

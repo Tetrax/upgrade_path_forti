@@ -853,7 +853,7 @@ def login(opener: urllib.request.OpenerDirector, base_url: str) -> str:
 class NotificationAdminWebTests(unittest.TestCase):
     def test_admin_page_exposes_certificate_and_notification_sections(self) -> None:
         with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url, urllib.request.urlopen(
-            f"{base_url}/cert/", timeout=3
+            f"{base_url}/admin/", timeout=3
         ) as response:
             body = response.read().decode("utf-8")
         self.assertIn("Administration", body)

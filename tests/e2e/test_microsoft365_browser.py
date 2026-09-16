@@ -12,7 +12,7 @@ def test_secret_save_preserves_drafts_and_clears_value(page, fortios_server, wid
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.set_viewport_size({"width": width, "height": 1000})
-    page.goto(f"{fortios_server.base_url}/cert/")
+    page.goto(f"{fortios_server.base_url}/admin/")
     page.fill("#username", fortios_server.admin_username)
     page.fill("#password", fortios_server.admin_password)
     page.click("#login-button")
@@ -62,7 +62,7 @@ def test_microsoft365_settings_roundtrip_and_missing_secret(page, fortios_server
             "allowInsecure": False,
             "username": "roundtrip-user",
             "from": "roundtrip@example.invalid",
-            "appUrl": f"{fortios_server.base_url}/app/",
+            "appUrl": f"{fortios_server.base_url}/",
             "timeout": 17,
             "emailAppearance": {
                 "displayName": "Roundtrip fixture",
@@ -72,7 +72,7 @@ def test_microsoft365_settings_roundtrip_and_missing_secret(page, fortios_server
         },
     )
     page.set_viewport_size({"width": width, "height": 1000})
-    page.goto(f"{fortios_server.base_url}/cert/")
+    page.goto(f"{fortios_server.base_url}/admin/")
     page.fill("#username", fortios_server.admin_username)
     page.fill("#password", fortios_server.admin_password)
     page.click("#login-button")
@@ -192,7 +192,7 @@ def test_microsoft365_settings_roundtrip_and_missing_secret(page, fortios_server
         expect(page.locator(f"#{field}")).to_have_value(value)
     expect(page.locator("#m365-secret-status")).to_have_text("Secret non configuré")
     assert page.locator("#microsoft365-settings input[type=password]").count() == 1
-    for path in ("/cert/microsoft365-help", "/cert/microsoft365-guide.md"):
+    for path in ("/admin/microsoft365-help", "/admin/microsoft365-guide.md"):
         response = page.request.get(f"{fortios_server.base_url}{path}")
         assert response.status == 200
         assert "Microsoft" in response.text()

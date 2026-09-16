@@ -361,7 +361,7 @@ class EmailPreviewApiTests(unittest.TestCase):
             }
             with (
                 running_server(environment) as base_url,
-                urllib.request.urlopen(f"{base_url}/cert/", timeout=5) as response,
+                urllib.request.urlopen(f"{base_url}/admin/", timeout=5) as response,
             ):
                 csp = response.headers["Content-Security-Policy"]
 

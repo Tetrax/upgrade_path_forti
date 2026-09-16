@@ -137,7 +137,7 @@ correctif de conservation des états corrompus :
   attente a été ajoutée uniquement à la copie pour tester le cas non vide.
 - Isolation Docker `--network none`, aucun email possible ; copie supprimée
   après recette et données vivantes byte-identiques avant/après.
-- Runtime existant : healthcheck réussi, Nginx valide, helper actif, HTTPS `/app/`
+- Runtime existant : healthcheck réussi, Nginx valide, helper actif, HTTPS `/`
   répond 200. Les parcours authentifiés complets restent validés en isolation,
   sans réinitialisation du compte personnel ni revendication d'accès entreprise.
 
@@ -395,3 +395,32 @@ login on its authorized network before calling the enterprise deployment complet
 On the shared VPS, hold `/home/tetrax/workspace/.locks/valdev-infra.lock` only
 around targeted infrastructure mutation and verification. Do not hold it for builds
 or long tests. Never perform Docker-wide pruning or restart other projects.
+
+## URL migration (root + /admin) and its rollback
+
+The application is served from `/` and the administration from `/admin/`. Legacy prefixes
+(`/app`, `/app/<rest>`, `/app/cert`, `/cert`) answer **302 Found** with the query string preserved,
+so bookmarks and already-delivered recovery emails keep working. The APIs (`/api/cert/*`,
+`/api/official-path`, `/api/advisories`, `/api/advisory-images`, `/api/compatibilities`, `/data/*`)
+are unchanged and never redirected; the session cookie keeps `Path=/api/cert`, so sessions and CSRF
+behaviour do not move. Nginx is untouched: its single `location /` already proxies everything.
+
+Use 302, never 301/308: a permanent redirect is cached almost forever by the browser and would keep
+it requesting `/` and `/admin/` after a rollback to an image that only knows `/app/` and `/cert/`.
+
+Rollback is NOT "restore the previous image" alone — the previous image serves `/app/` and `/cert/`
+and knows nothing about `/` or `/admin/`:
+
+1. restore the previous image reference and `runtime/compose.yml`;
+2. restore `FORTIOS_APP_URL` to its previous `/app/` value;
+3. restore `runtime/data/smtp-settings.json` (`appUrl`) to its previous `/app/` value: that stored
+   value — not the environment — is what the emails actually use, and leaving the new root URL
+   behind would send CTAs to a path the rolled-back image does not serve;
+4. recreate web and scheduler, then verify: web healthy, scheduler running, 0 restart, unchanged
+   `StartedAt`, `/app/` 200, `/cert/` 200, `POST /api/cert/login` 200, persistent state byte-identical.
+
+The pre-switch set is captured in `runtime/rollback/<timestamp>-url-migration/`: previous image
+reference, Compose file, `smtp-settings.json`, previous `FORTIOS_APP_URL` value, container
+`StartedAt`/restart capture and the hashes of every persistent state file. The runtime `appUrl`
+value is only moved to the new root URL **after** the switch has been validated in the browser and
+with a controlled email preview/test.

@@ -47,9 +47,104 @@ class StaticFileTraversalTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0)
 
-    def test_allowed_app_file(self):
-        self.assertTrue(is_served("/app/index.html"))
-        self.assertEqual(translate("/app/index.html"), str(fs.ROOT / "app" / "index.html"))
+    def test_site_root_serves_the_application_tree(self):
+        # The application is mounted on "/": the root URL maps onto app/, never onto the repository
+        # root — that is what keeps /scripts, /deploy or /.git out of the web surface.
+        self.assertTrue(is_served("/"))
+        self.assertEqual(translate("/"), str(fs.ROOT / "app"))
+        self.assertEqual(translate("/index.html"), str(fs.ROOT / "app" / "index.html"))
+
+    def test_translate_path_never_leaves_the_public_trees(self):
+        """Whatever the request, the resolved path stays inside app/, data/ or the admin tree."""
+        public_trees = (
+            fs.ALLOWED_STATIC_DIR_APP,
+            fs.ALLOWED_STATIC_DIR_DATA,
+            fs.ALLOWED_STATIC_DIR_CERT,
+        )
+        for path in (
+            "/",
+            "/index.html",
+            "/shared.css",
+            "/alerte/",
+            "/forticlient/app.js",
+            "/common.js",
+            "/scripts/fortios_server.py",
+            "/AGENTS.md",
+            "/Dockerfile",
+            "/.git/config",
+            "/admin/cert.js",
+            "/data/fortios-data.generated.json",
+            "/cert/",
+            "/app/",
+        ):
+            resolved = Path(translate(path))
+            with self.subTest(path=path):
+                if resolved == fs.ROOT / "__not_served__":
+                    continue
+                self.assertTrue(
+                    any(resolved.is_relative_to(tree) for tree in public_trees),
+                    f"{path} resolved outside the public trees: {resolved}",
+                )
+
+    def test_legacy_ui_prefixes_are_never_served(self):
+        # /app/* and /cert/* are redirect-only (see do_GET/do_HEAD): serving them here too would
+        # give every page two valid URLs, which is exactly what the migration removes.
+        for path in (
+            "/app",
+            "/app/",
+            "/app/index.html",
+            "/app/alerte/",
+            "/app/forticlient/app.js",
+            "/app/cert",
+            "/app/cert/",
+            "/app/cert/cert.js",
+            "/cert",
+            "/cert/",
+            "/cert/cert.js",
+            "/cert/verify-email",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(is_served(path))
+
+    def test_legacy_redirect_targets(self):
+        handler = fs.FortiosHandler.__new__(fs.FortiosHandler)
+        cases = {
+            "/app": "/",
+            "/app/": "/",
+            "/app/index.html": "/index.html",
+            "/app/alerte/": "/alerte/",
+            "/app/forticlient/": "/forticlient/",
+            "/app/cert": "/admin/",
+            "/app/cert/": "/admin/",
+            "/app/cert/cert.js": "/admin/cert.js",
+            "/cert": "/admin/",
+            "/cert/": "/admin/",
+            "/cert/cert.js": "/admin/cert.js",
+            "/cert/verify-email": "/admin/verify-email",
+            "/cert/reset-password": "/admin/reset-password",
+            "/cert/microsoft365-help": "/admin/microsoft365-help",
+            "/cert/microsoft365-guide.md": "/admin/microsoft365-guide.md",
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(handler.legacy_redirect_target(path), expected)
+
+    def test_canonical_paths_are_never_redirected(self):
+        handler = fs.FortiosHandler.__new__(fs.FortiosHandler)
+        for path in (
+            "/",
+            "/index.html",
+            "/alerte/",
+            "/forticlient/",
+            "/admin",
+            "/admin/",
+            "/admin/cert.js",
+            "/api/cert/status",
+            "/api/official-path",
+            "/data/fortios-data.generated.json",
+        ):
+            with self.subTest(path=path):
+                self.assertIsNone(handler.legacy_redirect_target(path))
 
     def test_allowed_data_file(self):
         self.assertTrue(is_served("/data/fortios-data.generated.json"))
@@ -82,16 +177,24 @@ class StaticFileTraversalTests(unittest.TestCase):
                 self.assertFalse(is_served(f"/data/{name}"))
 
     def test_allowed_nested_app_paths(self):
-        self.assertTrue(is_served("/app/"))
-        self.assertTrue(is_served("/app/alerte/"))
-        self.assertTrue(is_served("/app/alerte/app.js"))
+        self.assertTrue(is_served("/"))
+        self.assertTrue(is_served("/alerte/"))
+        self.assertTrue(is_served("/alerte/app.js"))
 
     def test_allowed_certificate_ui_files(self):
-        self.assertTrue(is_served("/cert/"))
-        self.assertEqual(translate("/cert/cert.js"), str(fs.ROOT / "app" / "cert" / "cert.js"))
+        self.assertTrue(is_served("/admin/"))
+        self.assertEqual(
+            translate("/admin/cert.js"), str(fs.ROOT / "app" / "cert" / "cert.js")
+        )
 
     def test_denies_direct_script_access(self):
-        self.assertFalse(is_served("/scripts/fortios_server.py"))
+        # /scripts/... can only resolve inside app/ (where no scripts/ tree exists), never to the
+        # repository's own scripts/ directory. The HTTP-level 404 is asserted by the running-server
+        # tests, which is where the real guarantee lives.
+        resolved = Path(translate("/scripts/fortios_server.py"))
+        self.assertNotEqual(resolved, fs.ROOT / "scripts" / "fortios_server.py")
+        self.assertTrue(resolved.is_relative_to(fs.ALLOWED_STATIC_DIR_APP))
+        self.assertFalse(resolved.exists())
 
     def test_denies_literal_traversal(self):
         self.assertFalse(is_served("/data/../scripts/fortios_server.py"))
@@ -109,8 +212,28 @@ class StaticFileTraversalTests(unittest.TestCase):
     def test_denies_traversal_into_git(self):
         self.assertFalse(is_served("/app/../.git/config"))
 
-    def test_denies_bare_root(self):
-        self.assertFalse(is_served("/"))
+    def test_denies_bare_root_of_the_repository(self):
+        # "/" now serves the application: the guarantee is not "no bare root" anymore, it is that
+        # the repository root itself is never reachable through it.
+        self.assertEqual(translate("/"), str(fs.ALLOWED_STATIC_DIR_APP))
+        for path in ("/.git/config", "/AGENTS.md", "/requirements-runtime.txt", "/pytest.ini"):
+            with self.subTest(path=path):
+                resolved = Path(translate(path))
+                self.assertTrue(
+                    resolved == fs.ROOT / "__not_served__"
+                    or resolved.is_relative_to(fs.ALLOWED_STATIC_DIR_APP)
+                )
+                self.assertFalse(resolved == fs.ROOT / path.lstrip("/"))
+
+    def test_denies_traversal_out_of_the_legacy_prefixes(self):
+        for path in (
+            "/app/../.git/config",
+            "/app/%2e%2e%2f.git/config",
+            "/admin/../scripts/fortios_server.py",
+            "/admin/%2e%2e%2fscripts/fortios_server.py",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(is_served(path))
 
     def test_denies_deep_traversal(self):
         self.assertFalse(is_served("/../../../etc/passwd"))
@@ -206,8 +329,8 @@ class TestDataDirOverrideTests(unittest.TestCase):
         )
 
     def test_app_requests_still_resolve_against_the_real_root_when_overridden(self):
-        self.assertTrue(is_served("/app/index.html"))
-        self.assertEqual(translate("/app/index.html"), str(fs.ROOT / "app" / "index.html"))
+        self.assertTrue(is_served("/index.html"))
+        self.assertEqual(translate("/index.html"), str(fs.ROOT / "app" / "index.html"))
 
     def test_traversal_out_of_the_override_dir_is_still_denied(self):
         self.assertFalse(is_served("/data/../scripts/fortios_server.py"))

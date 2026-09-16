@@ -137,7 +137,7 @@ def footer(canvas, doc):
 doc = SimpleDocTemplate(OUT, pagesize=A4, rightMargin=1.4 * cm, leftMargin=1.4 * cm, topMargin=1.35 * cm, bottomMargin=1.7 * cm, title="Migration Upgrade Path vers Portainer")
 story = []
 story += [Spacer(1, 1.5 * cm), p("Upgrade Path", "CoverTitle"), p("Migration vers une VM interne via Portainer Community Edition", "Subtitle")]
-story.append(callout("Objectif", "Déployer l'application <b>sans Nginx interne</b>, accessible depuis le LAN sur <b>http://IP_LOCALE_VM:8000/app/</b>. Les données actuelles sont transportées dans l'image initiale puis conservées dans des volumes Docker nommés.", LIGHT_GREEN))
+story.append(callout("Objectif", "Déployer l'application <b>sans Nginx interne</b>, accessible depuis le LAN sur <b>http://IP_LOCALE_VM:8000/</b>. Les données actuelles sont transportées dans l'image initiale puis conservées dans des volumes Docker nommés.", LIGHT_GREEN))
 story += [Spacer(1, 0.5 * cm), p("Pré-requis", "H1x")]
 for item in [
     "Une VM interne avec Docker et Portainer Community Edition fonctionnels.",
@@ -179,13 +179,13 @@ story += [bullet("Cliquer <b>Deploy the stack</b>."), callout("Notifications ema
 story += [p("4. Vérifier le démarrage", "H1x")]
 for item in [
     "Dans <b>Containers</b>, vérifier que <b>upgrade-path-web-1</b> et <b>upgrade-path-scheduler-1</b> sont démarrés.",
-    "Ouvrir les logs de <b>upgrade-path-web-1</b> : une ligne proche de <b>FortiOS Upgrade Intelligence: http://0.0.0.0:8000/app/</b> doit apparaître.",
+    "Ouvrir les logs de <b>upgrade-path-web-1</b> : une ligne proche de <b>FortiOS Upgrade Intelligence: http://0.0.0.0:8000/</b> doit apparaître.",
     "Ouvrir les logs de <b>upgrade-path-scheduler-1</b> : il doit annoncer le prochain créneau de collecte.",
     "Conserver <b>FORTIOS_RUN_ON_START=0</b>. Le scheduler attendra automatiquement 07:00 (collecte complète) et 15:30 (CVE), heure Europe/Paris.",
 ]: story.append(bullet(item))
 
 story += [p("5. Accès LAN sans Nginx", "H1x")]
-story += [callout("URL d'accès", "Depuis un poste autorisé du réseau interne, ouvrir :<br/><b>http://IP_LOCALE_DE_LA_VM:8000/app/</b><br/><br/>Utiliser l'adresse IP de la VM Docker, jamais l'adresse IP interne d'un conteneur.", LIGHT_GREEN)]
+story += [callout("URL d'accès", "Depuis un poste autorisé du réseau interne, ouvrir :<br/><b>http://IP_LOCALE_DE_LA_VM:8000/</b><br/><br/>Utiliser l'adresse IP de la VM Docker, jamais l'adresse IP interne d'un conteneur.", LIGHT_GREEN)]
 story += [Spacer(1, 0.2 * cm)]
 for item in [
     "Autoriser TCP/8000 sur le firewall de la VM uniquement depuis les VLAN ou sous-réseaux internes nécessaires.",
