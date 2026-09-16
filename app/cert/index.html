@@ -144,6 +144,7 @@
       <nav class="admin-tabs" aria-label="Sections d’administration">
         <button class="admin-tab active" id="certificates-tab" type="button" aria-controls="certificates-section">Certificats</button>
         <button class="admin-tab" id="notifications-tab" type="button" aria-controls="notifications-section">Notifications</button>
+        <button class="admin-tab" id="system-tab" type="button" aria-controls="system-section">Système</button>
         <button class="admin-tab" id="account-tab" type="button" aria-controls="account-section">Compte</button>
       </nav>
 
@@ -593,10 +594,29 @@
           </form>
         </div>
 
+        <!-- Inert form owner: it keeps the test recipient's `required` check for the test flow
+             (the button calls reportValidity()) without letting it block "Enregistrer la
+             configuration email". Never submitted. -->
+        <form id="test-email-form" hidden></form>
+      </section>
+
+      <section id="system-section" hidden>
+        <div class="notifications-heading">
+          <div>
+            <p class="eyebrow">Exploitation</p>
+            <h2>Système</h2>
+            <p>Informations techniques et contrôles de la chaîne de livraison. Ces réglages sont indépendants des alertes Fortinet de l'onglet Notifications.</p>
+          </div>
+        </div>
+
+        <!-- Déplacé tel quel depuis l'onglet Notifications : mêmes cartes, mêmes identifiants,
+             mêmes gestionnaires et même endpoint. Aucun comportement n'a changé avec le
+             déplacement. Deux colonnes dès que la largeur le permet, empilées en dessous. -->
+        <div class="system-columns">
         <!-- Sécurité de l'image Docker : catégorie distincte, document de préférences distinct et
              endpoint distinct. Un refus d'enregistrement ici ne touche ni les préférences CVE ni la
              configuration SMTP, et réciproquement. -->
-        <div class="notifications-columns">
+        <div class="system-columns">
           <form id="container-security-form" class="panel settings-panel notifications-alerts">
             <div class="panel-header result-heading">
               <div>
@@ -643,11 +663,7 @@
             </div>
           </section>
         </div>
-
-        <!-- Inert form owner: it keeps the test recipient's `required` check for the test flow
-             (the button calls reportValidity()) without letting it block "Enregistrer la
-             configuration email". Never submitted. -->
-        <form id="test-email-form" hidden></form>
+        </div>
       </section>
     </section>
   </main>
