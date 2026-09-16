@@ -114,6 +114,19 @@ _SETTINGS_PRODUCT_KEYS = (
     "fortianalyzer",
     "forticlient-ems",
 )
+# Every key below must be present. releaseNotificationsEnabled is deliberately NOT listed here:
+# a settings file written before release notifications existed carries no such key, and must keep
+# loading unchanged (see validate_notification_settings). Any other key stays rejected.
+_NOTIFICATION_SETTINGS_REQUIRED_KEYS = (
+    "enabled",
+    "minimumSeverity",
+    "products",
+    "recipients",
+)
+_NOTIFICATION_SETTINGS_OPTIONAL_KEYS = ("releaseNotificationsEnabled",)
+_NOTIFICATION_SETTINGS_ALLOWED_KEYS = frozenset(
+    (*_NOTIFICATION_SETTINGS_REQUIRED_KEYS, *_NOTIFICATION_SETTINGS_OPTIONAL_KEYS)
+)
 _FORTICLIENT_PLATFORM_KEYS = ("windows", "macos", "linux")
 _MONITORED_SEVERITIES = frozenset({"high", "critical"})
 _SEVERITY_RANK = {"unknown": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
@@ -131,6 +144,7 @@ PRODUCT_DISPLAY_LABELS = {
 def _default_notification_settings_payload() -> dict[str, Any]:
     return {
         "enabled": False,
+        "releaseNotificationsEnabled": False,
         "minimumSeverity": "high",
         "products": {
             **{key: True for key in _SETTINGS_PRODUCT_KEYS},
@@ -146,10 +160,15 @@ class NotificationSettings:
     minimum_severity: str
     products: dict[str, Any]
     recipients: tuple[str, ...]
+    # Release ("nouvelle version") notifications are gated independently of `enabled`, which
+    # keeps its historical meaning for CVEs and for the system categories (EOL, collection
+    # health, recovery). See fortios_watch's notification block for the derivation gates.
+    release_notifications_enabled: bool = False
 
     def to_payload(self) -> dict[str, Any]:
         return {
             "enabled": self.enabled,
+            "releaseNotificationsEnabled": self.release_notifications_enabled,
             "minimumSeverity": self.minimum_severity,
             "products": {
                 **{key: self.products[key] for key in _SETTINGS_PRODUCT_KEYS},
@@ -172,15 +191,25 @@ class NotificationSettings:
 
 
 def validate_notification_settings(payload: Any) -> NotificationSettings:
-    if not isinstance(payload, dict) or set(payload) != {
-        "enabled",
-        "minimumSeverity",
-        "products",
-        "recipients",
-    }:
+    if not isinstance(payload, dict) or not (
+        set(_NOTIFICATION_SETTINGS_REQUIRED_KEYS)
+        <= set(payload)
+        <= _NOTIFICATION_SETTINGS_ALLOWED_KEYS
+    ):
         raise ValueError("Configuration de notifications invalide.")
     if not isinstance(payload["enabled"], bool):
         raise TypeError("Le champ enabled doit être un booléen.")
+    # A settings file written before release notifications existed carries no
+    # releaseNotificationsEnabled key at all: it then inherits `enabled`, so this version never
+    # changes the behaviour of an existing installation. Unknown keys (including a misspelled
+    # option) are still rejected by the check above rather than silently ignored.
+    release_notifications_enabled = payload.get(
+        "releaseNotificationsEnabled", payload["enabled"]
+    )
+    if not isinstance(release_notifications_enabled, bool):
+        raise TypeError(
+            "Le champ releaseNotificationsEnabled doit être un booléen."
+        )
     if payload["minimumSeverity"] != "high":
         raise ValueError("La sévérité minimale doit être high.")
 
@@ -223,11 +252,16 @@ def validate_notification_settings(payload: Any) -> NotificationSettings:
             "forticlient": dict(forticlient),
         },
         recipients=tuple(normalized),
+        release_notifications_enabled=release_notifications_enabled,
     )
 
 
 def _legacy_settings_from_env(env: dict[str, str]) -> NotificationSettings:
     payload = _default_notification_settings_payload()
+    # An environment-only installation has no settings file either: it inherits release
+    # notifications from FORTIOS_EMAIL_ENABLED exactly like a legacy file inherits them from
+    # `enabled`, so migrating to this version keeps sending what it already sent.
+    payload.pop("releaseNotificationsEnabled", None)
     payload["enabled"] = _env_bool(env, "FORTIOS_EMAIL_ENABLED", False)
     payload["recipients"] = [
         address.strip()
@@ -349,6 +383,10 @@ class EmailConfig:
     graph_mailbox_identity: str = ""
     smtp_password_storage_state: str = SMTP_PASSWORD_STORAGE_UNAVAILABLE
     smtp_password_write_available: bool = False
+    # Independent gate for release ("nouvelle version") notifications. `enabled` keeps its
+    # historical meaning (CVE + system categories); a release-only notification must still be
+    # deliverable when `enabled` is false, which is why the send gate reads both flags.
+    release_notifications_enabled: bool = False
 
     def is_complete(self) -> bool:
         if self.transport == EMAIL_TRANSPORT_MICROSOFT365:
@@ -1604,6 +1642,7 @@ def load_smtp_snapshot(
         )
         config = EmailConfig(
             enabled=settings.enabled,
+            release_notifications_enabled=settings.release_notifications_enabled,
             smtp_host=smtp.host,
             smtp_port=smtp.port,
             smtp_username=smtp.username,
@@ -2360,7 +2399,21 @@ def derive_version_events(
     before_versions_by_product: dict[str, set[str]],
     after_versions_by_product: dict[str, set[str]],
     product_labels: dict[str, str],
+    *,
+    detected_at: str | None = None,
+    release_links: dict[str, dict[str, str]] | None = None,
 ) -> list[NotificationEvent]:
+    """One event per version newly present in the catalog for a notifiable product.
+
+    ``detected_at`` is the collection timestamp the version was observed at, and
+    ``release_links`` maps product id -> version -> Fortinet release-notes URL. Both stay
+    optional: an event derived without them is still complete for routing and delivery.
+
+    The dedup key is deliberately unchanged (``new-version|<product>|<product>|<version>``), so
+    an event already queued in the outbox or already recorded in sentKeys keeps matching: the
+    structured details added for the renderer can never turn a known release into a new one.
+    """
+    links = release_links or {}
     events = []
     for product_id in NOTIFIABLE_VERSION_PRODUCTS:
         short_name = PRODUCT_SHORT_NAMES[product_id]
@@ -2370,11 +2423,23 @@ def derive_version_events(
         )
         label = product_labels.get(product_id, product_id)
         for version in new_versions:
+            details: dict[str, Any] = {
+                "kind": "release",
+                "product": product_id,
+                "productLabel": label,
+                "version": version,
+            }
+            if detected_at:
+                details["detectedAt"] = detected_at
+            release_notes_url = (links.get(product_id) or {}).get(version)
+            if release_notes_url:
+                details["releaseNotesUrl"] = release_notes_url
             events.append(
                 NotificationEvent(
                     category=CATEGORY_DAILY,
                     dedup_key=f"new-version|{short_name}|{short_name}|{version}",
                     summary=f"Nouvelle version {label} {version}",
+                    details=details,
                 )
             )
     return events
@@ -2700,6 +2765,19 @@ def _apply_email_appearance(
     return rendered_text, rendered_html
 
 
+def _is_release_event(event: NotificationEvent) -> bool:
+    """True for a release ("nouvelle version") event, structured details or not.
+
+    The ``new-version|`` dedup-key prefix is the historical, stable format for this category
+    (see derive_version_events: it never changes, so an already-sent release is never
+    re-notified). An entry queued by a build that predates ``details.kind`` therefore still
+    renders through the release email instead of the legacy plain-text summary.
+    """
+    return event.details.get("kind") == "release" or event.dedup_key.startswith(
+        "new-version|"
+    )
+
+
 def compose_email(
     events: list[NotificationEvent],
     *,
@@ -2710,10 +2788,13 @@ def compose_email(
     """Folds every event from a single run into one synthetic email (never one email per
     event, to avoid spamming) -- returns None if there's nothing to report.
 
-    Security (CVE) events are rendered by scripts/fortios_email_render.py, the single
-    authoritative renderer for the SNS identity. Non-security events (new versions, EOL,
-    health) are folded in as an "Autres événements" section; when only those exist, the
-    historical plain-text summary is kept unchanged.
+    Three rendering paths, decided by what the batch actually contains:
+    - at least one security (CVE) event -> scripts/fortios_email_render.py's SNS CVE email,
+      the single authoritative renderer for that identity; releases and the system categories
+      (EOL, collection health) are folded in as an "Autres événements" section;
+    - no CVE but at least one release ("nouvelle version") event -> the same module's release
+      email, which reuses the SNS shell without the CVE business components;
+    - neither -> the historical plain-text summary, unchanged (EOL/health only).
     """
     if not events:
         return None
@@ -2731,6 +2812,24 @@ def compose_email(
             app_url=app_url,
             run_timestamp=run_timestamp,
             other_events=non_security or None,
+            display_name=display_name,
+            introduction=introduction,
+            signature=signature,
+        )
+
+    release = [event for event in events if _is_release_event(event)]
+    if release:
+        non_release = [event for event in events if not _is_release_event(event)]
+        display_name = (
+            appearance.display_name if appearance is not None else "FortiUpgrade"
+        )
+        introduction = appearance.introduction if appearance is not None else ""
+        signature = appearance.signature if appearance is not None else ""
+        return fortios_email_render.compose_release_email(
+            release,
+            app_url=app_url,
+            run_timestamp=run_timestamp,
+            other_events=non_release or None,
             display_name=display_name,
             introduction=introduction,
             signature=signature,
@@ -2777,13 +2876,47 @@ def compose_email(
     return subject, text_body, html_body
 
 
-EMAIL_PREVIEW_SCENARIOS = frozenset({"single", "multiple", "multi-product"})
+EMAIL_PREVIEW_SCENARIOS = frozenset(
+    {"single", "multiple", "multi-product", "release", "release-multi"}
+)
+RELEASE_PREVIEW_SCENARIOS = frozenset({"release", "release-multi"})
 
 
-def build_email_preview_events(scenario: str) -> list[NotificationEvent]:
-    """Build explicit, synthetic CVE fixtures in memory for the admin preview only."""
+def build_email_preview_events(
+    scenario: str, *, detected_at: str | None = None
+) -> list[NotificationEvent]:
+    """Build explicit, synthetic fixtures in memory for the admin preview only.
+
+    ``detected_at`` is the preview run timestamp, so a release preview shows a real
+    detection date instead of an empty one. It is ignored by the CVE scenarios.
+    """
     if not isinstance(scenario, str) or scenario not in EMAIL_PREVIEW_SCENARIOS:
         raise ValueError("Scénario d'aperçu invalide.")
+
+    if scenario in RELEASE_PREVIEW_SCENARIOS:
+        # Rendered by the real release composer, never by a preview-only copy of it. The
+        # versions and release-notes URLs below exist in the Fortinet catalog.
+        before = {"fortigate-fortios": {"8.0.0"}}
+        after = {"fortigate-fortios": {"8.0.0", "8.0.1"}}
+        if scenario == "release-multi":
+            before["fortimanager"] = {"7.6.6"}
+            after["fortimanager"] = {"7.6.6", "7.6.7"}
+        return derive_version_events(
+            before,
+            after,
+            {"fortigate-fortios": "FortiGate / FortiOS", "fortimanager": "FortiManager"},
+            detected_at=detected_at,
+            release_links={
+                "fortigate-fortios": {
+                    "8.0.1": (
+                        "https://docs.fortinet.com/document/fortigate/8.0.1/fortios-release-notes"
+                    )
+                },
+                "fortimanager": {
+                    "7.6.7": "https://docs.fortinet.com/document/fortimanager/7.6.7/release-notes"
+                },
+            },
+        )
 
     fortios_branches = [
         {"product": "fortigate-fortios", "branch": "7.0"},
@@ -2855,7 +2988,7 @@ def compose_email_preview(
     if not _is_valid_notify_timestamp(run_timestamp):
         raise ValueError("Horodatage d'aperçu invalide.")
     composed = compose_email(
-        build_email_preview_events(scenario),
+        build_email_preview_events(scenario, detected_at=run_timestamp),
         app_url=app_url,
         run_timestamp=run_timestamp,
         appearance=appearance,
@@ -3401,7 +3534,7 @@ def send_email_result(
     (e.g. a fat-fingered FORTIOS_SMTP_FROM, or a "To" header injection attempt) -- building the
     message before the try block used to let exactly that kind of ValueError escape uncaught.
     """
-    if not config.enabled and not force:
+    if not (config.enabled or config.release_notifications_enabled) and not force:
         result = SmtpResult(False, "Notifications désactivées.", transport=config.transport)
         if config.transport == EMAIL_TRANSPORT_MICROSOFT365:
             _log_graph_result("config", result)

@@ -69,6 +69,23 @@ Les identifiants produits du catalogue constituent une taxonomie commune à tout
 
 `scripts/fortios_notify.py` est le moteur autoritatif des notifications. Les notifications restent rattachées au cycle de collecte existant ; elles ne doivent pas introduire un second pipeline de collecte ou un état concurrent.
 
+### Catégories et commutateurs
+
+Deux commutateurs fonctionnels indépendants, persistés dans `data/notification-settings.json` :
+
+- `enabled` — portée **historique** : les CVE **et** les catégories système (fin de support, échecs répétés de collecte, retours à la normale, reprise de compatibilité). Ce n’est pas un alias des CVE ; le réduire à cette seule catégorie casserait les notifications système existantes.
+- `releaseNotificationsEnabled` — les alertes de **nouvelles versions** uniquement.
+
+Les destinataires, l’apparence et le transport restent communs aux deux catégories, et une collecte produit toujours au maximum un email synthétique.
+
+Un fichier `notification-settings.json` écrit avant l’existence de `releaseNotificationsEnabled` n’en contient pas la clé : il l’hérite alors de `enabled`. Le chargement d’un fichier légitime ne doit ni déclencher la reprise « configuration corrompue », ni perdre les destinataires existants, ni réécrire le fichier. Le champ est **optionnel** au chargement ; les véritables clés inconnues restent rejetées.
+
+Le commutateur des versions ne conditionne que la dérivation de `derive_version_events()`. Lorsqu’il est désactivé, le point de contrôle `versionsByProduct` continue d’avancer : une réactivation ne doit provoquer aucun rattrapage historique.
+
+La clé de déduplication des versions (`new-version|<produit>|<produit>|<version>`) est un format historique stable : elle ne doit jamais changer, sinon une release déjà envoyée serait renotifiée.
+
+Les emails de nouvelles versions utilisent un composer dédié (`fortios_email_render.compose_release_email`) qui réutilise l’identité SNS (hero, logo, panthère, palette, CTA, pied Support) sans reprendre les composants métier des CVE (badge de sévérité, compteurs, détail par CVE). Un email ne contenant que des nouvelles versions n’utilise plus le rendu texte historique.
+
 ### Règles High/Critical
 
 Une notification CVE est créée uniquement pour :

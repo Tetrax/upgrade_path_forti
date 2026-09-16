@@ -17,7 +17,9 @@ Design constraints (Outlook desktop / Microsoft 365 first, then Gmail / Apple Ma
 from __future__ import annotations
 
 import base64
+import datetime
 import html
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -170,6 +172,158 @@ def _single_event_product_labels(event: Any) -> list[str]:
     return [str(label) for label in event.details.get("productLabels") or []]
 
 
+def _other_events_text(other_events: list[Any] | None) -> list[str]:
+    """Shared text rendering of the non-security section, used by every composer."""
+    other_events = other_events or []
+    if not other_events:
+        return []
+    shown = other_events[:20]
+    lines = ["Autres événements :"]
+    lines.extend(f"- {event.summary}" for event in shown)
+    if len(other_events) > len(shown):
+        lines.append(f"... et {len(other_events) - len(shown)} de plus (liste tronquée).")
+    lines.append("")
+    return lines
+
+
+def _other_events_html(other_events: list[Any] | None) -> str:
+    """Shared HTML rendering of the non-security section, used by every composer."""
+    other_events = other_events or []
+    if not other_events:
+        return ""
+    shown = other_events[:20]
+    items = "".join(
+        f"<li style='margin:0 0 6px;font-size:14px;color:{SNS_BLACK}'>"
+        f"{html.escape(event.summary)}</li>"
+        for event in shown
+    )
+    if len(other_events) > len(shown):
+        items += (
+            f"<li style='margin:0;font-size:14px;color:{SNS_GRAY_TEXT}'>"
+            f"… et {len(other_events) - len(shown)} de plus (liste tronquée).</li>"
+        )
+    return (
+        "<tr><td style='padding:0 20px 20px'>"
+        f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
+        "margin:0 0 10px'>AUTRES ÉVÉNEMENTS</div>"
+        f"<ul style='margin:0;padding:0 0 0 18px'>{items}</ul>"
+        "</td></tr>"
+    )
+
+
+def _document_head() -> str:
+    """Outer document shell: doctype, responsive style, MSO container, inner 680px table."""
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' "
+        "content='width=device-width,initial-scale=1'>"
+        "<style>"
+        "@media only screen and (max-width:600px){"
+        ".hero-col{display:block!important;width:100%!important;box-sizing:border-box!important;"
+        "padding:20px!important;text-align:left!important}"
+        ".hero-col img{max-width:160px!important}"
+        ".hero-col .panther-img{max-width:200px!important}"
+        "}"
+        "</style></head>"
+        "<body style='margin:0;padding:0;background:#ececee;"
+        f"font-family:Arial,Helvetica,sans-serif;color:{SNS_BLACK}'>"
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0'>"
+        "<tr><td align='center' style='padding:20px 12px'>"
+        # Bulletproof container: width:100% + max-width for modern clients and mobile;
+        # the conditional MSO table forces the 680px fixed width for Outlook desktop.
+        "<!--[if mso]><table role='presentation' width='680' cellpadding='0' cellspacing='0'><tr><td><![endif]-->"
+        f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        f"style='border-collapse:collapse;background:{SNS_WHITE};width:100%;max-width:680px'>"
+    )
+
+
+def _document_tail() -> str:
+    return (
+        "</table>"
+        "<!--[if mso]></td></tr></table><![endif]-->"
+        "</td></tr>"
+        "</table>"
+        "</body></html>"
+    )
+
+
+def _hero_html(*, display_name: str, hero_title: str, run_date: str) -> str:
+    """Black SNS hero: logo, ALERTE INTERNE / FORTIUPGRADE identity, title, panther."""
+    return (
+        f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        f"style='border-collapse:collapse;background:{SNS_BLACK}'>"
+        "<tr>"
+        "<td class='hero-col' width='58%' style='padding:28px 28px 26px;vertical-align:top'>"
+        "<img src='cid:sns-logo' alt='SNS SECURITY' width='180' height='83' "
+        "style='display:block;border:0;width:100%;max-width:180px;height:auto'>"
+        "<div style='margin-top:22px;font-size:11px;font-weight:700;color:#f5c6dd;"
+        "letter-spacing:2px'>ALERTE INTERNE</div>"
+        f"<div style='margin-top:6px;font-size:18px;font-weight:800;color:{SNS_WHITE}'>"
+        f"{html.escape(display_name)}</div>"
+        "<div style='margin-top:2px;font-size:11px;color:#9a9aa3;letter-spacing:2px'>"
+        "FORTIUPGRADE</div>"
+        f"<div style='margin-top:20px;font-size:26px;line-height:1.25;font-weight:700;"
+        f"color:{SNS_WHITE}'>{html.escape(hero_title)}</div>"
+        f"<div style='margin-top:10px;font-size:13px;color:#b9b9c2'>Collecte : "
+        f"{html.escape(run_date)}</div>"
+        "</td>"
+        "<td class='hero-col' width='42%' style='padding:28px 28px 26px 0;"
+        "text-align:right;vertical-align:middle'>"
+        "<img class='panther-img' src='cid:sns-panther' alt='' width='200' height='94' "
+        "style='display:inline-block;border:0;width:100%;max-width:200px;height:auto'>"
+        "</td>"
+        "</tr>"
+        "</table>"
+    )
+
+
+def _introduction_html(introduction: str) -> str:
+    """Optional custom appearance: introduction paragraph after the hero."""
+    if not introduction:
+        return ""
+    return (
+        "<tr><td style='padding:22px 20px 0'>"
+        f"<div style='font-size:14px;color:{SNS_BLACK};line-height:1.5'>"
+        f"{html.escape(introduction)}</div>"
+        "</td></tr>"
+    )
+
+
+def _cta_html(app_url: str) -> str:
+    return (
+        "<tr><td style='padding:8px 20px 22px'>"
+        f"<div style='font-size:13px;color:{SNS_GRAY_TEXT};line-height:1.5'>"
+        "Cet email a été généré automatiquement par FortiUpgrade.<br>"
+        "Merci de ne pas répondre à cet email.</div>"
+        f"<div style='margin-top:16px'><a href='{html.escape(app_url, quote=True)}' "
+        f"style='display:inline-block;background:{SNS_BLACK};color:{SNS_WHITE};"
+        "font-size:14px;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:3px'>"
+        "OUVRIR FORTIUPGRADE →</a></div>"
+        "</td></tr>"
+    )
+
+
+def _footer_html(signature: str) -> str:
+    signature_html = ""
+    if signature:
+        signature_html = (
+            f"<div style='font-size:12px;color:#9a9aa3;margin-top:10px'>"
+            f"{html.escape(signature)}</div>"
+        )
+    return (
+        "<tr><td style='padding:26px 20px 26px;background:#0B0B0D'>"
+        "<img src='cid:sns-logo' alt='SNS SECURITY' width='140' height='65' "
+        "style='display:block;border:0;width:100%;max-width:140px;height:auto;margin:0 0 14px'>"
+        f"<div style='font-size:12px;font-weight:700;color:{SNS_WHITE};letter-spacing:1px'>"
+        "ÉQUIPE SUPPORT</div>"
+        f"<div style='font-size:12px;color:#9a9aa3;margin-top:4px'>"
+        "Veille • Expertise • Réactivité</div>"
+        f"{signature_html}"
+        "</td></tr>"
+    )
+
+
+
+
 def compose_text_body(
     security_events: list[Any],
     *,
@@ -239,14 +393,7 @@ def compose_text_body(
             ]
         )
 
-    other_events = other_events or []
-    if other_events:
-        shown = other_events[:20]
-        lines.append("Autres événements :")
-        lines.extend(f"- {event.summary}" for event in shown)
-        if len(other_events) > len(shown):
-            lines.append(f"... et {len(other_events) - len(shown)} de plus (liste tronquée).")
-        lines.append("")
+    lines.extend(_other_events_text(other_events))
 
     lines.extend(
         [
@@ -379,162 +526,54 @@ def compose_html_body(
             "</table>"
         )
 
-    other_html = ""
-    other_events = other_events or []
-    if other_events:
-        shown = other_events[:20]
-        items = "".join(
-            f"<li style='margin:0 0 6px;font-size:14px;color:{SNS_BLACK}'>"
-            f"{html.escape(event.summary)}</li>"
-            for event in shown
-        )
-        if len(other_events) > len(shown):
-            items += (
-                f"<li style='margin:0;font-size:14px;color:{SNS_GRAY_TEXT}'>"
-                f"… et {len(other_events) - len(shown)} de plus (liste tronquée).</li>"
-            )
-        other_html = (
-            "<tr><td style='padding:0 20px 20px'>"
-            f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
-            "margin:0 0 10px'>AUTRES ÉVÉNEMENTS</div>"
-            f"<ul style='margin:0;padding:0 0 0 18px'>{items}</ul>"
-            "</td></tr>"
-        )
+    other_html = _other_events_html(other_events)
 
     run_date = run_timestamp[:10]
 
-    # --- Hero (black) -------------------------------------------------------
-    # Two-column on desktop (text left, panther right); the .hero-col media query
-    # stacks them full-width on narrow screens so the title never clips.
-    hero = (
-        f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
-        f"style='border-collapse:collapse;background:{SNS_BLACK}'>"
-        "<tr>"
-        "<td class='hero-col' width='58%' style='padding:28px 28px 26px;vertical-align:top'>"
-        "<img src='cid:sns-logo' alt='SNS SECURITY' width='180' height='83' "
-        "style='display:block;border:0;width:100%;max-width:180px;height:auto'>"
-        "<div style='margin-top:22px;font-size:11px;font-weight:700;color:#f5c6dd;"
-        "letter-spacing:2px'>ALERTE INTERNE</div>"
-        f"<div style='margin-top:6px;font-size:18px;font-weight:800;color:{SNS_WHITE}'>"
-        f"{html.escape(display_name)}</div>"
-        "<div style='margin-top:2px;font-size:11px;color:#9a9aa3;letter-spacing:2px'>"
-        "FORTIUPGRADE</div>"
-        f"<div style='margin-top:20px;font-size:26px;line-height:1.25;font-weight:700;"
-        f"color:{SNS_WHITE}'>{html.escape(hero_title)}</div>"
-        f"<div style='margin-top:10px;font-size:13px;color:#b9b9c2'>Collecte : "
-        f"{html.escape(run_date)}</div>"
-        "</td>"
-        "<td class='hero-col' width='42%' style='padding:28px 28px 26px 0;"
-        "text-align:right;vertical-align:middle'>"
-        "<img class='panther-img' src='cid:sns-panther' alt='' width='200' height='94' "
-        "style='display:inline-block;border:0;width:100%;max-width:200px;height:auto'>"
-        "</td>"
-        "</tr>"
-        "</table>"
-    )
-
-    # Optional custom appearance: introduction paragraph after the hero, signature in the footer.
-    introduction_html = ""
-    if introduction:
-        introduction_html = (
-            "<tr><td style='padding:22px 20px 0'>"
-            f"<div style='font-size:14px;color:{SNS_BLACK};line-height:1.5'>"
-            f"{html.escape(introduction)}</div>"
-            "</td></tr>"
-        )
-    signature_html = ""
-    if signature:
-        signature_html = (
-            f"<div style='font-size:12px;color:#9a9aa3;margin-top:10px'>"
-            f"{html.escape(signature)}</div>"
-        )
+    run_date = run_timestamp[:10]
+    hero = _hero_html(display_name=display_name, hero_title=hero_title, run_date=run_date)
+    introduction_html = _introduction_html(introduction)
 
     return (
-        "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' "
-        "content='width=device-width,initial-scale=1'>"
-        "<style>"
-        "@media only screen and (max-width:600px){"
-        ".hero-col{display:block!important;width:100%!important;box-sizing:border-box!important;"
-        "padding:20px!important;text-align:left!important}"
-        ".hero-col img{max-width:160px!important}"
-        ".hero-col .panther-img{max-width:200px!important}"
-        "}"
-        "</style></head>"
-        "<body style='margin:0;padding:0;background:#ececee;"
-        f"font-family:Arial,Helvetica,sans-serif;color:{SNS_BLACK}'>"
-        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0'>"
-        "<tr><td align='center' style='padding:20px 12px'>"
-        # Bulletproof container: width:100% + max-width for modern clients and mobile;
-        # the conditional MSO table forces the 680px fixed width for Outlook desktop.
-        "<!--[if mso]><table role='presentation' width='680' cellpadding='0' cellspacing='0'><tr><td><![endif]-->"
-        f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
-        f"style='border-collapse:collapse;background:{SNS_WHITE};width:100%;max-width:680px'>"
-        f"<tr><td>{hero}</td></tr>"
-
-        f"{introduction_html}"
-
+        _document_head()
+        + f"<tr><td>{hero}</td></tr>"
+        + introduction_html
         # Summary
-        "<tr><td style='padding:26px 20px 10px'>"
-        f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
+        + "<tr><td style='padding:26px 20px 10px'>"
+        + f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
         "margin:0 0 12px'>SYNTHÈSE</div>"
-        f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
         f"style='border-collapse:collapse;border:1px solid {SNS_GRAY_BORDER}'>"
         f"<tr>{counter_critical}{counter_high}{counter_total}</tr>"
         "</table>"
         "</td></tr>"
-
         # Products concerned (SNS pale rose background)
         # The per-product figure is a number of CVEs, not a share of the total: the explicit
         # unit plus the subtitle remove the "these numbers should add up to the total" reading.
-        "<tr><td style='padding:22px 20px 6px'>"
-        f"<div style='background:{SNS_ROSE_PALE};padding:18px 16px'>"
+        + "<tr><td style='padding:22px 20px 6px'>"
+        + f"<div style='background:{SNS_ROSE_PALE};padding:18px 16px'>"
         f"<div style='font-size:12px;font-weight:700;color:{SNS_BLACK};letter-spacing:1px;"
         "margin:0 0 2px'>PRODUITS CONCERNÉS</div>"
         f"<div style='font-size:12px;color:{SNS_GRAY_TEXT};margin:0 0 10px'>"
         "Nombre de CVE par produit</div>"
-        f"<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
         "style='border-collapse:collapse'>"
         f"{product_rows}"
         "</table>"
         "</div>"
         "</td></tr>"
-
         # Detail per CVE
-        "<tr><td style='padding:24px 20px 6px'>"
-        f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
+        + "<tr><td style='padding:24px 20px 6px'>"
+        + f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
         "margin:0 0 14px'>DÉTAIL DES VULNÉRABILITÉS</div>"
         f"{''.join(sections)}"
         "</td></tr>"
-
-        f"{other_html}"
-
+        + other_html
         # Automatic message + CTA
-        "<tr><td style='padding:8px 20px 22px'>"
-        f"<div style='font-size:13px;color:{SNS_GRAY_TEXT};line-height:1.5'>"
-        "Cet email a été généré automatiquement par FortiUpgrade.<br>"
-        "Merci de ne pas répondre à cet email.</div>"
-        f"<div style='margin-top:16px'><a href='{html.escape(app_url, quote=True)}' "
-        f"style='display:inline-block;background:{SNS_BLACK};color:{SNS_WHITE};"
-        "font-size:14px;font-weight:700;text-decoration:none;padding:12px 22px;border-radius:3px'>"
-        "OUVRIR FORTIUPGRADE →</a></div>"
-        "</td></tr>"
-
+        + _cta_html(app_url)
         # Footer (black)
-        "<tr><td style='padding:26px 20px 26px;background:#0B0B0D'>"
-        "<img src='cid:sns-logo' alt='SNS SECURITY' width='140' height='65' "
-        "style='display:block;border:0;width:100%;max-width:140px;height:auto;margin:0 0 14px'>"
-        f"<div style='font-size:12px;font-weight:700;color:{SNS_WHITE};letter-spacing:1px'>"
-        "ÉQUIPE SUPPORT</div>"
-        f"<div style='font-size:12px;color:#9a9aa3;margin-top:4px'>"
-        "Veille • Expertise • Réactivité</div>"
-        f"{signature_html}"
-        "</td></tr>"
-
-        "</table>"
-        "<!--[if mso]></td></tr></table><![endif]-->"
-        "</td></tr>"
-        "</table>"
-        "</body></html>"
+        + _footer_html(signature)
+        + _document_tail()
     )
 
 
@@ -595,3 +634,294 @@ def inline_image_data_uris(html_body: str) -> str:
     for image in load_inline_images():
         html_body = html_body.replace(f"cid:{image.content_id}", image_data_uri(image))
     return html_body
+
+
+# --- Release ("nouvelle version") email -------------------------------------
+# Reuses the SNS shell above (hero, CTA, footer, palette, inline assets) but none of the
+# CVE-specific business components: no severity badge, no Critical/High counters and no
+# per-product CVE breakdown. A release has no severity, so rendering it through the CVE
+# composer would print "0 nouvelle vulnérabilité détectée".
+
+_RELEASE_MONTHS = (
+    "janvier",
+    "février",
+    "mars",
+    "avril",
+    "mai",
+    "juin",
+    "juillet",
+    "août",
+    "septembre",
+    "octobre",
+    "novembre",
+    "décembre",
+)
+
+
+def _french_date(value: str) -> str:
+    """Return an ISO timestamp as ``16 septembre 2026``, or '' when it cannot be parsed.
+
+    Empty means "unknown": every caller then falls back to a value it really has instead of
+    inventing or guessing a date.
+    """
+    if not value:
+        return ""
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return f"{parsed.day} {_RELEASE_MONTHS[parsed.month - 1]} {parsed.year}"
+
+
+def _safe_link_url(value: str) -> str:
+    """Only an absolute http(s) URL without credentials may become an href; otherwise ''."""
+    if not value:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(value)
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme in {"http", "https"}
+        and parsed.netloc
+        and not parsed.username
+        and not parsed.password
+    ):
+        return value
+    return ""
+
+
+@dataclass(frozen=True)
+class ReleaseItem:
+    """A detected release, resolved from a release event's structured details.
+
+    ``fallback_summary`` is the event's own pre-formatted summary: an event queued by an
+    older build (or read back from a pending outbox entry) carries no structured details, and
+    the email must still show what it really knows rather than an empty card.
+    """
+
+    product_label: str
+    version: str
+    detected_at: str
+    release_notes_url: str
+    fallback_summary: str
+
+    def display_title(self) -> str:
+        if self.product_label and self.version:
+            return f"{self.product_label} {self.version}"
+        return self.fallback_summary or self.version or self.product_label or "Nouvelle version"
+
+
+def _release_detail(details: dict[str, Any], key: str) -> str:
+    value = details.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def release_items(events: list[Any]) -> list[ReleaseItem]:
+    items: list[ReleaseItem] = []
+    for event in events:
+        details = getattr(event, "details", None)
+        details = details if isinstance(details, dict) else {}
+        items.append(
+            ReleaseItem(
+                product_label=_release_detail(details, "productLabel"),
+                version=_release_detail(details, "version"),
+                detected_at=_release_detail(details, "detectedAt"),
+                release_notes_url=_safe_link_url(_release_detail(details, "releaseNotesUrl")),
+                fallback_summary=str(getattr(event, "summary", "") or "").strip(),
+            )
+        )
+    return items
+
+
+MAX_RELEASES_PER_EMAIL = 20
+
+
+def _release_hero_title(total: int) -> str:
+    if total <= 1:
+        return "Une nouvelle version Fortinet est disponible."
+    return f"{total} nouvelles versions Fortinet sont disponibles."
+
+
+def _detection_label(item: ReleaseItem, run_timestamp: str) -> str:
+    french = _french_date(item.detected_at)
+    if french:
+        return f"Détectée le {french}"
+    return f"Détectée lors de la collecte du {_french_date(run_timestamp) or run_timestamp[:10]}"
+
+
+def _release_card_html(item: ReleaseItem, *, run_timestamp: str) -> str:
+    identity = item.product_label or item.fallback_summary or "Nouvelle version détectée"
+    if item.version:
+        identity_rows = (
+            "<tr><td colspan='2' style='padding:0 14px 12px'>"
+            f"<div style='font-size:22px;font-weight:800;color:{SNS_BLACK};line-height:1.2'>"
+            f"{html.escape(item.version)}</div>"
+            "</td></tr>"
+        )
+    elif item.product_label and item.fallback_summary:
+        identity_rows = (
+            "<tr><td colspan='2' style='padding:0 14px 12px'>"
+            f"<div style='font-size:14px;color:{SNS_GRAY_TEXT};line-height:1.5'>"
+            f"{html.escape(item.fallback_summary)}</div>"
+            "</td></tr>"
+        )
+    else:
+        identity_rows = ""
+
+    link_row = ""
+    if item.release_notes_url:
+        link_row = (
+            "<tr><td colspan='2' style='padding:4px 14px 14px'>"
+            f"<a href='{html.escape(item.release_notes_url, quote=True)}' style='color:{SNS_BLACK};"
+            "font-size:14px;font-weight:700;text-decoration:underline'>"
+            "Notes de version Fortinet →</a>"
+            "</td></tr>"
+        )
+
+    return (
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        f"style='border-collapse:collapse;border:1px solid {SNS_GRAY_BORDER};margin:0 0 16px'>"
+        "<tr>"
+        f"<td style='padding:5px 12px;background:{SNS_ROSE_PALE};color:{SNS_BLACK};"
+        "font-size:12px;font-weight:700;letter-spacing:1px;border-radius:3px'>NOUVELLE VERSION</td>"
+        f"<td style='padding:5px 14px;text-align:right;font-size:13px;color:{SNS_GRAY_TEXT}'>"
+        f"{html.escape(_detection_label(item, run_timestamp))}</td>"
+        "</tr>"
+        "<tr><td colspan='2' style='padding:14px 14px 4px;font-size:16px;font-weight:700;"
+        f"color:{SNS_BLACK}'>{html.escape(identity)}</td></tr>"
+        f"{identity_rows}"
+        f"{link_row}"
+        "</table>"
+    )
+
+
+def compose_release_subject(release_events: list[Any]) -> str:
+    items = release_items(release_events)
+    if len(items) == 1:
+        return f"[FortiUpgrade] Nouvelle version — {items[0].display_title()}"
+    return f"[FortiUpgrade] {len(items)} nouvelles versions Fortinet"
+
+
+def compose_release_text_body(
+    release_events: list[Any],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[Any] | None = None,
+    display_name: str,
+    introduction: str = "",
+    signature: str = "",
+) -> str:
+    items = release_items(release_events)
+    lines: list[str] = [display_name]
+    if introduction:
+        lines.extend(["", introduction])
+    lines.extend(["", _release_hero_title(len(items)), ""])
+    lines.append("Version détectée" if len(items) == 1 else f"{len(items)} versions détectées")
+    shown = items[:MAX_RELEASES_PER_EMAIL]
+    for item in shown:
+        if item.product_label and item.version:
+            lines.append(f"{item.product_label} — {item.version}")
+        else:
+            lines.append(item.fallback_summary or item.product_label or "Nouvelle version")
+        lines.append(_detection_label(item, run_timestamp))
+        if item.release_notes_url:
+            lines.append(f"Notes de version : {item.release_notes_url}")
+    if len(items) > len(shown):
+        lines.append(f"... et {len(items) - len(shown)} de plus (liste tronquée).")
+    lines.append("")
+    lines.extend(_other_events_text(other_events))
+    lines.extend(
+        [
+            "Cet email a été généré automatiquement par FortiUpgrade.",
+            "Merci de ne pas répondre à cet email.",
+            "",
+            f"FortiUpgrade : {app_url}",
+            f"Collecte : {run_timestamp}",
+        ]
+    )
+    if signature:
+        lines.extend(["", signature])
+    return "\n".join(lines)
+
+
+def compose_release_html_body(
+    release_events: list[Any],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[Any] | None = None,
+    display_name: str,
+    introduction: str = "",
+    signature: str = "",
+) -> str:
+    items = release_items(release_events)
+    run_date = run_timestamp[:10]
+    hero = _hero_html(
+        display_name=display_name,
+        hero_title=_release_hero_title(len(items)),
+        run_date=run_date,
+    )
+    section_label = "VERSION DÉTECTÉE" if len(items) == 1 else "VERSIONS DÉTECTÉES"
+    shown = items[:MAX_RELEASES_PER_EMAIL]
+    cards = "".join(
+        _release_card_html(item, run_timestamp=run_timestamp) for item in shown
+    )
+    if len(items) > len(shown):
+        cards += (
+            "<div style='margin:0 0 16px;font-size:13px;"
+            f"color:{SNS_GRAY_TEXT}'>… et {len(items) - len(shown)} de plus "
+            "(liste tronquée).</div>"
+        )
+    return (
+        _document_head()
+        + f"<tr><td>{hero}</td></tr>"
+        + _introduction_html(introduction)
+        + "<tr><td style='padding:24px 20px 6px'>"
+        + f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
+        "margin:0 0 14px'>"
+        + section_label
+        + "</div>"
+        + cards
+        + "</td></tr>"
+        + _other_events_html(other_events)
+        + _cta_html(app_url)
+        + _footer_html(signature)
+        + _document_tail()
+    )
+
+
+def compose_release_email(
+    release_events: list[Any],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[Any] | None = None,
+    display_name: str,
+    introduction: str = "",
+    signature: str = "",
+) -> tuple[str, str, str]:
+    """Render release events into (subject, text_body, html_body) with the SNS identity."""
+    if not release_events:
+        raise ValueError("Aucun événement de nouvelle version à rendre.")
+    subject = compose_release_subject(release_events)
+    text_body = compose_release_text_body(
+        release_events,
+        app_url=app_url,
+        run_timestamp=run_timestamp,
+        other_events=other_events,
+        display_name=display_name,
+        introduction=introduction,
+        signature=signature,
+    )
+    html_body = compose_release_html_body(
+        release_events,
+        app_url=app_url,
+        run_timestamp=run_timestamp,
+        other_events=other_events,
+        display_name=display_name,
+        introduction=introduction,
+        signature=signature,
+    )
+    return subject, text_body, html_body

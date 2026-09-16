@@ -204,14 +204,38 @@ class EventGroupingAndComposeTests(unittest.TestCase):
         self.assertIsNone(notify.compose_email([], app_url="https://x", run_timestamp="2026-07-16T07:15:00Z"))
 
     def test_multiple_events_grouped_into_one_email(self):
+        """One synthetic email per run: the CVE email leads, releases and system events follow.
+
+        The CVE fixtures carry the same structured details the production derivation emits
+        (details.kind == "cve"), which is what routes the batch to the SNS CVE composer.
+        """
+        def cve_event(cve_id: str, summary: str) -> notify.NotificationEvent:
+            return notify.NotificationEvent(
+                category="CRITICAL",
+                dedup_key=f"new-cve|psirt|{cve_id}|critical",
+                summary=summary,
+                severity="critical",
+                details={
+                    "kind": "cve",
+                    "id": cve_id,
+                    "severity": "critical",
+                    "cvssScore": 9.8,
+                    "title": "Exemple.",
+                    "url": f"https://fortiguard.fortinet.com/psirt/{cve_id}",
+                    "affected": [{"product": "fortigate-fortios", "branch": "7.4"}],
+                    "productLabels": ["FortiGate / FortiOS"],
+                    "change": "new",
+                },
+            )
+
         events = [
-            notify.NotificationEvent(category="CRITICAL", dedup_key="new-cve|psirt|CVE-2026-00001|critical", summary="CVE-2026-00001 — FortiOS 7.4.0 à 7.4.8 (critical)"),
-            notify.NotificationEvent(category="CRITICAL", dedup_key="new-cve|psirt|CVE-2026-00002|critical", summary="CVE-2026-00002 — FortiManager 7.2 (critical)"),
+            cve_event("CVE-2026-00001", "CVE-2026-00001 — FortiOS 7.4.0 à 7.4.8 (critical)"),
+            cve_event("CVE-2026-00002", "CVE-2026-00002 — FortiManager 7.2 (critical)"),
             notify.NotificationEvent(category="DAILY", dedup_key="new-version|fortios|fortios|7.6.8", summary="Nouvelle version FortiOS 7.6.8"),
             notify.NotificationEvent(category="OPERATIONS", dedup_key="source-failure|forticlient|consecutive|2", summary="Collecte FortiClient en échec depuis 2 exécutions"),
         ]
         subject, body, html_body = notify.compose_email(events, app_url="https://valdev.me:3001/app/", run_timestamp="2026-07-16T07:15:00Z")
-        self.assertIn("2 nouvelle(s) CVE critique(s)", subject)
+        self.assertIn("2 nouvelles vulnérabilités", subject)
         self.assertIn("CVE-2026-00001", body)
         self.assertIn("CVE-2026-00002", body)
         self.assertIn("Nouvelle version FortiOS 7.6.8", body)
@@ -219,6 +243,9 @@ class EventGroupingAndComposeTests(unittest.TestCase):
         self.assertIn("https://valdev.me:3001/app/", body)
         self.assertIn("2026-07-16T07:15:00Z", body)
         self.assertIn("CVE-2026-00001", html_body)
+        # Releases and system events stay visible in the same email, never in a second one.
+        self.assertIn("Nouvelle version FortiOS 7.6.8", html_body)
+        self.assertIn("AUTRES ÉVÉNEMENTS", html_body)
 
     def test_long_event_list_is_truncated_with_a_clear_note(self):
         events = [
