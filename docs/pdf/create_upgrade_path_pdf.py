@@ -216,7 +216,7 @@ FORTIOS_TLS_KEY=
 FORTIOS_TLS_HOSTNAME=
 FORTIOS_RUN_ON_START=0
 FORTIOS_EMAIL_ENABLED=false
-FORTIOS_APP_URL=http://IP_LAN_VM:8000/app/"""),
+FORTIOS_APP_URL=http://IP_LAN_VM:8000/"""),
     step("5", "Déployer", "Cliquer <b>Deploy the stack</b>. La Stack doit créer uniquement les services <b>web</b> et <b>scheduler</b>."),
     callout("Volumes à préserver",
             "Ne jamais supprimer les volumes <b>fortios-data</b>, <b>fortios-docs</b> et <b>fortios-certificates</b> pendant une mise à jour ou une recréation de Stack.", PALE_RED),
@@ -226,7 +226,7 @@ FORTIOS_APP_URL=http://IP_LAN_VM:8000/app/"""),
     h("4. Vérifier le déploiement HTTP initial"),
     step("1", "Contrôler les conteneurs", "Dans <b>Containers</b>, vérifier que web et scheduler sont en cours d'exécution et que web devient <b>healthy</b>."),
     step("2", "Contrôler les logs", "Le service web doit annoncer HTTP sur le listener interne 8000. Le scheduler doit annoncer 07:00 et 15:30, fuseau Europe/Paris."),
-    step("3", "Tester depuis le LAN", "Ouvrir <b>http://IP_LAN_VM:8000/app/</b>. Autoriser le port 8000 uniquement depuis les réseaux internes nécessaires."),
+    step("3", "Tester depuis le LAN", "Ouvrir <b>http://IP_LAN_VM:8000/</b>. Autoriser le port 8000 uniquement depuis les réseaux internes nécessaires."),
     h("Contrôles depuis la VM Docker", 2),
     code("""docker ps --filter label=com.docker.compose.project=upgrade-path
 
@@ -325,7 +325,7 @@ FORTIOS_HTTP_PORT=443
 FORTIOS_TLS_CERT=/opt/fortios/certificates/active/fullchain.pem
 FORTIOS_TLS_KEY=/opt/fortios/certificates/active/privkey.pem
 FORTIOS_TLS_HOSTNAME=upgrade-path.sns-security.lan
-FORTIOS_APP_URL=https://upgrade-path.sns-security.lan/app/"""),
+FORTIOS_APP_URL=https://upgrade-path.sns-security.lan/"""),
     step("3", "Mettre à jour la Stack", "Cliquer <b>Update the stack</b>. Laisser le re-pull désactivé puisque l'image est locale. Ne supprimer aucun volume."),
     step("4", "Contrôler web", "Attendre le redémarrage, puis vérifier le statut healthy et les logs HTTPS."),
     code("""WEB_CONTAINER="$(docker ps \\
@@ -347,7 +347,7 @@ CA_FILE='/chemin/vers/ca-interne.pem'
 
 curl --fail --silent --show-error \\
   --cacert "$CA_FILE" \\
-  "https://$FQDN/app/" >/dev/null
+  "https://$FQDN/" >/dev/null
 
 openssl s_client \\
   -connect "$FQDN:443" \\
@@ -355,12 +355,12 @@ openssl s_client \\
   -CAfile "$CA_FILE" \\
   -verify_hostname "$FQDN" \\
   -verify_return_error </dev/null"""),
-    para("Dans le navigateur : <b>https://upgrade-path.sns-security.lan/app/</b>. L'absence d'alerte exige un SAN correct et une CA interne approuvée."),
+    para("Dans le navigateur : <b>https://upgrade-path.sns-security.lan/</b>. L'absence d'alerte exige un SAN correct et une CA interne approuvée."),
     h("7.2 Vérifier que HTTP/8000 n'est plus exposé", 2),
     code("""VM_IP='IP_LAN_VM'
 
 if curl --fail --silent --max-time 3 \\
-  "http://$VM_IP:8000/app/" >/dev/null; then
+  "http://$VM_IP:8000/" >/dev/null; then
   echo 'ERREUR : HTTP/8000 est encore accessible'
 else
   echo 'OK : aucun listener HTTP parallèle exposé'
@@ -384,7 +384,7 @@ fi"""),
 FORTIOS_TLS_CERT=
 FORTIOS_TLS_KEY=
 FORTIOS_TLS_HOSTNAME=
-FORTIOS_APP_URL=http://IP_LAN_VM:8000/app/"""),
+FORTIOS_APP_URL=http://IP_LAN_VM:8000/"""),
     para("Cliquer <b>Update the stack</b> sans supprimer les volumes. HTTP et HTTPS ne doivent jamais être actifs simultanément."),
     h("Causes courantes d'un rejet", 2),
     bullet("Aucun SAN DNS, SAN ne couvrant pas le FQDN ou wildcard utilisé sur plusieurs labels."),

@@ -142,7 +142,7 @@ Functional notification preferences and recipients remain in `data/notification-
   "allowInsecure": false,
   "username": "mailer@example.tld",
   "from": "fortiupgrade@example.tld",
-  "appUrl": "https://fortiupgrade.example.tld/app/",
+  "appUrl": "https://fortiupgrade.example.tld/",
   "timeout": 10,
   "emailAppearance": {
     "displayName": "FortiUpgrade",

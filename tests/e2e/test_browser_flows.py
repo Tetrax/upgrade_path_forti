@@ -29,9 +29,100 @@ def test_app_and_catalog_load(app_page):
     assert any("FortiOS" in option or "FortiGate" in option for option in options)
 
 
+def test_root_application_loads_without_asset_error_or_console_error(page, fortios_server):
+    """The application is served from "/": same page, same assets, no error introduced by the move."""
+    asset_failures: list[tuple[int, str]] = []
+    console_errors: list[str] = []
+
+    def record_response(response):
+        path = response.url.split(f"{fortios_server.base_url}", 1)[-1].split("?", 1)[0]
+        if response.status >= 400 and (path.endswith((".css", ".js")) or path in ("/", "/alerte/", "/forticlient/")):
+            asset_failures.append((response.status, path))
+
+    page.on("response", record_response)
+    page.on("pageerror", lambda error: console_errors.append(str(error)))
+
+    page.goto(f"{fortios_server.base_url}/")
+    page.wait_for_selector("#productSelect option", state="attached")
+    expect(page.locator("#dataStatus")).to_contain_text("JSON généré chargé")
+
+    assert asset_failures == []
+    assert console_errors == []
+
+    # The sub-pages moved with it, and their relative assets still resolve.
+    page.goto(f"{fortios_server.base_url}/alerte/")
+    expect(page.locator("#titleInput")).to_be_visible()
+    page.goto(f"{fortios_server.base_url}/forticlient/")
+    expect(page.locator("#emsVersionSelect")).to_be_visible()
+
+    assert asset_failures == []
+    assert console_errors == []
+
+
+def test_legacy_urls_redirect_to_the_canonical_ones_in_one_hop(page, fortios_server):
+    """Every legacy URL answers 302 and lands on the canonical URL: one hop, no loop, and "/" and
+    "/admin/" are never redirects themselves."""
+    redirects: list[tuple[int, str, str]] = []
+
+    def record_redirect(response):
+        if 300 <= response.status < 400:
+            redirects.append((response.status, response.url, response.headers.get("location", "")))
+
+    page.on("response", record_redirect)
+    base_url = fortios_server.base_url
+    cases = {
+        "/app": "/",
+        "/app/": "/",
+        "/app/index.html": "/index.html",
+        "/app/alerte/": "/alerte/",
+        "/app/forticlient/": "/forticlient/",
+        "/app/cert": "/admin/",
+        "/app/cert/": "/admin/",
+        "/cert": "/admin/",
+        "/cert/": "/admin/",
+    }
+    for path, expected in cases.items():
+        redirects.clear()
+        page.goto(f"{base_url}{path}")
+        assert page.url == f"{base_url}{expected}", (path, page.url)
+        assert len(redirects) == 1, (path, redirects)
+        assert redirects[0][0] == 302, (path, redirects)
+
+    # Canonical URLs themselves never redirect.
+    for path in ("/", "/admin/", "/alerte/"):
+        redirects.clear()
+        page.goto(f"{base_url}{path}")
+        assert page.url == f"{base_url}{path}", (path, page.url)
+        assert redirects == [], (path, redirects)
+
+
+def test_legacy_recovery_links_keep_their_token(page, fortios_server):
+    """An already-delivered recovery email points at /cert/...?token=... and must still work: the
+    302 preserves the query string, and the SPA then posts the very same token under /admin/.
+
+    The SPA deliberately strips the token from the visible URL as soon as it has read it
+    (history.replaceState), so the proof is the request body, not the address bar.
+    """
+    token = "t" * 43
+    page.goto(f"{fortios_server.base_url}/cert/verify-email?token={token}")
+    assert page.url == f"{fortios_server.base_url}/admin/verify-email", page.url
+    expect(page.locator("#email-verification-view")).to_be_visible()
+    expect(page.locator("#verify-recovery-email-button")).to_be_enabled()
+
+    with page.expect_request(lambda request: request.url.endswith("/api/cert/verify-email")) as captured:
+        page.click("#verify-recovery-email-button")
+    assert json.loads(captured.value.post_data or "{}") == {"token": token}
+
+    reset_token = "r" * 43
+    page.goto(f"{fortios_server.base_url}/cert/reset-password?token={reset_token}")
+    assert page.url == f"{fortios_server.base_url}/admin/reset-password", page.url
+    expect(page.locator("#password-reset-view")).to_be_visible()
+    expect(page.locator("#reset-password-button")).to_be_enabled()
+
+
 def test_certificate_first_run_creates_the_admin_account(page, fortios_server):
     fortios_server.credentials_path.unlink()
-    page.goto(f"{fortios_server.base_url}/cert/")
+    page.goto(f"{fortios_server.base_url}/admin/")
 
     expect(page.locator("#setup-view")).to_be_visible()
     expect(page.locator("#login-view")).to_be_hidden()
@@ -231,7 +322,7 @@ def test_account_tab_responsive_layout_keeps_the_actions_inside_the_card(page, f
 
 
 def test_forgot_password_view_always_shows_the_generic_result(page, fortios_server):
-    page.goto(f"{fortios_server.base_url}/cert/")
+    page.goto(f"{fortios_server.base_url}/admin/")
     page.click("#forgot-password-button")
     expect(page.locator("#forgot-password-form")).to_be_visible()
 
@@ -256,7 +347,7 @@ def test_verification_link_promotes_the_pending_recovery_email(page, fortios_ser
         expected_revision=revision,
     )
 
-    page.goto(f"{fortios_server.base_url}/cert/verify-email?token={token}")
+    page.goto(f"{fortios_server.base_url}/admin/verify-email?token={token}")
     expect(page.locator("#email-verification-view")).to_be_visible()
     page.click("#verify-recovery-email-button")
     expect(page.locator("#email-verification-message")).to_have_text(
@@ -294,7 +385,7 @@ def test_password_reset_link_rotates_credentials_and_revokes_sessions(browser, f
     )
     new_password = secrets.token_urlsafe(24)
 
-    reset_page.goto(f"{fortios_server.base_url}/cert/reset-password?token={reset_token}")
+    reset_page.goto(f"{fortios_server.base_url}/admin/reset-password?token={reset_token}")
     expect(reset_page.locator("#password-reset-view")).to_be_visible()
     reset_page.fill("#reset-password", new_password)
     reset_page.fill("#reset-password-confirmation", new_password)
@@ -341,7 +432,7 @@ def test_target_versions_only_offer_strict_upgrades_after_source_change(app_page
 
 
 def test_official_path_api_rejects_downgrade_and_equal_version(page, fortios_server):
-    page.goto(f"{fortios_server.base_url}/app/")
+    page.goto(f"{fortios_server.base_url}/")
 
     for current, target in (("7.2.10", "7.2.8"), ("7.2.10", "7.2.10")):
         response = page.evaluate(
@@ -409,7 +500,7 @@ def test_fortinet_unavailable_falls_back_to_cached_path_with_banner(app_page, fo
 
 def test_create_advisory(page, fortios_server):
     page.on("dialog", lambda dialog: dialog.accept())
-    page.goto(f"{fortios_server.base_url}/app/alerte/")
+    page.goto(f"{fortios_server.base_url}/alerte/")
     page.fill("#titleInput", "E2E test advisory")
     page.fill("#descriptionInput", "Created by the E2E suite.")
     page.locator("#versionList").get_by_label("6.2.4").check()
@@ -422,7 +513,7 @@ def test_create_advisory(page, fortios_server):
 
 def test_edit_advisory(page, fortios_server):
     page.on("dialog", lambda dialog: dialog.accept())
-    page.goto(f"{fortios_server.base_url}/app/alerte/")
+    page.goto(f"{fortios_server.base_url}/alerte/")
     page.fill("#titleInput", "Advisory to edit")
     page.fill("#descriptionInput", "Original description.")
     page.locator("#versionList").get_by_label("6.2.4").check()
@@ -439,7 +530,7 @@ def test_edit_advisory(page, fortios_server):
 
 def test_edit_precise_hop_preserves_versions_missing_from_current_catalog(page, fortios_server):
     page.on("dialog", lambda dialog: dialog.accept())
-    page.goto(f"{fortios_server.base_url}/app/alerte/")
+    page.goto(f"{fortios_server.base_url}/alerte/")
     page.fill("#titleInput", "Historical precise hop")
     page.fill("#descriptionInput", "The old transition must remain unchanged.")
     page.click("#versionModeHopButton")
@@ -484,7 +575,7 @@ def test_edit_precise_hop_preserves_versions_missing_from_current_catalog(page, 
 
 def test_delete_advisory(page, fortios_server):
     page.on("dialog", lambda dialog: dialog.accept())
-    page.goto(f"{fortios_server.base_url}/app/alerte/")
+    page.goto(f"{fortios_server.base_url}/alerte/")
     page.fill("#titleInput", "Advisory to delete")
     page.fill("#descriptionInput", "Will be removed.")
     page.locator("#versionList").get_by_label("6.2.4").check()
@@ -509,7 +600,7 @@ def test_upload_and_cleanup_unused_image(page, fortios_server, tmp_path):
     image_path.write_bytes(png_bytes)
 
     page.on("dialog", lambda dialog: dialog.accept())
-    page.goto(f"{fortios_server.base_url}/app/alerte/")
+    page.goto(f"{fortios_server.base_url}/alerte/")
     page.fill("#titleInput", "Advisory with an image")
     page.fill("#descriptionInput", "Screenshot below.")
     page.locator("#versionList").get_by_label("6.2.4").check()
@@ -564,7 +655,7 @@ def test_applicable_cves_displayed(app_page, fortios_server):
 
 def test_forticlient_compatibility_management(page, fortios_server):
     page.on("dialog", lambda dialog: dialog.accept())
-    page.goto(f"{fortios_server.base_url}/app/forticlient/")
+    page.goto(f"{fortios_server.base_url}/forticlient/")
     expect(page.locator("#emsVersionSelect option")).to_have_count(1)
 
     page.select_option("#emsVersionSelect", "7.4.2")
@@ -646,7 +737,7 @@ def test_health_dot_is_red_when_compat_matrix_fails_even_if_daily_run_is_ok(app_
 
 
 def login_cert_admin(page, fortios_server) -> None:
-    page.goto(f"{fortios_server.base_url}/cert/")
+    page.goto(f"{fortios_server.base_url}/admin/")
     page.fill("#username", fortios_server.admin_username)
     page.fill("#password", fortios_server.admin_password)
     page.click("#login-button")
@@ -1088,7 +1179,7 @@ def test_smtp_admin_edits_configuration_and_appearance(page, fortios_server):
     page.select_option("#smtp-security", "starttls")
     page.fill("#smtp-username", "gui-user")
     page.fill("#smtp-from-address", "gui@example.invalid")
-    page.fill("#smtp-app-url", f"{fortios_server.base_url}/app/")
+    page.fill("#smtp-app-url", f"{fortios_server.base_url}/")
     page.locator("#smtp-advanced-options summary").click()
     page.fill("#smtp-timeout", "18")
     page.fill("#email-display-name", "FortiUpgrade E2E")
@@ -1118,7 +1209,7 @@ def test_smtp_admin_edits_configuration_and_appearance(page, fortios_server):
     expect(page.locator("#smtp-port")).to_have_value("2525")
     expect(page.locator("#smtp-username")).to_have_value("gui-user")
     expect(page.locator("#smtp-from-address")).to_have_value("gui@example.invalid")
-    expect(page.locator("#smtp-app-url")).to_have_value(f"{fortios_server.base_url}/app/")
+    expect(page.locator("#smtp-app-url")).to_have_value(f"{fortios_server.base_url}/")
     expect(page.locator("#smtp-timeout")).to_have_value("18")
     expect(page.locator("#email-display-name")).to_have_value("FortiUpgrade E2E")
     expect(page.locator("#email-introduction")).to_have_value("Introduction E2E")

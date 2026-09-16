@@ -613,8 +613,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Content-Security-Policy", EMAIL_PREVIEW_CSP)
-        elif url_path in ("/cert", "/app/cert") or url_path.startswith(
-            ("/cert/", "/app/cert/", "/api/cert/")
+        elif url_path in ("/admin", "/cert", "/app/cert") or url_path.startswith(
+            ("/admin/", "/cert/", "/app/cert/", "/api/cert/")
         ):
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -643,8 +643,45 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             and not parsed.fragment
         )
 
+    def legacy_redirect_target(self, url_path: str) -> str | None:
+        """Canonical target for a legacy UI path, or None when the path is not a legacy one.
+
+        Order matters: "/app/cert/..." is the historical alias of the administration interface and
+        must reach /admin/..., not the generic "/app/*" rule.
+
+        The caller re-attaches the request query verbatim, so an already-delivered recovery email
+        pointing at "/cert/verify-email?token=..." still lands on
+        "/admin/verify-email?token=..." with its token intact.
+        """
+        for prefix, target in (("/app/cert", "/admin/"), ("/cert", "/admin/"), ("/app", "/")):
+            if url_path != prefix and not url_path.startswith(f"{prefix}/"):
+                continue
+            rest = url_path[len(prefix) :].lstrip("/")
+            return f"{target}{rest}" if rest else target
+        return None
+
+    def send_legacy_redirect(self, location: str) -> None:
+        """302 Found, deliberately never 301/308.
+
+        A permanent redirect is cached by the browser almost forever: after a rollback to an image
+        that only knows /app/ and /cert/, the browser would keep requesting / and /admin/ (404)
+        with no way back except clearing the cache. A relative Location also keeps whatever
+        scheme/host/port the client actually used, which matters behind a non-standard-port proxy.
+        """
+        query = urllib.parse.urlsplit(self.path).query
+        target = f"{location}?{query}" if query else location
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", target)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self) -> None:
         url_path = urllib.parse.urlsplit(self.path).path
+        legacy_target = self.legacy_redirect_target(url_path)
+        if legacy_target is not None:
+            self.send_legacy_redirect(legacy_target)
+            return
         if url_path.startswith("/api/cert/"):
             if not self.certificate_ui_available():
                 self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
@@ -660,31 +697,40 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             else:
                 self.send_error(HTTPStatus.NOT_FOUND, "Endpoint inconnu")
             return
-        if url_path in ("/cert/verify-email", "/cert/reset-password"):
+        if url_path in ("/admin/verify-email", "/admin/reset-password"):
             if not self.certificate_ui_available():
                 self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
                 return
             self.serve_cert_spa()
             return
-        if url_path == "/cert/microsoft365-help":
+        if url_path == "/admin/microsoft365-help":
             if not self.certificate_ui_available():
                 self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
                 return
             self.serve_microsoft365_help()
             return
-        if url_path == "/cert/microsoft365-guide.md":
+        if url_path == "/admin/microsoft365-guide.md":
             if not self.certificate_ui_available():
                 self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
                 return
             self.serve_microsoft365_guide()
             return
-        if (
-            url_path in ("/cert", "/app/cert")
-            or url_path.startswith(("/cert/", "/app/cert/"))
-        ) and not self.certificate_ui_available():
+        if (url_path == "/admin" or url_path.startswith("/admin/")) and not (
+            self.certificate_ui_available()
+        ):
             self.send_error(HTTPStatus.NOT_FOUND, "Page introuvable")
             return
         super().do_GET()
+
+    def do_HEAD(self) -> None:
+        """Keep HEAD on the same URLs as GET: legacy prefixes redirect, everything else is the
+        parent's static behaviour (which re-applies translate_path's own guards)."""
+        url_path = urllib.parse.urlsplit(self.path).path
+        legacy_target = self.legacy_redirect_target(url_path)
+        if legacy_target is not None:
+            self.send_legacy_redirect(legacy_target)
+            return
+        super().do_HEAD()
 
     def serve_cert_spa(self) -> None:
         try:
@@ -1044,7 +1090,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             raise ValueError("Paramètres d'aperçu invalides.")
         return fortios_notify.compose_email_preview(
             payload["scenario"],
-            app_url=app_url or "/app/",
+            app_url=app_url or "/",
             run_timestamp=run_timestamp,
             appearance=fortios_notify.validate_email_appearance(payload["appearance"]),
         )
@@ -1256,9 +1302,15 @@ class FortiosHandler(SimpleHTTPRequestHandler):
         # branches below resolve first, then check where the request actually landed on disk —
         # the only check that can't be fooled by encoding — before ever serving it.
         url_path = urllib.parse.urlsplit(path).path
-        if url_path == "/cert" or url_path.startswith("/cert/"):
+        decoded = urllib.parse.unquote(url_path)
+        if ".." in decoded.split("/"):
+            # The application is now mounted on "/", which maps onto app/ — so a ".." segment must
+            # never be silently resolved away: "/app/../.git/config" and "/data/%2e%2e%2fscripts/…"
+            # are refused outright, before any resolution happens.
+            return str(ROOT / "__not_served__")
+        if url_path == "/admin" or url_path.startswith("/admin/"):
             relative = urllib.parse.unquote(
-                url_path[len("/cert/") :] if url_path != "/cert" else "",
+                url_path[len("/admin/") :] if url_path != "/admin" else "",
             )
             candidate = (
                 (ALLOWED_STATIC_DIR_CERT / relative).resolve()
@@ -1301,11 +1353,26 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 return str(candidate)
             return str(ROOT / "__not_served__")
 
-        resolved = Path(super().translate_path(path)).resolve()
-        if resolved == ALLOWED_STATIC_DIR_APP or resolved.is_relative_to(
+        if url_path in ("/app", "/cert", "/app/cert") or url_path.startswith(
+            ("/app/", "/cert/", "/app/cert/")
+        ):
+            # Legacy UI prefixes are redirect-only (see do_GET/do_HEAD). Serving them here as well
+            # would give the same page two valid URLs — exactly what this migration removes.
+            return str(ROOT / "__not_served__")
+
+        # Everything else is the public application tree, now served from the site root:
+        # "/" -> app/, "/alerte/" -> app/alerte/. Only app/ is exposed, never the repository
+        # root: the resolution is re-checked against ALLOWED_STATIC_DIR_APP below.
+        relative = decoded.lstrip("/")
+        candidate = (
+            (ALLOWED_STATIC_DIR_APP / relative).resolve()
+            if relative
+            else ALLOWED_STATIC_DIR_APP
+        )
+        if candidate == ALLOWED_STATIC_DIR_APP or candidate.is_relative_to(
             ALLOWED_STATIC_DIR_APP
         ):
-            return str(resolved)
+            return str(candidate)
         return str(ROOT / "__not_served__")
 
     def is_safe_origin(self) -> bool:
@@ -2752,7 +2819,8 @@ def main(argv: list[str]) -> int:
             tls_context.load_cert_chain(tls_certificate, tls_key)
         server.socket = tls_context.wrap_socket(server.socket, server_side=True)
         scheme = "https"
-    print(f"FortiOS Upgrade Intelligence: {scheme}://{args.host}:{args.port}/app/")
+    print(f"FortiOS Upgrade Intelligence: {scheme}://{args.host}:{args.port}/")
+    print(f"Administration: {scheme}://{args.host}:{args.port}/admin/")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

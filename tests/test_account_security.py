@@ -847,7 +847,7 @@ class HttpAccountSecurityTests(unittest.TestCase):
     def test_recovery_tokens_are_redacted_from_http_access_logs(self) -> None:
         token = "s" * 43
         handler = object.__new__(fortios_server.FortiosHandler)
-        handler.requestline = f"GET /cert/reset-password?token={token} HTTP/1.1"
+        handler.requestline = f"GET /admin/reset-password?token={token} HTTP/1.1"
         handler.log_date_time_string = lambda: "test-time"
         output = io.StringIO()
 
@@ -1394,8 +1394,8 @@ class HttpAccountSecurityTests(unittest.TestCase):
 
         with running_server({"FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1"}) as base_url:
             for path in (
-                "/cert/verify-email?token=" + "t" * 43,
-                "/cert/reset-password?token=" + "t" * 43,
+                "/admin/verify-email?token=" + "t" * 43,
+                "/admin/reset-password?token=" + "t" * 43,
             ):
                 with self.subTest(path=path), urllib.request.urlopen(
                     base_url + path, timeout=5
@@ -1420,7 +1420,7 @@ class HttpAccountSecurityTests(unittest.TestCase):
 
         self.assertEqual(
             rendered["link"],
-            "https://example.test:9443/cert/verify-email?token=" + "t" * 43,
+            "https://example.test:9443/admin/verify-email?token=" + "t" * 43,
         )
         self.assertIn(rendered["link"], rendered["text"])
         self.assertIn(rendered["link"], rendered["html"])

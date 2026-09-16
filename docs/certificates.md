@@ -66,7 +66,7 @@ Procédure générique :
    répertoire de socket monté en lecture seule, le volume certificat en lecture
    seule (`FORTIOS_CERTS_MOUNT_MODE=ro`), `FORTIOS_TLS_HOSTNAME=<fqdn>` et le
    CIDR proxy exact ;
-6. ouvrir `/cert` pour créer le premier compte : le serveur web transmet cette
+6. ouvrir `/admin/` pour créer le premier compte : le serveur web transmet cette
    unique opération au helper par le socket privé, sans obtenir d'accès en
    écriture à `active/`. `scripts/cert_admin.py setup` avec `PGID` configuré
    reste le mécanisme CLI de secours ;
@@ -103,7 +103,7 @@ Conserver configuration de renouvellement et hook précédents au rollback. Une
 PKI entreprise n'utilise pas ce hook personnel : suivre son renouvellement autorisé
 et réimporter par `certctl` / l'interface existante avec les mêmes validations.
 
-## Tester la page `/cert` sans Docker
+## Tester la page `/admin/` sans Docker
 
 Le mode local permet de valider le parcours complet dans un navigateur, tout en
 bornant l'exception HTTP à un client loopback. Depuis la racine du dépôt :
@@ -117,7 +117,7 @@ FORTIOS_TLS_HOSTNAME=upgrade-path.sns-security.lan \
 python3 scripts/fortios_server.py --host 127.0.0.1 --port 8000
 ```
 
-Ouvrir `http://127.0.0.1:8000/cert/`. Si le fichier d'identifiants n'existe pas,
+Ouvrir `http://127.0.0.1:8000/admin/`. Si le fichier d'identifiants n'existe pas,
 la page affiche **Première configuration** et crée le compte administrateur sans
 mot de passe par défaut. Le mot de passe doit contenir entre 12 et 1 024 octets
 UTF-8. Une adresse email de récupération peut être fournie à cette étape ; elle
@@ -193,7 +193,7 @@ les utilisateurs déjà connectés doivent s'authentifier avec le nouveau mot de
 passe. Une activation déjà autorisée termine avant le retour de la commande de
 réinitialisation ; une activation encore en lecture est rejetée après celle-ci.
 
-En HTTPS, `/cert` est disponible sans l'exception HTTP locale. Les sessions sont
+En HTTPS, `/admin/` est disponible sans l'exception HTTP locale. Les sessions sont
 en mémoire, expirent après 30 minutes et utilisent un cookie `HttpOnly`,
 `SameSite=Strict` et `Secure` lorsque TLS est actif. Les mutations exigent aussi
 un jeton CSRF et une origine exacte. Le listener TLS ajoute également HSTS.
@@ -227,7 +227,7 @@ printf 'Conteneur web : %s\n' "$WEB_CONTAINER"
 La variable ne doit contenir qu'un seul nom. Si elle est vide, vérifier dans
 Portainer le nom de la Stack et du service.
 
-Le compte dédié à `/cert` sera créé dans l'interface web après l'activation de
+Le compte dédié à `/admin/` sera créé dans l'interface web après l'activation de
 HTTPS. Le CLI reste disponible comme mécanisme de secours ; il demande et
 confirme le mot de passe sans l'afficher :
 
@@ -299,7 +299,7 @@ FORTIOS_HTTP_PORT=443
 FORTIOS_TLS_CERT=/opt/fortios/certificates/active/fullchain.pem
 FORTIOS_TLS_KEY=/opt/fortios/certificates/active/privkey.pem
 FORTIOS_TLS_HOSTNAME=upgrade-path.sns-security.lan
-FORTIOS_APP_URL=https://upgrade-path.sns-security.lan/app/
+FORTIOS_APP_URL=https://upgrade-path.sns-security.lan/
 ```
 
 Cliquer **Update the stack** sans supprimer les volumes. Le port hôte 443 est
@@ -308,14 +308,14 @@ Python reste non-root. L'API n'est donc plus contournable en HTTP sur 8000.
 Vérifier ensuite :
 
 ```text
-https://upgrade-path.sns-security.lan/app/
+https://upgrade-path.sns-security.lan/
 ```
 
 Les logs du conteneur web doivent annoncer HTTPS sur le listener interne 8000.
 Le healthcheck choisit HTTP ou HTTPS selon la configuration TLS et doit devenir
 `healthy`.
 
-Ouvrir ensuite `https://upgrade-path.sns-security.lan/cert/`. En l'absence de
+Ouvrir ensuite `https://upgrade-path.sns-security.lan/admin/`. En l'absence de
 `admin/credentials.json`, le parcours **Première configuration** demande
 l'identifiant (`admin` par défaut), le mot de passe et sa confirmation. La
 vérification d'absence et la création sont sérialisées côté serveur ; une seule

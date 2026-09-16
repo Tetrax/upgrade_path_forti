@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Administration · FortiUpgrade</title>
-  <link rel="stylesheet" href="/app/shared.css">
+  <link rel="stylesheet" href="/shared.css">
   <link rel="stylesheet" href="cert.css">
   <script src="cert.js" defer></script>
 </head>
 <body>
   <main class="shell cert-shell">
     <header class="topbar">
-      <a class="brand-block brand-link" href="/app/" aria-label="Retour à l'application">
+      <a class="brand-block brand-link" href="/" aria-label="Retour à l'application">
         <span class="mark">F</span>
         <span>
           <h1>Administration</h1>
@@ -19,7 +19,7 @@
         </span>
       </a>
       <div class="toolbar">
-        <a class="btn" href="/app/">Retour à l’application</a>
+        <a class="btn" href="/">Retour à l’application</a>
         <button class="btn danger" id="logout-button" type="button" hidden>Se déconnecter</button>
       </div>
     </header>
@@ -428,7 +428,7 @@
                   </div>
                   <div class="field">
                     <label for="smtp-app-url">URL FortiUpgrade</label>
-                    <input id="smtp-app-url" type="url" required maxlength="2048" placeholder="https://fortiupgrade.example.tld/app/">
+                    <input id="smtp-app-url" type="url" required maxlength="2048" placeholder="https://fortiupgrade.example.tld/">
                   </div>
                   <details id="smtp-advanced-options" class="advanced-options">
                     <summary>Options avancées</summary>
@@ -442,7 +442,7 @@
                     <div class="microsoft365-heading">
                       <div class="microsoft365-title-row">
                         <h4 id="microsoft365-settings-heading">Microsoft 365</h4>
-                        <a id="microsoft365-help" class="btn" href="/cert/microsoft365-guide.md">Comment configurer Microsoft 365 ?</a>
+                        <a id="microsoft365-help" class="btn" href="/admin/microsoft365-guide.md">Comment configurer Microsoft 365 ?</a>
                       </div>
                       <p class="field-help">Envoi sans serveur SMTP, depuis une boîte Microsoft 365 autorisée.</p>
                     </div>

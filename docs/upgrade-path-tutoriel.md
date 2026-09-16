@@ -88,7 +88,7 @@ FORTIOS_TLS_CERT=
 FORTIOS_TLS_KEY=
 FORTIOS_TLS_HOSTNAME=
 FORTIOS_RUN_ON_START=0
-FORTIOS_APP_URL=http://IP_LAN_VM:8000/app/
+FORTIOS_APP_URL=http://IP_LAN_VM:8000/
 FORTIOS_DATA_DIR=/opt/upgrade_path/data
 FORTIOS_DOCS_DIR=/opt/upgrade_path/docs
 FORTIOS_CERTS_DIR=/opt/upgrade_path/certificates
@@ -121,7 +121,7 @@ docker logs --tail 50 "$WEB_CONTAINER"
 docker inspect --format '{{.State.Health.Status}}' \
   "$WEB_CONTAINER"
 curl --fail --silent --show-error \
-  http://127.0.0.1:8000/app/ >/dev/null
+  http://127.0.0.1:8000/ >/dev/null
 ```
 
 `web` doit être `running (healthy)` et la requête HTTP doit réussir. Contrôler séparément dans Portainer que `scheduler` est `running` et que ses logs annoncent ses prochains traitements ; il n’a pas de healthcheck Compose. Vérifier aussi le montage des trois chemins persistants.
@@ -194,7 +194,7 @@ FORTIOS_HTTP_PORT=443
 FORTIOS_TLS_CERT=/opt/fortios/certificates/active/fullchain.pem
 FORTIOS_TLS_KEY=/opt/fortios/certificates/active/privkey.pem
 FORTIOS_TLS_HOSTNAME=upgrade-path.sns-security.lan
-FORTIOS_APP_URL=https://upgrade-path.sns-security.lan/app/
+FORTIOS_APP_URL=https://upgrade-path.sns-security.lan/
 ```
 
 Cliquer **Update the stack**. Le port hôte `443` pointe alors vers le listener interne `8000` devenu HTTPS ; le port hôte `8000` n’est plus publié. Après la recréation, vérifier avec un bloc autonome :
@@ -210,7 +210,7 @@ docker inspect --format '{{.State.Health.Status}}' \
   "$WEB_CONTAINER"
 docker logs --tail 50 "$WEB_CONTAINER"
 curl --fail --silent --show-error \
-  https://upgrade-path.sns-security.lan/app/ >/dev/null
+  https://upgrade-path.sns-security.lan/ >/dev/null
 ```
 
 Le résultat doit être `healthy` et HTTPS doit répondre depuis un poste qui résout le FQDN et approuve la CA.

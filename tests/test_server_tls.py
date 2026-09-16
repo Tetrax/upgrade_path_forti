@@ -59,7 +59,7 @@ class ServerTlsTests(unittest.TestCase):
                 text=True,
             )
             context = ssl._create_unverified_context()
-            url = f"https://127.0.0.1:{port}/app/"
+            url = f"https://127.0.0.1:{port}/"
             try:
                 deadline = time.monotonic() + 5
                 last_error: Exception | None = None
@@ -79,7 +79,7 @@ class ServerTlsTests(unittest.TestCase):
                     self.fail(f"TLS server was not ready: {last_error}")
 
                 with self.assertRaises(OSError):
-                    urllib.request.urlopen(f"http://127.0.0.1:{port}/app/", timeout=1)
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1)
 
                 health = subprocess.run(
                     [sys.executable, str(HEALTHCHECK)],
@@ -124,7 +124,7 @@ class ServerTlsTests(unittest.TestCase):
             while time.monotonic() < deadline:
                 try:
                     with urllib.request.urlopen(
-                        f"http://127.0.0.1:{port}/app/", timeout=0.5,
+                        f"http://127.0.0.1:{port}/", timeout=0.5,
                     ) as response:
                         self.assertEqual(response.status, 200)
                         break

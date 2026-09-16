@@ -701,7 +701,7 @@ byId("forgot-password-button").addEventListener("click", () => {
 });
 byId("back-to-login-button").addEventListener("click", () => showLogin());
 byId("verification-login-button").addEventListener("click", () => {
-  window.history.replaceState({}, "", "/cert/");
+  window.history.replaceState({}, "", "/admin/");
   showLogin();
 });
 byId("verify-recovery-email-button").addEventListener("click", async () => {
@@ -721,7 +721,7 @@ byId("verify-recovery-email-button").addEventListener("click", async () => {
   }
 });
 byId("reset-login-button").addEventListener("click", () => {
-  window.history.replaceState({}, "", "/cert/");
+  window.history.replaceState({}, "", "/admin/");
   showLogin();
 });
 passwordResetForm.addEventListener("submit", async (event) => {
@@ -743,7 +743,7 @@ passwordResetForm.addEventListener("submit", async (event) => {
       body: JSON.stringify({ token: publicActionToken, newPassword, confirmation }),
     });
     publicActionToken = "";
-    window.history.replaceState({}, "", "/cert/");
+    window.history.replaceState({}, "", "/admin/");
     showLogin(
       "Mot de passe réinitialisé. Toutes les sessions administrateur ont été fermées.",
       true,
@@ -1219,6 +1219,6 @@ for (const id of ["certificate-file", "private-key-file", "chain-file", "certifi
   byId(id).addEventListener("input", resetValidation);
 }
 
-if (window.location.pathname === "/cert/verify-email") showEmailVerification();
-else if (window.location.pathname === "/cert/reset-password") showPasswordReset();
+if (window.location.pathname === "/admin/verify-email") showEmailVerification();
+else if (window.location.pathname === "/admin/reset-password") showPasswordReset();
 else refreshSession();

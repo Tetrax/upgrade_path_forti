@@ -270,7 +270,7 @@ Depuis ton poste, ouvrir un tunnel avec ta destination SSH habituelle :
 ssh -N -L 18443:127.0.0.1:18443 tetrax@<adresse-SSH-du-VPS>
 ```
 
-Ouvrir **https://localhost:18443/cert/**. Le certificat auto-signé est uniquement
+Ouvrir **https://localhost:18443/admin/**. Le certificat auto-signé est uniquement
 destiné à cette boucle locale via SSH : accepter l'exception dans ce contexte,
 pas sur le site permanent. Sa validité est de 30 jours ; le renouveler
 explicitement après expiration. À la première ouverture, créer le compte admin

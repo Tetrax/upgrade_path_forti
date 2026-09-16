@@ -10,7 +10,7 @@ x-email-environment: &email-environment
   FORTIOS_SMTP_PASSWORD_FILE: /opt/fortios/smtp-secrets/password
   FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE: /opt/fortios/microsoft365-secrets/client-secret
   FORTIOS_MICROSOFT365_TIMEOUT: "10"
-  FORTIOS_APP_URL: https://localhost:18443/app/
+  FORTIOS_APP_URL: https://localhost:18443/
 
 services:
   web:

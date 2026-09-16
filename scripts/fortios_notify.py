@@ -1301,7 +1301,7 @@ def _smtp_settings_from_env(env: dict[str, str]) -> SmtpSettings:
         username=(env.get("FORTIOS_SMTP_USERNAME") or "").strip(),
         sender=(env.get("FORTIOS_SMTP_FROM") or "").strip(),
         app_url=(
-            env.get("FORTIOS_APP_URL") or "https://valdev.me:3001/app/"
+            env.get("FORTIOS_APP_URL") or "https://valdev.me:3001/"
         ).strip(),
         timeout=_env_int(env, "FORTIOS_SMTP_TIMEOUT", 10),
         email_appearance=_default_email_appearance(),
@@ -1810,8 +1810,8 @@ def _microsoft365_public_status(config: EmailConfig) -> dict[str, Any]:
         else "not-configured",
         "clientSecretStorageState": config.graph_client_secret_storage_state,
         "canSetClientSecret": config.graph_client_secret_write_available,
-        "helpUrl": "/cert/microsoft365-help",
-        "guideUrl": "/cert/microsoft365-guide.md",
+        "helpUrl": "/admin/microsoft365-help",
+        "guideUrl": "/admin/microsoft365-guide.md",
     }
 
 
@@ -3154,8 +3154,8 @@ def compose_recovery_email(
 ) -> dict[str, str]:
     """Render a recovery email using only the trusted app origin and a fixed path."""
     paths = {
-        "verify_recovery_email": "/cert/verify-email",
-        "password_reset": "/cert/reset-password",
+        "verify_recovery_email": "/admin/verify-email",
+        "password_reset": "/admin/reset-password",
     }
     if purpose not in paths or not isinstance(token, str) or not re.fullmatch(
         r"[A-Za-z0-9_-]{43,128}", token
