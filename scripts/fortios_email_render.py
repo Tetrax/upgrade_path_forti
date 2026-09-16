@@ -738,9 +738,17 @@ MAX_RELEASES_PER_EMAIL = 20
 
 
 def _release_hero_title(total: int) -> str:
+    """Automatic release headline: the renderer's own introduction, plural-aware.
+
+    Used whenever no dedicated release introduction is configured, so the sentence always agrees
+    with the number of releases actually reported in the email.
+    """
     if total <= 1:
-        return "Une nouvelle version Fortinet est disponible."
-    return f"{total} nouvelles versions Fortinet sont disponibles."
+        return "FortiUpgrade a détecté une nouvelle version Fortinet disponible au téléchargement."
+    return (
+        f"FortiUpgrade a détecté {total} nouvelles versions Fortinet "
+        "disponibles au téléchargement."
+    )
 
 
 def _detection_label(item: ReleaseItem, run_timestamp: str) -> str:

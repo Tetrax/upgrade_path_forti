@@ -289,6 +289,7 @@ function buildEmailAppearancePayload() {
   return {
     displayName: byId("email-display-name").value.trim(),
     introduction: byId("email-introduction").value.trim(),
+    releaseIntroduction: byId("release-email-introduction").value.trim(),
     signature: byId("email-signature").value.trim(),
   };
 }
@@ -481,6 +482,8 @@ function renderSmtpSettings(payload) {
   renderMicrosoft365SecretStatus(payload);
   byId("email-display-name").value = smtp.emailAppearance?.displayName || "FortiUpgrade";
   byId("email-introduction").value = smtp.emailAppearance?.introduction || "";
+  byId("release-email-introduction").value =
+    smtp.emailAppearance?.releaseIntroduction || "";
   byId("email-signature").value = smtp.emailAppearance?.signature || "";
   byId("smtp-password-status").textContent = smtp.passwordConfigured
     ? "Mot de passe configuré"

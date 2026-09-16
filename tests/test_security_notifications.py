@@ -412,7 +412,12 @@ class NotificationSettingsTests(unittest.TestCase):
             persisted = json.loads(settings_path.read_text(encoding="utf-8"))
 
         self.assertEqual(saved.email_appearance, notify.validate_email_appearance(appearance))
-        self.assertEqual(persisted, {"emailAppearance": appearance})
+        # A legacy three-key save is normalised on write: the release introduction is added empty,
+        # which means "use the renderer's automatic text", and nothing else is invented.
+        self.assertEqual(
+            persisted,
+            {"emailAppearance": notify.validate_email_appearance(appearance).to_payload()},
+        )
         serialized = json.dumps(persisted)
         self.assertNotIn("smtp.saved", serialized)
         self.assertNotIn("password", serialized.lower())

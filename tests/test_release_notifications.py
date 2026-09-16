@@ -47,6 +47,7 @@ DETECTED_AT = "2026-09-16T05:15:00Z"
 APPEARANCE = {
     "displayName": "FortiUpgrade — Alertes de sécurité Fortinet",
     "introduction": "Introduction de test.",
+    "releaseIntroduction": "Introduction de test.",
     "signature": "Signature de test.",
 }
 SMTP_ENV = {
@@ -427,7 +428,10 @@ class ReleaseRendererTests(unittest.TestCase):
         # No CVE business component leaks into a release email.
         self.assertNotIn("vulnérabilit", html)
         self.assertNotIn("CVSS", html)
-        self.assertIn("Une nouvelle version Fortinet est disponible.", html)
+        self.assertIn(
+            "FortiUpgrade a détecté une nouvelle version Fortinet disponible au téléchargement.",
+            html,
+        )
 
     def test_release_email_shows_product_version_and_detection_date(self) -> None:
         _, text, html = self.compose(self.releases("8.0.1"))
@@ -448,7 +452,11 @@ class ReleaseRendererTests(unittest.TestCase):
         subject, text, html = self.compose(self.releases("8.0.1", "8.0.2"))
 
         self.assertEqual(subject, "[FortiUpgrade] 2 nouvelles versions Fortinet")
-        self.assertIn("2 nouvelles versions Fortinet sont disponibles.", html)
+        self.assertIn(
+            "FortiUpgrade a détecté 2 nouvelles versions Fortinet disponibles au téléchargement.",
+            html,
+        )
+        self.assertNotIn("une nouvelle version Fortinet", html)
         self.assertIn("VERSIONS DÉTECTÉES", html)
         for version in ("8.0.1", "8.0.2"):
             self.assertIn(version, html)
@@ -726,6 +734,213 @@ class ReleaseEmailIntegrationPointTests(unittest.TestCase):
 
         self.assertEqual(len(captured), 1)
         self.assertEqual([event.dedup_key for event in captured[0]], [RELEASE_DEDUP_KEY])
+
+
+# The exact three-key document an installation could already have on disk.
+LEGACY_APPEARANCE = {
+    "displayName": "FortiUpgrade — Alertes de sécurité Fortinet",
+    "introduction": "Introduction historique orientée vulnérabilités.",
+    "signature": "Signature historique.",
+}
+
+
+class ReleaseIntroductionTests(unittest.TestCase):
+    """The automatic release sentence, and the separation from the CVE paragraph."""
+
+    CVE_INTRO = "FortiUpgrade a détecté une nouvelle vulnérabilité nécessitant votre attention."
+    RELEASE_INTRO = "Notre veille relève les nouvelles versions publiées par Fortinet."
+
+    def compose(
+        self, versions: tuple[str, ...], *, appearance: dict[str, str]
+    ) -> tuple[str, str, str]:
+        events = notify.derive_version_events(
+            {"fortigate-fortios": {"8.0.0"}},
+            {"fortigate-fortios": {"8.0.0", *versions}},
+            {"fortigate-fortios": "FortiGate / FortiOS"},
+            detected_at=DETECTED_AT,
+        )
+        composed = notify.compose_email(
+            events,
+            app_url=APP_URL,
+            run_timestamp=RUN_TS,
+            appearance=notify.validate_email_appearance(appearance),
+        )
+        assert composed is not None
+        return composed
+
+    def appearance(self, **overrides: str) -> dict[str, str]:
+        payload = {
+            "displayName": "FortiUpgrade — Alertes de sécurité Fortinet",
+            "introduction": "",
+            "releaseIntroduction": "",
+            "signature": "",
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_automatic_sentence_is_singular_for_one_release(self) -> None:
+        _, text, html = self.compose(("8.0.1",), appearance=self.appearance())
+
+        expected = (
+            "FortiUpgrade a détecté une nouvelle version Fortinet disponible au téléchargement."
+        )
+        self.assertIn(expected, text)
+        self.assertIn(expected, html)
+        self.assertNotIn("nouvelles versions", text)
+
+    def test_automatic_sentence_is_plural_and_counted_for_several_releases(self) -> None:
+        for count, versions in (
+            (2, ("8.0.1", "8.0.2")),
+            (3, ("8.0.1", "8.0.2", "8.0.3")),
+        ):
+            with self.subTest(releases=count):
+                _, text, html = self.compose(versions, appearance=self.appearance())
+
+                expected = (
+                    f"FortiUpgrade a détecté {count} nouvelles versions Fortinet "
+                    "disponibles au téléchargement."
+                )
+                self.assertIn(expected, text)
+                self.assertIn(expected, html)
+                # The singular sentence must never survive a multi-release email.
+                self.assertNotIn("une nouvelle version Fortinet", text)
+                self.assertNotIn("une nouvelle version Fortinet", html)
+
+    def test_configured_release_introduction_is_used_only_for_releases(self) -> None:
+        appearance = self.appearance(
+            introduction=self.CVE_INTRO, releaseIntroduction=self.RELEASE_INTRO
+        )
+
+        _, release_text, release_html = self.compose(("8.0.1", "8.0.2"), appearance=appearance)
+
+        self.assertIn(self.RELEASE_INTRO, release_text)
+        self.assertIn(self.RELEASE_INTRO, release_html)
+        # A vulnerability-oriented paragraph must not leak into a release email.
+        self.assertNotIn(self.CVE_INTRO, release_text)
+        self.assertNotIn(self.CVE_INTRO, release_html)
+
+    def test_empty_release_introduction_falls_back_to_the_automatic_sentence(self) -> None:
+        _, text, _ = self.compose(
+            ("8.0.1", "8.0.2"), appearance=self.appearance(introduction=self.CVE_INTRO)
+        )
+
+        self.assertIn(
+            "FortiUpgrade a détecté 2 nouvelles versions Fortinet disponibles au téléchargement.",
+            text,
+        )
+        self.assertNotIn(self.CVE_INTRO, text)
+
+    def test_cve_email_still_uses_the_historical_introduction_field(self) -> None:
+        cve = notify.derive_new_cve_events(
+            [
+                {
+                    "id": "CVE-2026-99999",
+                    "advisoryId": "FG-IR-26-900",
+                    "title": "Résumé CVE-2026-99999",
+                    "severity": "critical",
+                    "cvssScore": 9.8,
+                    "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-900",
+                    "affected": [{"product": "fortigate-fortios", "branch": "8.0"}],
+                }
+            ],
+            self._settings(),
+        )
+        composed = notify.compose_email(
+            cve,
+            app_url=APP_URL,
+            run_timestamp=RUN_TS,
+            appearance=notify.validate_email_appearance(
+                self.appearance(
+                    introduction=self.CVE_INTRO, releaseIntroduction=self.RELEASE_INTRO
+                )
+            ),
+        )
+        assert composed is not None
+        _, text, html = composed
+
+        self.assertIn(self.CVE_INTRO, text)
+        self.assertIn(self.CVE_INTRO, html)
+        self.assertNotIn(self.RELEASE_INTRO, text)
+
+    def _settings(self) -> Any:
+        return notify.validate_notification_settings(
+            {
+                "enabled": True,
+                "releaseNotificationsEnabled": True,
+                "minimumSeverity": "high",
+                "products": {
+                    "fortigate-fortios": True,
+                    "fortimanager": False,
+                    "fortianalyzer": False,
+                    "forticlient-ems": False,
+                    "forticlient": {"windows": False, "macos": False, "linux": False},
+                },
+                "recipients": ["security@example.com"],
+            }
+        )
+
+
+class LegacyAppearanceTests(unittest.TestCase):
+    """A document written before the release paragraph keeps loading and loses nothing."""
+
+    LEGACY = LEGACY_APPEARANCE
+
+    def test_legacy_three_key_document_loads_with_an_empty_release_introduction(self) -> None:
+        appearance = notify.validate_email_appearance(self.LEGACY)
+
+        self.assertEqual(appearance.introduction, self.LEGACY["introduction"])
+        self.assertEqual(appearance.signature, self.LEGACY["signature"])
+        # Empty means "let the renderer write the release sentence", which is the fixed behaviour.
+        self.assertEqual(appearance.release_introduction, "")
+
+    def test_legacy_document_on_disk_keeps_its_stored_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "smtp-settings.json"
+            raw = json.dumps({"emailAppearance": self.LEGACY})
+            path.write_text(raw, encoding="utf-8")
+
+            appearance = notify._saved_email_appearance(path)
+
+            self.assertEqual(appearance.introduction, self.LEGACY["introduction"])
+            self.assertEqual(path.read_text(encoding="utf-8"), raw)
+
+    def test_to_payload_always_exposes_both_introductions(self) -> None:
+        payload = notify.validate_email_appearance(self.LEGACY).to_payload()
+
+        self.assertEqual(payload["introduction"], self.LEGACY["introduction"])
+        self.assertEqual(payload["releaseIntroduction"], "")
+        self.assertEqual(
+            sorted(payload), ["displayName", "introduction", "releaseIntroduction", "signature"]
+        )
+
+    def test_unknown_keys_are_still_rejected(self) -> None:
+        payload = dict(self.LEGACY, release_introduction="snake case")
+        with self.assertRaises(ValueError):
+            notify.validate_email_appearance(payload)
+
+    def test_release_introduction_is_validated_like_the_others(self) -> None:
+        with self.assertRaises(TypeError):
+            notify.validate_email_appearance(dict(self.LEGACY, releaseIntroduction=42))
+        with self.assertRaises(ValueError):
+            notify.validate_email_appearance(
+                dict(self.LEGACY, releaseIntroduction="x" * 2001)
+            )
+
+    def test_both_introductions_survive_a_save_and_load_round_trip(self) -> None:
+        payload = dict(
+            self.LEGACY,
+            releaseIntroduction="Introduction nouvelles versions.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "smtp-settings.json"
+            saved = notify.save_smtp_settings(path, {"emailAppearance": payload}, env={})
+            loaded = notify.load_smtp_settings(path, env={})
+
+        self.assertEqual(saved, loaded)
+        self.assertEqual(loaded.email_appearance.introduction, self.LEGACY["introduction"])
+        self.assertEqual(
+            loaded.email_appearance.release_introduction, "Introduction nouvelles versions."
+        )
 
 
 if __name__ == "__main__":

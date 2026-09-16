@@ -267,6 +267,18 @@ outbox with its retry metadata while the successful one is removed and recorded 
 a partial failure neither blocks nor duplicates the other category, and no event can be sent
 twice. Dedup keys, the checkpoint, claims and concurrency guarantees are untouched.
 
+Appearance is shared except for the introduction: `introduction` feeds CVE emails and
+`releaseIntroduction` feeds new-version emails. Both may be empty, which is when the renderer
+writes its own text. An empty `releaseIntroduction` keeps the renderer's automatic release
+sentence, which agrees with the number of releases actually reported ("FortiUpgrade a détecté une
+nouvelle version Fortinet disponible au téléchargement." for one, "FortiUpgrade a détecté N
+nouvelles versions Fortinet disponibles au téléchargement." for several).
+
+`releaseIntroduction` is **optional when loading**: an appearance document written before it
+(`displayName`, `introduction`, `signature`) keeps loading unchanged, `introduction` keeps its
+historical CVE scope, and release emails take the automatic sentence. An unknown key stays
+rejected, and saving from the admin UI always writes both fields.
+
 Release emails keep the stable `new-version|<product>|<product>|<version>` dedup key and carry
 their structured details (`kind`, `product`, `productLabel`, `version`, `detectedAt`, optional
 `releaseNotesUrl`), so a pending outbox entry survives a retry and a version already sent is
