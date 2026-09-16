@@ -211,7 +211,7 @@ function renderAccount(account) {
 }
 
 function showAdminSection(section) {
-  for (const name of ["certificates", "notifications", "account"]) {
+  for (const name of ["certificates", "notifications", "system", "account"]) {
     const active = section === name;
     byId(`${name}-section`).hidden = !active;
     byId(`${name}-tab`).classList.toggle("active", active);
@@ -879,6 +879,7 @@ logoutButton.addEventListener("click", async () => {
 
 byId("certificates-tab").addEventListener("click", () => showAdminSection("certificates"));
 byId("notifications-tab").addEventListener("click", () => showAdminSection("notifications"));
+byId("system-tab").addEventListener("click", () => showAdminSection("system"));
 byId("account-tab").addEventListener("click", () => showAdminSection("account"));
 byId("change-recovery-email-button").addEventListener("click", () => {
   passwordChangeForm.hidden = true;

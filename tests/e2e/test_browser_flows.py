@@ -881,7 +881,7 @@ def test_container_security_is_its_own_scope_and_persists(page, fortios_server):
         },
     )
     login_cert_admin(page, fortios_server)
-    page.click("#notifications-tab")
+    page.click("#system-tab")
 
     expect(page.locator("#container-security-form")).to_be_visible()
     severity = page.locator("#container-minimum-severity")
@@ -911,7 +911,7 @@ def test_container_security_is_its_own_scope_and_persists(page, fortios_server):
 
     page.reload()
     expect(page.locator("#admin-view")).to_be_visible()
-    page.click("#notifications-tab")
+    page.click("#system-tab")
     expect(page.locator("#container-security-enabled")).to_be_checked()
     expect(page.locator("#container-recipient-list input[type=email]")).to_have_value(
         "image@example.com"
@@ -925,7 +925,7 @@ def test_container_security_refuses_to_enable_without_a_recipient(page, fortios_
     explicit refusal once the row is gone — the state a configuration would really be in.
     """
     login_cert_admin(page, fortios_server)
-    page.click("#notifications-tab")
+    page.click("#system-tab")
     page.check("#container-security-enabled")
 
     # An empty address is caught by the browser before any request leaves the page.
@@ -947,7 +947,7 @@ def test_container_security_refuses_to_enable_without_a_recipient(page, fortios_
 def test_container_security_report_state_never_reads_as_zero(page, fortios_server):
     """"Aucun rapport" and "0 vulnérabilité" must be impossible to confuse."""
     login_cert_admin(page, fortios_server)
-    page.click("#notifications-tab")
+    page.click("#system-tab")
     expect(page.locator("#container-report-state")).to_contain_text("Aucun rapport")
     details = page.locator("#container-report-details")
     expect(details).to_contain_text("—")
@@ -963,7 +963,7 @@ def test_container_security_report_state_never_reads_as_zero(page, fortios_serve
     )
     page.reload()
     expect(page.locator("#admin-view")).to_be_visible()
-    page.click("#notifications-tab")
+    page.click("#system-tab")
     expect(page.locator("#container-report-state")).to_contain_text("Rapport à jour")
     details = page.locator("#container-report-details")
     expect(details).to_contain_text("Critical")
@@ -979,8 +979,75 @@ def test_container_security_report_state_never_reads_as_zero(page, fortios_serve
     )
     page.reload()
     expect(page.locator("#admin-view")).to_be_visible()
-    page.click("#notifications-tab")
+    page.click("#system-tab")
     expect(page.locator("#container-report-state")).to_contain_text("Rapport obsolète")
+
+
+def test_system_tab_owns_the_technical_cards(page, fortios_server):
+    """The Trivy block lives in the Système tab, and nothing of it stays behind in Notifications."""
+    fortios_notify.write_json(
+        fortios_server.data_dir / "fortios-notify-history.json",
+        container_state(("CVE-2026-13221", "perl-base", "critical"), ("CVE-2026-41992", "gzip", "high")),
+    )
+    login_cert_admin(page, fortios_server)
+
+    # The tab bar is exactly the requested order.
+    assert page.locator(".admin-tab").evaluate_all(
+        "els => els.map(el => el.textContent.trim())"
+    ) == ["Certificats", "Notifications", "Système", "Compte"]
+
+    # Notifications is back to its own scope: neither technical card is rendered there.
+    page.click("#notifications-tab")
+    expect(page.locator("#notifications-section")).to_be_visible()
+    expect(page.locator("#notifications-form")).to_be_visible()
+    expect(page.locator("#container-security-form")).to_be_hidden()
+    expect(page.locator("#container-report-details")).to_be_hidden()
+    expect(page.locator("#container-security-message")).to_be_hidden()
+
+    # Système carries both cards, and only Système.
+    page.click("#system-tab")
+    expect(page.locator("#system-section")).to_be_visible()
+    expect(page.locator("#notifications-section")).to_be_hidden()
+    expect(page.locator("#container-security-form")).to_be_visible()
+    expect(page.locator("#container-report-details")).to_be_visible()
+    expect(page.locator("#container-report-state")).to_contain_text("Rapport à jour")
+
+
+def test_system_tab_two_cards_stack_without_overflow(page, fortios_server):
+    """Two cards from 900px wide, one column below, and no horizontal overflow at any width."""
+    login_cert_admin(page, fortios_server)
+    page.click("#system-tab")
+
+    tracks_per_width: dict[int, int] = {}
+    for width in (1920, 1440, 1024, 390):
+        page.set_viewport_size({"width": width, "height": 1000})
+        page.wait_for_timeout(200)
+        overflow = page.evaluate(
+            "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
+        tracks = page.evaluate(
+            "getComputedStyle(document.querySelector('.system-columns')).gridTemplateColumns"
+        )
+        tracks_per_width[width] = len(tracks.split())
+        assert overflow <= 0, f"débordement horizontal de {overflow}px à {width}px"
+        for selector in ("#container-security-form", "#container-report-details"):
+            box = page.locator(selector).bounding_box()
+            assert box and box["width"] > 0, f"{selector} absent à {width}px"
+            assert box["width"] <= width, f"{selector} plus large que l'écran à {width}px"
+        # Une seule colonne de cartes : elles sont empilées, pas côte à côte.
+        if tracks_per_width[width] == 1:
+            first = page.locator("#container-security-form").bounding_box()
+            second = page.locator(
+                'section[aria-labelledby="container-report-heading"]'
+            ).bounding_box()
+            assert second["y"] >= first["y"] + first["height"] - 1, (
+                f"cartes non empilées à {width}px"
+            )
+
+    assert tracks_per_width[1920] == 2, "deux cartes côte à côte attendues en 1920"
+    assert tracks_per_width[1440] == 2, "deux cartes côte à côte attendues en 1440"
+    assert tracks_per_width[1024] == 2, "deux cartes côte à côte attendues en 1024"
+    assert tracks_per_width[390] == 1, "une seule colonne attendue en 390"
 
 
 def test_release_recipients_can_be_detached_from_the_cve_list(page, fortios_server):
