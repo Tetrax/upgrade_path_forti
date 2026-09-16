@@ -34,8 +34,11 @@ PR #10 (`c17c995`, compte et sécurité), pas une fonctionnalité abandonnée.
 Les autres worktrees (compte, First Run, SMTP, aperçu, CSP, livraison, releases
 détachées) étaient propres et déjà intégrés : ils ont été supprimés avec le reste.
 Les copies disparues de `/opt/data/worktrees/*` ont été élaguées par
-`git worktree prune`. Les branches distantes mergées ont été supprimées ; seule
-`feature/admin-password-change` (repliée par la PR #10) reste non mergée.
+`git worktree prune`. Les branches distantes mergées ont été supprimées, puis
+`feature/admin-password-change` (repliée par la PR #10) a été supprimée à son tour
+le 2026-09-16 après vérification de son obsolescence ; son commit `8a20432` reste
+archivé dans `runtime/archive/upgrade-path-legacy-20260915.bundle`. `main` est
+désormais la seule branche, locale et distante.
 
 ### Copie de travail unique (2026-09-15)
 
@@ -44,6 +47,9 @@ FortiUpgrade du VPS : le dépôt Git sur `main` **et** l'hôte du runtime vivant
 dans `runtime/` (`compose.yml`, `data/`, `docs/` runtime, `rollback/`, `archive/`),
 ignoré par Git parce que les `data/` et `docs/` versionnés contiennent les
 échantillons et les guides : l'état vivant ne doit jamais être monté par-dessus.
+
+Un seul worktree subsiste : ce workspace principal. Aucun worktree permanent,
+aucun dossier de déploiement parallèle.
 
 Suppression de l'ancien état, après archivage vérifiable :
 
@@ -91,9 +97,9 @@ réutilisent le même validateur ; leurs frontières de privilèges restent dist
 
 ### Changements locaux historiques préservés
 
-Le worktree `upgrade_path` conserve sans modification 18 fichiers suivis modifiés
-et `AGENTS.md` non suivi. Ils ne doivent ni être committés en masse ni servir de
-source de déploiement :
+Le worktree `upgrade_path` (supprimé le 2026-09-15, cf. ci-dessus) conservait sans
+modification 18 fichiers suivis modifiés et `AGENTS.md` non suivi. Ils ne doivent
+ni être committés en masse ni servir de source de déploiement :
 
 - First Run/admin : `app/cert/{cert.css,cert.js,index.html}`, `scripts/cert_admin.py`,
   `scripts/fortios_server.py`, `docker/entrypoint.sh`, `tests/test_cert_admin.py`,
@@ -107,7 +113,9 @@ source de déploiement :
 - `AGENTS.md` : intégré depuis son commit versionné `35f743b`, pas copié entre worktrees.
 
 Ces restes sont un filet historique explicitement non autoritatif, pas une
-divergence de fonctionnalités à merger. Les branches historiques sont conservées.
+divergence de fonctionnalités à merger. Ils sont archivés dans `runtime/archive/`
+(bundle Git complet et patch des modifications non commitées) ; les branches
+historiques ont été supprimées et `main` est la seule branche conservée.
 
 ### Recette de convergence
 
