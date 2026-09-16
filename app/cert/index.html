@@ -308,7 +308,7 @@
           <div>
             <p class="eyebrow">Alertes PSIRT</p>
             <h2>Notifications de sécurité</h2>
-            <p>Configure les CVE High / Critical surveillées et les alertes de nouvelles versions, avec leurs destinataires communs.</p>
+            <p>Configure le seuil de sévérité et les produits surveillés pour les CVE, ainsi que les alertes de nouvelles versions, avec leurs destinataires communs.</p>
           </div>
         </div>
 
@@ -325,7 +325,13 @@
             <div class="panel-body">
               <div class="field">
                 <label for="minimum-severity">Sévérité minimale</label>
-                <select id="minimum-severity"><option value="high">High</option></select>
+                <select id="minimum-severity">
+                  <option value="critical">Critical</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+                <span class="field-help">Les CVE de ce niveau et au-dessus déclenchent un email : High envoie High et Critical. Une baisse du seuil ne renvoie pas l’historique déjà collecté.</span>
               </div>
               <section class="form-section" aria-labelledby="products-heading">
                 <h3 id="products-heading">Produits surveillés pour les CVE</h3>
