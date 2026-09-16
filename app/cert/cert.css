@@ -136,36 +136,6 @@
 .notifications-column { display: grid; align-content: start; gap: 16px; min-width: 0; }
 .settings-panel, .smtp-panel { min-width: 0; }
 
-/* ≥ 900px — two columns: alertes on the left, the whole email pipeline on the right. */
-@media (min-width: 900px) {
-  .notifications-columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
-  .notifications-columns__email { grid-column: 2; }
-}
-
-/* ≥ 1400px — three columns: alertes (28 %) · configuration email + test (28 %) ·
-   apparence + aperçu (44 %). */
-@media (min-width: 1400px) {
-  .notifications-columns { grid-template-columns: 28fr 28fr 44fr; }
-  .notifications-columns__email { grid-column: 2 / 4; grid-template-columns: 28fr 44fr; }
-  /* The email column is narrower here: its test card stacks instead of splitting in two. */
-  .test-email-layout { grid-template-columns: minmax(0, 1fr); }
-  .test-email-layout > .form-message, .smtp-checks { grid-column: auto; }
-  /* Desktop preview-first in column 3: the email render sits in the first viewport ("aperçu
-     visible rapidement") and the sticky below has room to accompany the appearance fields.
-     DOM/mobile order stays Apparence then Aperçu (§5), so desktop uses `order`. */
-  .preview-panel { order: -1; }
-}
-
-/* Sticky preview — only when the viewport is tall enough for the pinned card to leave a usable
-   window for the appearance fields below it. Below ~1140px of height the pinned card is measured
-   to overlap the fields it is meant to accompany, so the sticky stays off there ('pas de sticky
-   si la hauteur disponible rend le comportement pénible'). The email viewport is bounded for the
-   same reason: measured card chrome (~600px) + email viewport + 16px offset + ~240px of fields
-   must fit in the viewport. */
-@media (min-width: 1400px) and (min-height: 1140px) {
-  .preview-panel { position: sticky; top: 16px; }
-  .preview-panel .email-preview iframe { height: clamp(280px, calc(100vh - 856px), 420px); min-height: 0; }
-}
 .form-section { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--soft-line); }
 .form-section h3, .recipient-heading h3 { margin: 0 0 12px; color: var(--ink); font-size: 15px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -218,19 +188,19 @@
 .email-preview-text-details { width: 100%; max-width: 724px; margin: 0 0 18px; border: 1px solid var(--line); border-radius: 7px; }
 .email-preview-text-details summary { padding: 11px 13px; color: var(--ink); font-weight: 700; cursor: pointer; }
 .email-preview-text-details pre { margin: 0; padding: 0 13px 13px; color: var(--text); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-.test-email-layout { display: grid; grid-template-columns: minmax(260px, .7fr) minmax(0, 1.3fr); gap: 0 20px; align-items: start; }
-.test-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+.test-email-layout { display: grid; align-items: start; }
+.test-summary { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 18px; }
 .smtp-checks { grid-column: 1 / -1; margin: 12px 0 0; padding: 0; list-style: none; color: var(--ok); }
 .smtp-checks li { margin: 5px 0; }
-.test-email-layout > .form-message { grid-column: 1 / -1; }
 .smtp-details { margin: 0 0 20px; }
 .smtp-details > div { padding: 10px 0; border-bottom: 1px solid var(--soft-line); }
 .smtp-details dt { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
-.smtp-details dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.smtp-details dd { margin: 0; color: var(--ink); overflow-wrap: break-word; }
 .transport-choice { margin-bottom: 18px; }
 .microsoft365-settings { margin-top: 2px; padding: 15px; border: 1px solid #bfd8f2; border-radius: 8px; background: var(--soft-blue); }
-.microsoft365-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.microsoft365-heading h4 { margin: 0 0 5px; color: var(--ink); font-size: 15px; }
+.microsoft365-heading { display: grid; gap: 8px; margin-bottom: 14px; }
+.microsoft365-heading .microsoft365-title-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.microsoft365-heading h4 { margin: 0; color: var(--ink); font-size: 15px; }
 .microsoft365-settings .field { margin-bottom: 12px; }
 .microsoft365-settings code { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .microsoft365-settings .secret-control { margin-bottom: 12px; background: rgba(255, 255, 255, .7); }
@@ -263,6 +233,38 @@
   .account-summary { grid-template-columns: 1fr; }
   .account-summary > div:nth-child(even) { border-left: 0; }
   .account-summary > div + div { border-top: 1px solid var(--soft-line); }
-  .microsoft365-heading { align-items: flex-start; flex-direction: column; }
   .microsoft365-settings .secret-control .field-help { text-align: left; }
+}
+
+/* Responsive notifications board — media queries sit AFTER the base rules so the cascade is
+   deterministic (same-specificity rules later in the file win). */
+/* ≥ 560px — the test summary is a roomy two-column grid (email addresses fit on one line;
+   single column below, where the card is too narrow for two usable cells). */
+@media (min-width: 560px) {
+  .test-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* ≥ 900px — two columns: alertes on the left, the whole email pipeline on the right. */
+@media (min-width: 900px) {
+  .notifications-columns { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
+  .notifications-columns__email { grid-column: 2; }
+}
+/* ≥ 1400px — three columns: alertes (28 %) · configuration email + test (28 %) ·
+   apparence + aperçu (44 %). */
+@media (min-width: 1400px) {
+  .notifications-columns { grid-template-columns: 28fr 28fr 44fr; }
+  .notifications-columns__email { grid-column: 2 / 4; grid-template-columns: 28fr 44fr; }
+  /* Desktop preview-first in column 3: the email render sits in the first viewport ("aperçu
+     visible rapidement") and the sticky below has room to accompany the appearance fields.
+     DOM/mobile order stays Apparence then Aperçu (§5), so desktop uses `order`. */
+  .preview-panel { order: -1; }
+}
+/* Sticky preview — only when the viewport is tall enough for the pinned card to leave a usable
+   window for the appearance fields below it. Below ~1140px of height the pinned card is measured
+   to overlap the fields it is meant to accompany, so the sticky stays off there ('pas de sticky
+   si la hauteur disponible rend le comportement pénible'). The email viewport is bounded for the
+   same reason: measured card chrome (~600px) + email viewport + 16px offset + ~240px of fields
+   must fit in the viewport. */
+@media (min-width: 1400px) and (min-height: 1140px) {
+  .preview-panel { position: sticky; top: 16px; }
+  .preview-panel .email-preview iframe { height: clamp(280px, calc(100vh - 856px), 420px); min-height: 0; }
 }
