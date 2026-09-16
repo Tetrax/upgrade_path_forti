@@ -41,6 +41,25 @@ SEVERITY_CRITICAL_BG = "#B42318"
 SEVERITY_CRITICAL_TEXT = "#B42318"
 SEVERITY_HIGH_BG = "#B54708"
 SEVERITY_HIGH_TEXT = "#B54708"
+# Medium/Low were added when the notification threshold became configurable: a batch may now
+# legitimately contain them, and a badge or counter that showed them as HIGH would be a false
+# statement inside a security email. Same functional family as the two above — dark, saturated,
+# legible with white text — and still reserved for severity, never used as a brand colour.
+SEVERITY_MEDIUM_BG = "#9A6700"
+SEVERITY_MEDIUM_TEXT = "#9A6700"
+SEVERITY_LOW_BG = "#3F6212"
+SEVERITY_LOW_TEXT = "#3F6212"
+
+# The severity levels the Fortinet catalog genuinely publishes, most severe first. Anything else
+# (a missing severity, or the `unknown` fallback for an unscored CVE) keeps its historical HIGH
+# presentation instead of losing its badge or its counter.
+BADGE_SEVERITY_LEVELS = ("critical", "high", "medium", "low")
+_SEVERITY_BADGE_COLORS = {
+    "CRITICAL": SEVERITY_CRITICAL_BG,
+    "HIGH": SEVERITY_HIGH_BG,
+    "MEDIUM": SEVERITY_MEDIUM_BG,
+    "LOW": SEVERITY_LOW_BG,
+}
 
 _ASSET_DIR = Path(__file__).resolve().parent / "email_assets"
 
@@ -88,11 +107,22 @@ def load_inline_images() -> list[InlineImage]:
 
 def _severity_upper(event: Any) -> str:
     severity = (event.severity or "high").lower()
-    return severity.upper() if severity in ("critical", "high") else "HIGH"
+    return severity.upper() if severity in BADGE_SEVERITY_LEVELS else "HIGH"
 
 
-def _is_critical(event: Any) -> bool:
-    return (event.severity or "").lower() == "critical"
+def _severity_counts(security_events: list[Any]) -> dict[str, int]:
+    """Occurrences of each published severity in the batch.
+
+    Counters and the subject used to derive the non-Critical figure as ``total - critical``, which
+    was only ever equivalent to "number of High" while High/Critical were the only CVEs that could
+    reach this renderer. The threshold is configurable now, so the breakdown is counted per level.
+    """
+    counts = {level: 0 for level in BADGE_SEVERITY_LEVELS}
+    for event in security_events:
+        severity = (event.severity or "").lower()
+        if severity in counts:
+            counts[severity] += 1
+    return counts
 
 
 def _plural(n: int) -> str:
@@ -115,10 +145,14 @@ def _product_counts(security_events: list[Any]) -> list[tuple[str, int]]:
 
 
 def compose_subject(security_events: list[Any]) -> str:
-    """Deterministic subject: volume first, Critical when present, products only when short."""
+    """Deterministic subject: volume first, then the batch's own severity breakdown.
+
+    Every level the batch actually contains is named; with a High/Critical-only batch (still the
+    default `high` threshold) the produced subject is byte-for-byte the historical one.
+    """
     total = len(security_events)
-    critical = sum(1 for event in security_events if _is_critical(event))
-    high = total - critical
+    counts = _severity_counts(security_events)
+    critical = counts["critical"]
     plural = _plural(total)
 
     if total == 1 and critical == 1:
@@ -129,19 +163,14 @@ def compose_subject(security_events: list[Any]) -> str:
             return f"[FortiUpgrade] 1 nouvelle vulnérabilité Critical — {products}"
         return "[FortiUpgrade] 1 nouvelle vulnérabilité Critical"
 
-    if critical > 0:
-        if high > 0:
-            return (
-                f"[FortiUpgrade] {total} nouvelles vulnérabilités "
-                f"— {critical} Critical / {high} High"
-            )
-        return (
-            f"[FortiUpgrade] {total} nouvelle{plural} vulnérabilité{plural} "
-            f"— {critical} Critical"
-        )
-    return (
-        f"[FortiUpgrade] {total} nouvelle{plural} vulnérabilité{plural} — {high} High"
+    breakdown = " / ".join(
+        f"{counts[level]} {level.capitalize()}"
+        for level in BADGE_SEVERITY_LEVELS
+        if counts[level] > 0
     )
+    if not breakdown:  # Defensive: an unlabelled batch keeps the historical wording.
+        breakdown = f"{total} High"
+    return f"[FortiUpgrade] {total} nouvelle{plural} vulnérabilité{plural} — {breakdown}"
 
 
 def _hero_title(total: int) -> str:
@@ -334,21 +363,30 @@ def compose_text_body(
     introduction: str = "",
     signature: str = "",
 ) -> str:
+    counts = _severity_counts(security_events)
     total = len(security_events)
-    critical = sum(1 for event in security_events if _is_critical(event))
-    high = total - critical
     product_counts = _product_counts(security_events)
 
     lines: list[str] = [display_name]
     if introduction:
         lines.extend(["", introduction])
+    # Critical/High lines are always printed (a zero High is itself information); Medium/Low only
+    # when the configured threshold actually let some through, which keeps a High/Critical-only
+    # batch byte-for-byte identical to the historical body.
     lines.extend(
         [
             "",
             _hero_title(total),
             "",
-            f"Critical : {critical}",
-            f"High     : {high}",
+            f"Critical : {counts['critical']}",
+            f"High     : {counts['high']}",
+        ]
+    )
+    for level in ("medium", "low"):
+        if counts[level]:
+            lines.append(f"{level.capitalize():<8} : {counts[level]}")
+    lines.extend(
+        [
             f"Total    : {total}",
             "",
             "Produits concernés (nombre de CVE par produit)",
@@ -410,14 +448,16 @@ def compose_text_body(
 
 
 def _severity_badge(severity: str) -> str:
-    if severity == "CRITICAL":
-        return (
-            f"<td style='padding:5px 12px;background:{SEVERITY_CRITICAL_BG};color:#ffffff;"
-            "font-size:12px;font-weight:700;letter-spacing:1px;border-radius:3px'>CRITICAL</td>"
-        )
+    """One badge per published level, coloured by that level.
+
+    The historical implementation painted everything that was not CRITICAL with the HIGH colour
+    and the literal text "HIGH", which was only correct while a batch could not contain any other
+    level. An unrecognised label keeps the historical HIGH rendering rather than losing its badge.
+    """
+    background = _SEVERITY_BADGE_COLORS.get(severity, SEVERITY_HIGH_BG)
     return (
-        f"<td style='padding:5px 12px;background:{SEVERITY_HIGH_BG};color:#ffffff;"
-        "font-size:12px;font-weight:700;letter-spacing:1px;border-radius:3px'>HIGH</td>"
+        f"<td style='padding:5px 12px;background:{background};color:#ffffff;"
+        f"font-size:12px;font-weight:700;letter-spacing:1px;border-radius:3px'>{severity}</td>"
     )
 
 
@@ -431,33 +471,31 @@ def compose_html_body(
     introduction: str = "",
     signature: str = "",
 ) -> str:
+    counts = _severity_counts(security_events)
     total = len(security_events)
-    critical = sum(1 for event in security_events if _is_critical(event))
-    high = total - critical
     product_counts = _product_counts(security_events)
     hero_title = _hero_title(total)
 
     # --- Summary counters ---------------------------------------------------
-    counter_critical = (
-        f"<td style='text-align:center;padding:18px 12px'>"
-        f"<div style='font-size:34px;font-weight:800;color:{SEVERITY_CRITICAL_TEXT};line-height:1'>"
-        f"{critical}</div>"
-        f"<div style='margin-top:6px;font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};"
-        f"letter-spacing:1px'>CRITICAL</div></td>"
-    )
-    counter_high = (
-        f"<td style='text-align:center;padding:18px 12px'>"
-        f"<div style='font-size:34px;font-weight:800;color:{SEVERITY_HIGH_TEXT};line-height:1'>"
-        f"{high}</div>"
-        f"<div style='margin-top:6px;font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};"
-        f"letter-spacing:1px'>HIGH</div></td>"
-    )
-    counter_total = (
-        f"<td style='text-align:center;padding:18px 12px'>"
-        f"<div style='font-size:34px;font-weight:800;color:{SNS_BLACK};line-height:1'>{total}</div>"
-        f"<div style='margin-top:6px;font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};"
-        f"letter-spacing:1px'>AU TOTAL</div></td>"
-    )
+    # One cell per level present. CRITICAL/HIGH/AU TOTAL keep their exact historical markup, so a
+    # High/Critical-only batch renders the same three cells as before; Medium/Low cells are only
+    # added when the configurable threshold actually retained such a CVE.
+    def _counter_cell(value: int, label: str, color: str) -> str:
+        return (
+            "<td style='text-align:center;padding:18px 12px'>"
+            f"<div style='font-size:34px;font-weight:800;color:{color};line-height:1'>"
+            f"{value}</div>"
+            f"<div style='margin-top:6px;font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};"
+            f"letter-spacing:1px'>{label}</div></td>"
+        )
+
+    counter_cells = _counter_cell(counts["critical"], "CRITICAL", SEVERITY_CRITICAL_TEXT)
+    counter_cells += _counter_cell(counts["high"], "HIGH", SEVERITY_HIGH_TEXT)
+    if counts["medium"]:
+        counter_cells += _counter_cell(counts["medium"], "MEDIUM", SEVERITY_MEDIUM_TEXT)
+    if counts["low"]:
+        counter_cells += _counter_cell(counts["low"], "LOW", SEVERITY_LOW_TEXT)
+    counter_cells += _counter_cell(total, "AU TOTAL", SNS_BLACK)
 
     product_rows = "".join(
         "<tr>"
@@ -544,7 +582,7 @@ def compose_html_body(
         "margin:0 0 12px'>SYNTHÈSE</div>"
         "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
         f"style='border-collapse:collapse;border:1px solid {SNS_GRAY_BORDER}'>"
-        f"<tr>{counter_critical}{counter_high}{counter_total}</tr>"
+        f"<tr>{counter_cells}</tr>"
         "</table>"
         "</td></tr>"
         # Products concerned (SNS pale rose background)

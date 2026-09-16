@@ -313,8 +313,8 @@ l'UPN est identique à l'adresse email, cette dernière suffit. Si l'UPN et l'ad
 SMTP diffèrent, renseigner l'identité de boîte distincte dans le champ avancé
 prévu à cet effet ; un alias arbitraire n'est pas un identifiant Graph garanti.
 
-Enregistrer avant de tester. Les destinataires, les produits surveillés, les
-règles High/Critical, l'apparence et les préférences existantes restent partagés
+Enregistrer avant de tester. Les destinataires, les produits surveillés, le
+seuil de sévérité des CVE, l'apparence et les préférences existantes restent partagés
 avec SMTP. Le nom affiché est une présentation, pas un droit d'usurpation :
 Exchange et les clients de messagerie peuvent afficher le nom résolu dans
 l'annuaire plutôt que le libellé transmis.

@@ -783,6 +783,59 @@ def test_notifications_admin_exposes_grouped_smtp_and_email_appearance(page, for
     expect(page.locator("#delete-smtp-password-button")).to_have_count(0)
 
 
+def test_cve_severity_threshold_offers_every_level_and_persists(page, fortios_server):
+    """The CVE threshold is a real select: all published levels, persisted across a reload."""
+    fortios_notify.save_notification_settings(
+        fortios_server.data_dir / "notification-settings.json",
+        {
+            "enabled": True,
+            "minimumSeverity": "high",
+            "products": {
+                "fortigate-fortios": True,
+                "fortimanager": True,
+                "fortianalyzer": True,
+                "forticlient-ems": True,
+                "forticlient": {"windows": True, "macos": True, "linux": True},
+            },
+            "recipients": ["soc@example.com"],
+        },
+    )
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    severity = page.locator("#minimum-severity")
+    # Every level Fortinet genuinely publishes, most severe first, and nothing invented.
+    options = page.locator("#minimum-severity option")
+    assert options.evaluate_all("options => options.map(option => option.value)") == [
+        "critical",
+        "high",
+        "medium",
+        "low",
+    ]
+    assert options.evaluate_all("options => options.map(option => option.textContent)") == [
+        "Critical",
+        "High",
+        "Medium",
+        "Low",
+    ]
+    # The historical default is preselected, so an existing configuration cannot drift.
+    expect(severity).to_have_value("high")
+
+    severity.select_option("low")
+    with page.expect_response(
+        lambda response: response.url.endswith("/api/cert/notifications")
+    ) as saved:
+        page.click("#save-notifications-button")
+    assert saved.value.json()["settings"]["minimumSeverity"] == "low"
+    expect(page.locator("#notifications-message")).to_contain_text("Configuration enregistrée.")
+
+    # Reload: the operator gets back the threshold they saved.
+    page.reload()
+    expect(page.locator("#admin-view")).to_be_visible()
+    page.click("#notifications-tab")
+    expect(page.locator("#minimum-severity")).to_have_value("low")
+
+
 def test_release_recipients_can_be_detached_from_the_cve_list(page, fortios_server):
     """The dedicated release list is opt-in, validated, persisted and reflected in the preview."""
     login_cert_admin(page, fortios_server)

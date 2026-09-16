@@ -132,8 +132,38 @@ _NOTIFICATION_SETTINGS_ALLOWED_KEYS = frozenset(
     (*_NOTIFICATION_SETTINGS_REQUIRED_KEYS, *_NOTIFICATION_SETTINGS_OPTIONAL_KEYS)
 )
 _FORTICLIENT_PLATFORM_KEYS = ("windows", "macos", "linux")
-_MONITORED_SEVERITIES = frozenset({"high", "critical"})
+# Explicit severity hierarchy: notification filtering compares these RANKS, never the strings
+# themselves (`critical` < `high` alphabetically, which would invert the whole threshold). The
+# levels are the ones Fortinet genuinely publishes, as derived by fortios_watch.cvss_severity()
+# from the CVRF CVSS base score. `unknown` is NOT a published level: it is this application's own
+# fallback for a CVE whose CVRF carries no base score, so it ranks below every level and can never
+# pass a configured threshold -- an unscored CVE is never presented as "at least Low".
 _SEVERITY_RANK = {"unknown": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+# Every severity a derived event or a persisted outbox entry may legitimately carry -- wider than
+# the selectable thresholds, because a CVE queued under a low threshold must stay a valid entry.
+_KNOWN_SEVERITIES = frozenset(_SEVERITY_RANK)
+# The thresholds the administrator may select, MOST SEVERE FIRST: this tuple is the order the
+# administration select offers AND the complete set of accepted `minimumSeverity` values.
+NOTIFICATION_MINIMUM_SEVERITIES = ("critical", "high", "medium", "low")
+# The behaviour of every configuration written before the threshold was configurable. It is also
+# the value an absent key resolves to; an explicit but unknown value is rejected instead (see
+# validate_notification_settings), never silently coerced to this one.
+DEFAULT_MINIMUM_SEVERITY = "high"
+
+
+def severity_reaches(severity: Any, minimum_severity: str) -> bool:
+    """True when ``severity`` is at or above the configured notification threshold.
+
+    This is the ONLY severity comparison in the notification engine: everything goes through the
+    explicit hierarchy above rather than through string ordering or a hard-coded High/Critical
+    pair, so raising or lowering the threshold needs no other change. A missing or unrecognised
+    severity ranks as ``unknown`` and therefore never passes a valid threshold.
+    """
+    return _SEVERITY_RANK.get(
+        str(severity or "unknown").strip().lower(), _SEVERITY_RANK["unknown"]
+    ) >= _SEVERITY_RANK[minimum_severity]
+
+
 PRODUCT_DISPLAY_LABELS = {
     "fortigate-fortios": "FortiGate / FortiOS",
     "fortimanager": "FortiManager",
@@ -149,7 +179,7 @@ def _default_notification_settings_payload() -> dict[str, Any]:
     return {
         "enabled": False,
         "releaseNotificationsEnabled": False,
-        "minimumSeverity": "high",
+        "minimumSeverity": DEFAULT_MINIMUM_SEVERITY,
         "products": {
             **{key: True for key in _SETTINGS_PRODUCT_KEYS},
             "forticlient": {key: True for key in _FORTICLIENT_PLATFORM_KEYS},
@@ -252,8 +282,20 @@ def validate_notification_settings(payload: Any) -> NotificationSettings:
         raise TypeError(
             "Le champ releaseNotificationsEnabled doit être un booléen."
         )
-    if payload["minimumSeverity"] != "high":
-        raise ValueError("La sévérité minimale doit être high.")
+    # The threshold is an explicit level, not a free string: an unknown or misspelled value is
+    # rejected outright rather than falling back to `high`, which would silently filter alerts the
+    # operator believes they configured. Existing configurations carry `high`, so they keep the
+    # exact behaviour they had before this key became a real threshold.
+    minimum_severity = payload["minimumSeverity"]
+    if (
+        not isinstance(minimum_severity, str)
+        or minimum_severity not in NOTIFICATION_MINIMUM_SEVERITIES
+    ):
+        raise ValueError(
+            "La sévérité minimale doit être l'une des valeurs suivantes : "
+            + ", ".join(NOTIFICATION_MINIMUM_SEVERITIES)
+            + "."
+        )
 
     products = payload["products"]
     expected_product_keys = {*_SETTINGS_PRODUCT_KEYS, "forticlient"}
@@ -290,7 +332,7 @@ def validate_notification_settings(payload: Any) -> NotificationSettings:
 
     return NotificationSettings(
         enabled=payload["enabled"],
-        minimum_severity="high",
+        minimum_severity=minimum_severity,
         products={
             **{key: products[key] for key in _SETTINGS_PRODUCT_KEYS},
             "forticlient": dict(forticlient),
@@ -1748,7 +1790,7 @@ def load_smtp_preview_snapshot(
     """Load SMTP transport without reading or repairing functional notification state."""
     preview_settings = NotificationSettings(
         enabled=False,
-        minimum_severity="high",
+        minimum_severity=DEFAULT_MINIMUM_SEVERITY,
         products={},
         recipients=(),
     )
@@ -1936,7 +1978,7 @@ def _is_valid_outbox_entry(entry: Any) -> bool:
     ):
         return False
     severity = entry.get("severity")
-    if severity is not None and severity not in _MONITORED_SEVERITIES:
+    if severity is not None and severity not in _KNOWN_SEVERITIES:
         return False
     details = entry.get("details", {})
     if not isinstance(details, dict):
@@ -2607,11 +2649,19 @@ def derive_new_cve_events(
     newly_added_cves: list[dict[str, Any]],
     settings: NotificationSettings | None = None,
 ) -> list[NotificationEvent]:
+    """Notify each newly observed CVE whose severity reaches the configured threshold.
+
+    A CVE is "new" only in the sense that the notification checkpoint had never seen its id (see
+    fortios_watch's diff against ``checkpoint["cvesById"]``). A CVE already recorded in the
+    checkpoint is therefore NOT re-notified when the operator lowers the threshold: the checkpoint
+    keeps advancing for every collected CVE regardless of the threshold, so a threshold change
+    filters FUTURE events and never replays history.
+    """
     settings = settings or _default_detection_settings()
     events = []
     for cve in newly_added_cves:
         severity = (cve.get("severity") or "unknown").lower()
-        if severity not in _MONITORED_SEVERITIES:
+        if not severity_reaches(severity, settings.minimum_severity):
             continue
         affected = _selected_affected_entries(cve, settings)
         if not affected:
@@ -2632,11 +2682,14 @@ def derive_cve_modification_events(
     cves_after_by_id: dict[str, dict[str, Any]],
     settings: NotificationSettings | None = None,
 ) -> list[NotificationEvent]:
-    """Notify only a severity escalation that reaches High/Critical.
+    """Notify only a severity escalation that reaches the configured threshold.
 
-    Re-publication, wording/CVSS/scope edits, and an unchanged High/Critical severity are silent.
-    This keeps the PSIRT diff authoritative without turning every advisory refresh into a new
-    security alert.
+    Re-publication, wording/CVSS/scope edits, and an unchanged severity are silent. A genuine
+    escalation that lands at or above ``settings.minimum_severity`` notifies -- with the historical
+    `high` threshold that is exactly the documented Medium/Low/Unknown -> High, -> Critical and
+    High -> Critical set, and a lower threshold simply widens it (e.g. Low -> Medium under a
+    `medium` threshold). A severity DECREASE never notifies: it is neither an escalation here nor a
+    new CVE, since the id is already in the checkpoint.
     """
     settings = settings or _default_detection_settings()
     events = []
@@ -2647,7 +2700,7 @@ def derive_cve_modification_events(
 
         before_severity = (before.get("severity") or "unknown").lower()
         after_severity = (after.get("severity") or "unknown").lower()
-        if after_severity not in _MONITORED_SEVERITIES:
+        if not severity_reaches(after_severity, settings.minimum_severity):
             continue
         if _SEVERITY_RANK.get(after_severity, 0) <= _SEVERITY_RANK.get(
             before_severity, 0

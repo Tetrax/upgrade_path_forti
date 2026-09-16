@@ -7,7 +7,7 @@ La ligne autoritative du produit est **`main`** du dépôt
 canonical : `/home/tetrax/workspace/Fortiupgrade`, qui héberge aussi le runtime
 vivant dans `runtime/` (ignoré par Git). Les branches servent au travail en cours.
 Certificats, reverse proxy,
-notifications High/Critical et transports email sont intégrés dans cette même ligne.
+notifications CVE (seuil de sévérité configurable) et transports email sont intégrés dans cette même ligne.
 Voir la [cartographie de convergence et les validations](docs/delivery.md#convergence-des-branches).
 
 ## Structure
@@ -421,22 +421,37 @@ Format persistant :
 
 Les identifiants reprennent directement le catalogue applicatif : FortiClient reste le produit canonique `forticlient`, avec les modèles existants `windows`, `macos` et `linux`. Il n'existe pas de seconde taxonomie produit.
 
-### Règle CVE High / Critical
+### Seuil de sévérité des notifications CVE
 
-Un événement de sécurité est produit uniquement pour :
+Le champ **Sévérité minimale** (`minimumSeverity`) est un vrai seuil de notification : une CVE ne produit un événement que si sa sévérité est **égale ou supérieure** au niveau configuré. Les niveaux proposés sont ceux que Fortinet publie réellement — `critical`, `high`, `medium`, `low`, du plus sévère au moins sévère. `high` reste la valeur par défaut et la valeur des configurations existantes : un déploiement n'augmente donc jamais son volume d'alertes sans décision explicite.
 
-- une nouvelle CVE **High** ou **Critical** touchant au moins un produit sélectionné ;
-- une CVE existante qui franchit `Medium/Low/Unknown → High`, `Medium/Low/Unknown → Critical` ou `High → Critical`.
+| Seuil | CVE notifiées |
+| --- | --- |
+| `critical` | Critical |
+| `high` (défaut) | Critical, High |
+| `medium` | Critical, High, Medium |
+| `low` | Critical, High, Medium, Low |
 
-Une CVE Medium/Low, une High inchangée, une simple republication PSIRT, une modification de texte/CVSS/périmètre sans escalade de sévérité, ou un produit non sélectionné ne génère aucun email. Une CVE qui touche plusieurs produits sélectionnés reste une seule entrée avec tous les produits concernés.
+La comparaison utilise une hiérarchie explicite (`critical` = 4 … `low` = 1), jamais un ordre alphabétique. Une CVE sans score CVSS (sévérité `unknown`) n'atteint aucun seuil : elle n'est jamais présentée comme « au moins Low ». Une valeur inconnue est refusée par l'API (`400`), sans repli silencieux vers `high`.
 
-Un run produit au maximum un email synthétique. L'objet reprend la sévérité la plus forte du lot (`[FortiUpgrade][CRITICAL] …` ou `[FortiUpgrade][HIGH] …`) ; le corps contient un résumé Critical/High et par produit, puis une section par CVE. Le message est multipart `text/plain` + HTML compact compatible avec les clients email limités.
+Un événement de sécurité est donc produit uniquement pour :
+
+- une nouvelle CVE dont la sévérité atteint le seuil configuré, touchant au moins un produit sélectionné ;
+- une CVE existante dont la sévérité **augmente réellement** et atteint le seuil configuré (par exemple `Medium → High`, `High → Critical`, ou `Low → Medium` avec un seuil `medium`).
+
+Ne produisent aucun email : une CVE sous le seuil, une sévérité inchangée, une **baisse** de sévérité, une simple republication PSIRT, une modification de texte/CVSS/périmètre sans escalade, ou un produit non sélectionné. Une CVE qui touche plusieurs produits sélectionnés reste une seule entrée avec tous les produits concernés.
+
+Le filtre est appliqué **avant** la composition : une CVE écartée n'apparaît ni dans le corps, ni dans les compteurs, ni dans les produits concernés, et le renderer nomme et colore chaque sévérité qu'il reçoit effectivement.
+
+**Le seuil ne provoque aucun rattrapage.** Le checkpoint enregistre toute CVE collectée, y compris celles que le seuil écarte ; une CVE déjà observée n'est donc jamais « nouvelle » parce que l'administrateur baisse le seuil. Seules les CVE découvertes après le changement suivent le nouveau seuil, et une escalade de sévérité observée ensuite reste notifiée selon la logique existante.
+
+Un run produit au maximum un email synthétique. L'objet annonce le volume puis la répartition réellement retenue (`[FortiUpgrade] 3 nouvelles vulnérabilités — 1 Critical / 1 High / 1 Medium`) ; le corps contient les compteurs par sévérité présente, le nombre de CVE par produit, puis une section par CVE badgée de son propre niveau. Le message est multipart `text/plain` + HTML compact compatible avec les clients email limités.
 
 Les catégories historiques restent actives lorsque les notifications sont activées :
 
 - **DAILY** : nouvelles versions FortiOS/FortiAnalyzer/FortiManager et branche passant en fin de support ;
 - **OPERATIONS** : source en échec depuis ≥ 2 exécutions consécutives ou retour à la normale ;
-- **CRITICAL** : CVE Critical, avec la nouvelle logique High/Critical détaillée ci-dessus.
+- **CRITICAL** : CVE Critical, avec le seuil de sévérité configurable détaillé ci-dessus.
 
 Une branche FortiOS franchissant sa date de fin de support déclenche un événement même si aucune donnée du catalogue n'a changé ce jour-là (`fortios_watch.py`/`endoflife.date` renvoient la même date de fin de support avant et après — seule l'avancée du calendrier fait la différence) : l'état « cette branche est-elle en fin de support » est donc suivi séparément d'une collecte à l'autre (`eolState` dans `data/fortios-notify-history.json`), pas dérivé d'une comparaison avant/après catalogue. Une branche vue pour la première fois initialise silencieusement cet état sans envoyer d'email, pour ne pas spammer toutes les fins de support déjà passées lors de la toute première activation ; ensuite, l'événement part exactement une fois au moment du franchissement, y compris après plusieurs jours sans collecte.
 

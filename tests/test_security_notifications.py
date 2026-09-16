@@ -46,12 +46,14 @@ def settings_payload(
     release_notifications: bool | None = None,
     release_recipients_shared: bool = True,
     release_recipients: list[str] | None = None,
+    minimum_severity: str = "high",
 ) -> dict[str, Any]:
     """The canonical saved payload, including the explicit release switches.
 
     ``release_notifications`` defaults to mirroring ``enabled``, which is what a legacy file
     without the key resolves to; pass it explicitly to exercise the asymmetric combinations.
     ``release_recipients`` only matters when ``release_recipients_shared`` is false.
+    ``minimum_severity`` defaults to the historical, still-default `high` threshold.
     """
     selected = set(PRODUCT_SELECTIONS) if selected is None else selected
     if release_notifications is None:
@@ -59,7 +61,7 @@ def settings_payload(
     return {
         "enabled": enabled,
         "releaseNotificationsEnabled": release_notifications,
-        "minimumSeverity": "high",
+        "minimumSeverity": minimum_severity,
         "products": {
             "fortigate-fortios": "fortigate-fortios" in selected,
             "fortimanager": "fortimanager" in selected,
@@ -954,6 +956,391 @@ class NotificationAdminWebTests(unittest.TestCase):
                 test_result["summary"]["recipient"], "security@example.com"
             )
             self.assertEqual(len(_SmtpHandler.messages), 1)
+
+
+class SeverityThresholdTests(unittest.TestCase):
+    """`minimumSeverity` is a real, persisted notification threshold.
+
+    The selectable levels are the ones Fortinet genuinely publishes, derived from the CVRF CVSS
+    base score by fortios_watch.cvss_severity(); `unknown` is this application's own fallback for
+    an unscored CVE and is deliberately not selectable.
+    """
+
+    # Most severe first, the order the administration select offers.
+    PUBLISHED = ("critical", "high", "medium", "low")
+    # One CVE per published level, in decreasing severity, so the retained set is always a prefix.
+    LEVELS = (("critical", 9.6), ("high", 8.0), ("medium", 5.0), ("low", 3.0))
+    REACHED: ClassVar[dict[str, tuple[str, ...]]] = {
+        "critical": ("critical",),
+        "high": ("critical", "high"),
+        "medium": ("critical", "high", "medium"),
+        "low": ("critical", "high", "medium", "low"),
+    }
+
+    def setUp(self) -> None:
+        self.fortios = PRODUCT_SELECTIONS["fortigate-fortios"]
+
+    def settings(self, threshold: str) -> Any:
+        return notify.validate_notification_settings(
+            settings_payload(minimum_severity=threshold)
+        )
+
+    def catalog(self) -> list[dict[str, Any]]:
+        return [
+            cve(f"CVE-2026-1100{index}", severity, [self.fortios], score=score)
+            for index, (severity, score) in enumerate(self.LEVELS)
+        ]
+
+    def test_the_selectable_levels_are_the_published_ones_most_severe_first(self) -> None:
+        self.assertEqual(notify.NOTIFICATION_MINIMUM_SEVERITIES, self.PUBLISHED)
+        self.assertEqual(notify.DEFAULT_MINIMUM_SEVERITY, "high")
+        # Ordering is a real hierarchy, not string comparison: each level reaches its own
+        # threshold and nothing more severe than it.
+        for index, level in enumerate(self.PUBLISHED):
+            with self.subTest(level=level):
+                self.assertTrue(notify.severity_reaches(level, level))
+                for stricter in self.PUBLISHED[:index]:
+                    self.assertFalse(notify.severity_reaches(level, stricter))
+
+    def test_the_threshold_is_a_strict_minimum_for_new_cves(self) -> None:
+        for threshold, reached in self.REACHED.items():
+            with self.subTest(threshold=threshold):
+                events = notify.derive_new_cve_events(
+                    self.catalog(), self.settings(threshold)
+                )
+                self.assertEqual(tuple(event.severity for event in events), reached)
+
+    def test_an_unscored_cve_never_reaches_even_the_lowest_threshold(self) -> None:
+        events = notify.derive_new_cve_events(
+            [cve("CVE-2026-12000", "unknown", [self.fortios])], self.settings("low")
+        )
+        self.assertEqual(events, [])
+
+    def test_an_unknown_threshold_is_refused_rather_than_falling_back_to_high(self) -> None:
+        # `Any` on purpose: a payload arriving from a client is not typed either.
+        invalid_values: list[Any] = [
+            "High",
+            "HIGH",
+            "Medium",
+            "informational",
+            "unknown",
+            "",
+            " high",
+            4,
+            True,
+            None,
+        ]
+        for invalid in invalid_values:
+            with self.subTest(value=invalid), self.assertRaises(ValueError):
+                notify.validate_notification_settings(
+                    settings_payload(minimum_severity=invalid)
+                )
+
+    def test_every_threshold_round_trips_through_the_persisted_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notification-settings.json"
+            for threshold in self.PUBLISHED:
+                with self.subTest(threshold=threshold):
+                    notify.save_notification_settings(
+                        path, settings_payload(minimum_severity=threshold)
+                    )
+                    self.assertEqual(
+                        notify.load_notification_settings(path, env={}).minimum_severity,
+                        threshold,
+                    )
+
+    def test_an_existing_high_configuration_keeps_its_behaviour_and_is_not_rewritten(
+        self,
+    ) -> None:
+        """Legacy migration: an existing `minimumSeverity: high` file stays a High/Critical one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notification-settings.json"
+            legacy = legacy_settings_payload()
+            path.write_text(json.dumps(legacy), encoding="utf-8")
+            settings = notify.load_notification_settings(path, env={})
+            stored = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(settings.minimum_severity, "high")
+        self.assertTrue(settings.enabled)
+        self.assertEqual(settings.recipients, ("security@example.com",))
+        self.assertEqual(stored, legacy)  # a read never rewrites the document
+        events = notify.derive_new_cve_events(self.catalog(), settings)
+        self.assertEqual(tuple(event.severity for event in events), ("critical", "high"))
+
+
+def _newly_added_cves(
+    checkpoint_cves_by_id: dict[str, Any], catalog: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The collector's own definition of "new" (fortios_watch's notification block).
+
+    A CVE is newly added when its id is absent from the persisted checkpoint. The notification
+    threshold plays no part in this diff, which is exactly why changing it can never turn the
+    already-collected backlog into new events.
+    """
+    return [item for item in catalog if item["id"] not in checkpoint_cves_by_id]
+
+
+class SeverityThresholdCheckpointTests(unittest.TestCase):
+    """Lowering the threshold filters FUTURE events; it never mails the collected backlog."""
+
+    def setUp(self) -> None:
+        self.fortios = PRODUCT_SELECTIONS["fortigate-fortios"]
+        self.catalog = [
+            cve("CVE-2026-20001", "critical", [self.fortios], score=9.6),
+            cve("CVE-2026-20002", "high", [self.fortios], score=8.2),
+            cve("CVE-2026-20003", "medium", [self.fortios], score=5.1),
+            cve("CVE-2026-20004", "low", [self.fortios], score=3.4),
+        ]
+
+    def settings(self, threshold: str) -> Any:
+        return notify.validate_notification_settings(
+            settings_payload(minimum_severity=threshold)
+        )
+
+    def test_lowering_the_threshold_does_not_replay_the_collected_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fortios-notify-history.json"
+            # First collection under the historical `high` threshold: only Critical/High notify...
+            events = notify.derive_new_cve_events(
+                _newly_added_cves({}, self.catalog), self.settings("high")
+            )
+            self.assertEqual(tuple(event.severity for event in events), ("critical", "high"))
+            # ...but the checkpoint records EVERY collected CVE, including the ones the threshold
+            # filtered out. That is the invariant which makes the change below silent.
+            notify.commit_events_with_checkpoint(
+                path,
+                {
+                    "versionsByProduct": {},
+                    "cvesById": {item["id"]: item for item in self.catalog},
+                    "health": {},
+                },
+                events,
+                claimant="run-1",
+            )
+            checkpoint = notify.load_notify_state(path)["checkpoint"]["cvesById"]
+
+        self.assertEqual(set(checkpoint), {item["id"] for item in self.catalog})
+        catalog_by_id = {item["id"]: item for item in self.catalog}
+        # Second collection, High -> Low on the very same catalog: nothing is new, no severity
+        # change was observed, so the operator receives no backlog email.
+        self.assertEqual(_newly_added_cves(checkpoint, self.catalog), [])
+        self.assertEqual(
+            notify.derive_new_cve_events(
+                _newly_added_cves(checkpoint, self.catalog), self.settings("low")
+            ),
+            [],
+        )
+        self.assertEqual(
+            notify.derive_cve_modification_events(
+                checkpoint, catalog_by_id, self.settings("low")
+            ),
+            [],
+        )
+
+    def test_a_cve_discovered_after_the_change_follows_the_new_threshold(self) -> None:
+        fresh = cve("CVE-2026-20009", "low", [self.fortios], score=3.9)
+        self.assertEqual(
+            [event.severity for event in notify.derive_new_cve_events([fresh], self.settings("low"))],
+            ["low"],
+        )
+        self.assertEqual(notify.derive_new_cve_events([fresh], self.settings("high")), [])
+
+    def test_a_severity_escalation_notifies_only_when_it_reaches_the_threshold(self) -> None:
+        cases = (
+            ("high", "low", "medium", 0),
+            ("medium", "low", "medium", 1),
+            ("high", "medium", "high", 1),
+            ("high", "high", "critical", 1),
+            ("critical", "high", "critical", 1),
+            ("critical", "medium", "high", 0),
+            ("low", "unknown", "low", 1),
+        )
+        for threshold, before_severity, after_severity, expected in cases:
+            with self.subTest(threshold=threshold, change=f"{before_severity}->{after_severity}"):
+                before = cve("CVE-2026-30001", before_severity, [self.fortios], score=1.0)
+                after = cve("CVE-2026-30001", after_severity, [self.fortios], score=9.0)
+                events = notify.derive_cve_modification_events(
+                    {before["id"]: before}, {after["id"]: after}, self.settings(threshold)
+                )
+                self.assertEqual(len(events), expected)
+
+    def test_a_severity_downgrade_is_neither_an_escalation_nor_a_new_cve(self) -> None:
+        before = cve("CVE-2026-30002", "critical", [self.fortios], score=9.5)
+        after = cve("CVE-2026-30002", "high", [self.fortios], score=8.0)
+        for threshold in notify.NOTIFICATION_MINIMUM_SEVERITIES:
+            with self.subTest(threshold=threshold):
+                self.assertEqual(
+                    notify.derive_cve_modification_events(
+                        {before["id"]: before}, {after["id"]: after}, self.settings(threshold)
+                    ),
+                    [],
+                )
+        # And the collector's diff cannot report it as new either: the id is already checkpointed.
+        self.assertEqual(_newly_added_cves({before["id"]: before}, [after]), [])
+
+    def test_a_queued_cve_below_high_is_a_valid_outbox_entry(self) -> None:
+        """A low threshold queues Medium/Low events: those entries must survive a state reload."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fortios-notify-history.json"
+            events = notify.derive_new_cve_events(
+                [
+                    cve("CVE-2026-30003", "medium", [self.fortios], score=5.2),
+                    cve("CVE-2026-30004", "low", [self.fortios], score=3.3),
+                ],
+                self.settings("low"),
+            )
+            notify.commit_events_with_checkpoint(
+                path,
+                {"versionsByProduct": {}, "cvesById": {}, "health": {}},
+                events,
+                claimant="run-1",
+            )
+            outbox = notify.load_notify_state(path)["outbox"]
+
+        self.assertEqual(
+            [(entry["severity"], entry["dedupKey"]) for entry in outbox],
+            [
+                ("medium", "new-cve|psirt|CVE-2026-30003|medium"),
+                ("low", "new-cve|psirt|CVE-2026-30004|low"),
+            ],
+        )
+
+
+class SeverityFilteredEmailTests(unittest.TestCase):
+    """The threshold filters derivation, so the email describes only the retained batch."""
+
+    def setUp(self) -> None:
+        self.fortios = PRODUCT_SELECTIONS["fortigate-fortios"]
+        self.fortimanager = PRODUCT_SELECTIONS["fortimanager"]
+        self.fortianalyzer = PRODUCT_SELECTIONS["fortianalyzer"]
+
+    def catalog(self) -> list[dict[str, Any]]:
+        return [
+            cve("CVE-2026-40001", "critical", [self.fortios], score=9.7),
+            cve("CVE-2026-40002", "high", [self.fortimanager], score=7.8),
+            cve("CVE-2026-40003", "medium", [self.fortios], score=5.4),
+            cve("CVE-2026-40004", "low", [self.fortianalyzer], score=3.2),
+        ]
+
+    def compose(self, threshold: str) -> tuple[Any, str, str, str]:
+        settings = notify.validate_notification_settings(
+            settings_payload(minimum_severity=threshold)
+        )
+        events = notify.derive_new_cve_events(self.catalog(), settings)
+        composed = notify.compose_email(
+            events,
+            app_url="https://example.test/",
+            run_timestamp="2026-09-16T05:00:00Z",
+        )
+        self.assertIsNotNone(composed)
+        subject, text, html = composed
+        return events, subject, text, html
+
+    def test_the_default_high_threshold_still_produces_the_historical_email(self) -> None:
+        events, subject, text, _html = self.compose("high")
+        self.assertEqual(tuple(event.severity for event in events), ("critical", "high"))
+        self.assertEqual(
+            [line for line in text.splitlines() if line.startswith("Critical :")],
+            ["Critical : 1"],
+        )
+        # No Medium/Low counter line exists for a batch that contains neither level.
+        self.assertNotIn("Medium", text)
+        self.assertNotIn("Low  ", text)
+        self.assertEqual(
+            subject, "[FortiUpgrade] 2 nouvelles vulnérabilités — 1 Critical / 1 High"
+        )
+
+    def test_counters_products_and_labels_describe_only_the_retained_cves(self) -> None:
+        events, subject, text, html = self.compose("medium")
+        self.assertEqual(
+            tuple(event.severity for event in events), ("critical", "high", "medium")
+        )
+        # The CVE below the threshold contributes nothing at all: no body section, no counter,
+        # no product row.
+        self.assertNotIn("CVE-2026-40004", text)
+        self.assertNotIn("CVE-2026-40004", html)
+        self.assertNotIn("FortiAnalyzer", text)
+        self.assertNotIn("FortiAnalyzer", html)
+        self.assertEqual(
+            [
+                line
+                for line in text.splitlines()
+                if line.startswith(("Critical ", "High ", "Medium ", "Low ", "Total "))
+            ],
+            ["Critical : 1", "High     : 1", "Medium   : 1", "Total    : 3"],
+        )
+        self.assertIn("FortiGate / FortiOS : 2 CVE", text)
+        self.assertIn("FortiManager : 1 CVE", text)
+        # Each retained level is reported under its own name, in the text and in the HTML badge.
+        self.assertIn("MEDIUM — CVE-2026-40003", text)
+        for badge in ("CRITICAL", "HIGH", "MEDIUM"):
+            self.assertIn(f">{badge}</td>", html)
+        self.assertNotIn(">LOW</td>", html)
+        self.assertEqual(
+            subject, "[FortiUpgrade] 3 nouvelles vulnérabilités — 1 Critical / 1 High / 1 Medium"
+        )
+
+
+class SeverityThresholdAdminApiTests(unittest.TestCase):
+    """The threshold is validated, persisted, and never silently replaced by the API."""
+
+    def test_the_threshold_is_validated_persisted_and_never_silently_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            credentials = root / "credentials.json"
+            cert_admin.write_credentials(
+                credentials,
+                cert_admin.credential_payload("valentin", "mot-de-passe-solide"),
+            )
+            data_dir = root / "data"
+            environment = {
+                "FORTIOS_CERT_ALLOW_INSECURE_LOCALHOST": "1",
+                "FORTIOS_CERT_ADMIN_FILE": str(credentials),
+                "FORTIOS_TEST_DATA_DIR": str(data_dir),
+            }
+            with running_server(environment) as base_url:
+                opener = urllib.request.build_opener(
+                    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+                )
+                csrf_token = login(opener, base_url)
+
+                def save(payload: dict[str, Any]):
+                    request = urllib.request.Request(
+                        f"{base_url}/api/cert/notifications",
+                        data=json.dumps(payload).encode(),
+                        method="POST",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Origin": base_url,
+                            "X-CSRF-Token": csrf_token,
+                        },
+                    )
+                    return opener.open(request, timeout=3)
+
+                with save(settings_payload(minimum_severity="medium")) as response:
+                    saved = json.load(response)
+                self.assertEqual(saved["settings"]["minimumSeverity"], "medium")
+
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    save(settings_payload(minimum_severity="urgent"))
+                self.assertEqual(raised.exception.code, 400)
+                self.assertIn(
+                    "critical, high, medium, low",
+                    raised.exception.read().decode("utf-8"),
+                )
+
+                with opener.open(
+                    f"{base_url}/api/cert/notifications", timeout=3
+                ) as response:
+                    current = json.load(response)
+
+            self.assertEqual(current["settings"]["minimumSeverity"], "medium")
+            self.assertEqual(current["settings"]["recipients"], ["security@example.com"])
+            persisted = json.loads(
+                (data_dir / "notification-settings.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(persisted["minimumSeverity"], "medium")
+            self.assertEqual(persisted["recipients"], ["security@example.com"])
 
 
 if __name__ == "__main__":

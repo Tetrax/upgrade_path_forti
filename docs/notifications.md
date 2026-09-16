@@ -235,10 +235,24 @@ it is rendered from the same production composer used for delivery.
 
 | Key | Scope |
 | --- | --- |
-| `enabled` | Historical scope: High/Critical CVEs **and** the system categories (end of support, repeated collection failures, recoveries, compatibility recovery). Not a CVE-only alias. |
+| `enabled` | Historical scope: CVEs at or above `minimumSeverity` **and** the system categories (end of support, repeated collection failures, recoveries, compatibility recovery). Not a CVE-only alias. |
+| `minimumSeverity` | Minimum CVE severity that may produce an event: `critical`, `high`, `medium` or `low`, most severe first. `high` is the default and the value every pre-existing configuration carries. |
 | `releaseNotificationsEnabled` | New Fortinet releases only. |
 | `releaseRecipientsShared` | `true` (default, and what a file without the key resolves to): releases deliver to `recipients`. |
 | `releaseRecipients` | Dedicated release list, used only when `releaseRecipientsShared` is `false`; then it must not be empty. |
+
+`minimumSeverity` is a genuine threshold, applied before composition. The four accepted
+values are the severity levels Fortinet genuinely publishes, derived from the CVRF CVSS base
+score by `fortios_watch.cvss_severity()`; `unknown` (our own fallback for a CVE whose CVRF
+carries no base score) is deliberately **not** selectable and never reaches any threshold, so an
+unscored CVE is never presented as "at least Low". Comparison goes through an explicit hierarchy
+(`critical` 4 … `unknown` 0), never through string ordering. An unknown value is refused by the
+API (`400`) instead of falling back to `high`.
+
+Raising or lowering the threshold filters **future** events only: the checkpoint records every
+collected CVE regardless of the threshold, so a CVE seen while it was below the threshold is
+never re-reported as new once the threshold drops, and no historical catch-up email is sent. A
+genuine severity escalation observed afterwards notifies when it reaches the configured level.
 
 `releaseNotificationsEnabled`, `releaseRecipientsShared` and `releaseRecipients` are all
 **optional when loading**: a file written before them inherits `enabled` / `true` / `[]`, so an
@@ -284,8 +298,9 @@ their structured details (`kind`, `product`, `productLabel`, `version`, `detecte
 `releaseNotesUrl`), so a pending outbox entry survives a retry and a version already sent is
 never re-notified.
 
-- New CVEs notify only when severity is `high` or `critical` and at least one configured product/model is affected.
-- A modified CVE notifies only when its severity crosses into `high` or `critical`. Re-publication, wording/CVSS edits, and unchanged monitored severity are quiet.
+- New CVEs notify only when their severity reaches `minimumSeverity` (default `high`) and at least one configured product/model is affected.
+- A modified CVE notifies only when its severity genuinely escalates and lands at or above `minimumSeverity`; a decrease never notifies. Re-publication, wording/CVSS edits, and unchanged severity are quiet. With the default `high` threshold this is exactly the documented `Medium/Low/Unknown -> High`, `-> Critical` and `High -> Critical` set.
+- An event below the threshold is discarded before composition: it contributes no body section, no counter and no product row. The renderer names and colours each severity it actually receives.
 - A CVE affecting several selected products is one event with one deduplication key and an aggregated affected-product section, not one email per product.
 - Initial checkpoint/bootstrap and catalog backfill are quiet. Incomplete or malformed snapshots do not invent a baseline event; a valid later snapshot can produce the real transition.
 - Disabling delivery continues to advance an existing notification reference without creating retroactive events, including legacy environment-only configuration (`FORTIOS_EMAIL_ENABLED=false` without `notification-settings.json`) and compatibility-only recovery. Pending outbox entries are retained, never sent while disabled, and remain eligible for retry after reactivation. Persisted functional settings, when present, remain authoritative and are not rewritten by this fallback.
