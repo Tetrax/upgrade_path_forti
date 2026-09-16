@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import datetime as dt
 import fcntl
+import hashlib
 import html
 import json
 import os
@@ -40,6 +41,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fortios_email_render
+import trivy_report
 from fortios_watch import (
     cross_process_lock,
     parse_health_timestamp,
@@ -2075,7 +2077,13 @@ def _is_valid_notify_state(payload: Any) -> bool:
 
 
 def _empty_notify_state() -> dict[str, Any]:
-    return {"sentKeys": {}, "outbox": [], "eolState": {}, "checkpoint": None}
+    return {
+        "sentKeys": {},
+        "outbox": [],
+        "eolState": {},
+        "checkpoint": None,
+        "containerSecurityState": _empty_container_security_state(),
+    }
 
 
 class NotifyStateError(RuntimeError):
@@ -2106,11 +2114,19 @@ def load_notify_state(path: Path) -> dict[str, Any]:
         ) from error
     if not _is_valid_notify_state(state):
         raise NotifyStateError("État des notifications invalide.")
+    # `containerSecurityState` is returned explicitly: this loader used to hand back only the four
+    # original keys, so any additional key was silently dropped and then lost at the next write.
+    # A malformed value is isolated (see _container_security_state) instead of invalidating the
+    # whole file, whose checkpoint and outbox are the unrecoverable parts.
+    container_state, _container_error = _container_security_state(
+        state.get("containerSecurityState")
+    )
     return {
         "sentKeys": dict(state.get("sentKeys", {})),
         "outbox": [dict(entry) for entry in state.get("outbox", [])],
         "eolState": dict(state.get("eolState", {})),
         "checkpoint": state.get("checkpoint"),
+        "containerSecurityState": container_state,
     }
 
 
@@ -2492,6 +2508,32 @@ def commit_eol_transition(
     with cross_process_lock(path):
         state = load_notify_state(path)
         state["eolState"] = eol_state
+        _enqueue_new_events(state["outbox"], state["sentKeys"], events, now)
+        write_json(path, state)
+
+
+def commit_container_security_transition(
+    path: Path,
+    container_state: dict[str, Any],
+    events: list[NotificationEvent],
+    *,
+    now: str | None = None,
+) -> None:
+    """Persist the container-security baseline and the events it produced in ONE atomic write.
+
+    Same rationale as commit_eol_transition(): the baseline is what the NEXT scan is diffed
+    against, so advancing it in a write separate from queuing the events derived from it would let
+    an interruption mark a finding as known while its notification was never queued — and since
+    the derivation only ever fires on the transition, the alert would be lost for good.
+
+    Also used to record a report that produced no event (a clean scan, a first baseline, or a
+    report that is not newer than the ingested one): the baseline must advance either way, otherwise
+    re-enabling or re-ingesting would replay what has already been seen.
+    """
+    now = now or utc_now()
+    with cross_process_lock(path):
+        state = load_notify_state(path)
+        state["containerSecurityState"] = container_state
         _enqueue_new_events(state["outbox"], state["sentKeys"], events, now)
         write_json(path, state)
 
@@ -2893,6 +2935,523 @@ def _is_release_event(event: NotificationEvent) -> bool:
     )
 
 
+# --- Container image security (Trivy) — a category of its own --------------------------------
+# Deliberately NOT part of NotificationSettings: this domain has its own switch, its own two-level
+# threshold and its own recipient list, and shares nothing with the Fortinet CVE / release
+# categories. Keeping it in a separate document leaves the Fortinet preferences schema (and its
+# rollback constraints) untouched, and makes the separation structural rather than a convention.
+CONTAINER_SECURITY_SETTINGS_FILENAME = "container-security-settings.json"
+# Only two selectable levels: the alert is meant to be actionable, and everything below High is
+# noise on an image an operator refreshes by rebuilding it. The report itself may still carry
+# Medium/Low/Unknown (the engine's hierarchy ranks them), they simply never reach a threshold.
+CONTAINER_SECURITY_SEVERITIES = ("critical", "high")
+DEFAULT_CONTAINER_MINIMUM_SEVERITY = "high"
+_CONTAINER_SECURITY_KEYS = frozenset({"enabled", "minimumSeverity", "recipients"})
+# A daily scan is expected; beyond this the administration reports the report as outdated rather
+# than letting an old scan read as a current verdict.
+CONTAINER_REPORT_STALE_HOURS = 48
+_CONTAINER_REPORT_STATE_KEYS = (
+    "findings",
+    "lastScanAt",
+    "image",
+    "commit",
+    "ingestedAt",
+    "reportError",
+)
+
+
+@dataclass(frozen=True)
+class ContainerSecuritySettings:
+    """The container-security preferences, resolved from their own document."""
+
+    enabled: bool
+    minimum_severity: str
+    recipients: tuple[str, ...]
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "minimumSeverity": self.minimum_severity,
+            "recipients": list(self.recipients),
+        }
+
+
+def _default_container_security_settings() -> ContainerSecuritySettings:
+    return ContainerSecuritySettings(
+        enabled=False,
+        minimum_severity=DEFAULT_CONTAINER_MINIMUM_SEVERITY,
+        recipients=(),
+    )
+
+
+def validate_container_security_settings(payload: Any) -> ContainerSecuritySettings:
+    """Strict validation of the container-security document.
+
+    Strict about its own keys (an unknown or misspelled option is refused rather than ignored) and
+    about the enable/recipient pair: enabling without a recipient means "tell nobody", which is
+    refused explicitly instead of persisting a switch that silently does nothing.
+    """
+    if not isinstance(payload, dict) or set(payload) != _CONTAINER_SECURITY_KEYS:
+        raise ValueError("Configuration de sécurité conteneur invalide.")
+    enabled = payload["enabled"]
+    if not isinstance(enabled, bool):
+        raise TypeError("Le champ enabled (sécurité conteneur) doit être un booléen.")
+    minimum_severity = payload["minimumSeverity"]
+    if (
+        not isinstance(minimum_severity, str)
+        or minimum_severity not in CONTAINER_SECURITY_SEVERITIES
+    ):
+        raise ValueError(
+            "La sévérité minimale de sécurité conteneur doit être l'une des valeurs suivantes : "
+            + ", ".join(CONTAINER_SECURITY_SEVERITIES)
+            + "."
+        )
+    recipients = _normalize_recipients(
+        payload["recipients"], label="destinataire de sécurité conteneur"
+    )
+    if enabled and not recipients:
+        raise ValueError(
+            "Au moins un destinataire est requis pour activer les alertes de sécurité conteneur."
+        )
+    return ContainerSecuritySettings(
+        enabled=enabled, minimum_severity=minimum_severity, recipients=recipients
+    )
+
+
+def load_container_security_settings(
+    path: Path,
+) -> tuple[ContainerSecuritySettings, str]:
+    """Load the container-security preferences as ``(settings, error)``.
+
+    A missing file is a normal, disabled state: never an error, and never a write. An existing but
+    invalid document is NOT archived, repaired or overwritten — the feature is reported as
+    misconfigured and stays disabled, so nothing the operator wrote is lost. That is the opposite
+    of load_notification_settings()'s historical corruption recovery, which has to overwrite
+    because it predates this rule and its file holds the Fortinet recipients.
+    """
+    if not path.exists():
+        return _default_container_security_settings(), ""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        return (
+            _default_container_security_settings(),
+            f"Configuration de sécurité conteneur illisible ({type(error).__name__}).",
+        )
+    try:
+        return validate_container_security_settings(json.loads(raw)), ""
+    except (json.JSONDecodeError, TypeError, ValueError) as error:
+        return _default_container_security_settings(), str(error)[:300]
+
+
+def save_container_security_settings(
+    path: Path, payload: Any
+) -> ContainerSecuritySettings:
+    settings = validate_container_security_settings(payload)
+    with cross_process_lock(path):
+        write_json(path, settings.to_payload())
+    return settings
+
+
+def _empty_container_security_state() -> dict[str, Any]:
+    return {
+        "findings": {},
+        "lastScanAt": "",
+        "image": "",
+        "commit": "",
+        "ingestedAt": "",
+        "reportError": "",
+    }
+
+
+def _container_security_state(value: Any) -> tuple[dict[str, Any], str]:
+    """Return ``(state, error)`` for the persisted container-security baseline.
+
+    Lenient by design: a document written by another version may lack the key or carry an unknown
+    shape, and that must never invalidate the rest of the notification state — the checkpoint and
+    the outbox are the parts whose loss is unrecoverable. A malformed value is therefore isolated
+    here and reported, leaving only this category without a baseline (a later clean report
+    re-establishes it silently).
+    """
+    if value is None or value == {}:
+        return _empty_container_security_state(), ""
+    if not isinstance(value, dict):
+        return _empty_container_security_state(), "État de sécurité conteneur invalide."
+    findings = value.get("findings", {})
+    if not isinstance(findings, dict) or not all(
+        isinstance(key, str) and isinstance(entry, dict) for key, entry in findings.items()
+    ):
+        return (
+            _empty_container_security_state(),
+            "État de sécurité conteneur invalide (findings).",
+        )
+    state = _empty_container_security_state()
+    state["findings"] = {key: dict(entry) for key, entry in findings.items()}
+    for key in _CONTAINER_REPORT_STATE_KEYS:
+        if key == "findings":
+            continue
+        state[key] = str(value.get(key) or "")
+    return state, ""
+
+
+def _prune_resolved_findings(
+    findings: dict[str, Any], *, now: str, retention_days: int = NOTIFY_HISTORY_RETENTION_DAYS
+) -> dict[str, Any]:
+    """Drop long-resolved findings so the state cannot grow without bound.
+
+    The window matches the sent-key retention: a finding that disappears and comes back after that
+    window is genuinely new again, and its dedup key has been pruned too, so the two stay
+    consistent instead of the key suppressing a legitimate re-alert.
+    """
+    cutoff = _parse_iso(now)
+    if cutoff is None:
+        return findings
+    cutoff -= dt.timedelta(days=retention_days)
+    kept: dict[str, Any] = {}
+    for key, entry in findings.items():
+        resolved_at = _parse_iso(str(entry.get("resolvedAt") or ""))
+        if resolved_at is not None and resolved_at < cutoff:
+            continue
+        kept[key] = entry
+    return kept
+
+
+def _container_event(
+    finding: Any,
+    *,
+    dedup_key: str,
+    change: str,
+    resolved_count: int,
+    scan: Any,
+    scanned_at: str,
+    report_url: str,
+) -> NotificationEvent:
+    details = {
+        "kind": "container-cve",
+        "id": finding.cve,
+        "severity": finding.severity,
+        "package": finding.package,
+        "installedVersion": finding.installed_version,
+        "fixedVersion": finding.fixed_version,
+        "title": finding.title,
+        "url": finding.advisory_url,
+        "change": change,
+        # Carried by every event of the scan so the renderer can report the count without a second
+        # state read; the batch is composed from events alone.
+        "resolvedCount": resolved_count,
+        "image": scan.image,
+        "commit": scan.commit,
+        "scannedAt": scanned_at,
+        # CTA target: the CI run holding the report. Empty when the ingestion could not establish
+        # it, in which case the renderer falls back to the application URL.
+        "reportUrl": report_url,
+    }
+    return NotificationEvent(
+        category=CATEGORY_CRITICAL if finding.severity == "critical" else CATEGORY_DAILY,
+        dedup_key=dedup_key,
+        summary=f"{finding.cve} — {finding.package} ({finding.severity})",
+        severity=finding.severity,
+        details=details,
+    )
+
+
+def derive_container_security_events(
+    scan: Any,
+    settings: ContainerSecuritySettings,
+    state: dict[str, Any],
+    *,
+    now: str | None = None,
+    report_url: str = "",
+) -> tuple[list[NotificationEvent], dict[str, Any]]:
+    """Diff a validated scan against the persisted baseline. Returns ``(events, new_state)``.
+
+    The state records EVERY finding of the scan, including those below the configured threshold.
+    That is what makes a threshold change filter future events instead of replaying the backlog: a
+    finding already recorded is never "new" because the operator lowered the bar, and a genuine
+    severity escalation observed later still notifies. Findings that disappeared are marked
+    resolved and counted, but never notify on their own.
+
+    The FIRST ingested report establishes the baseline silently: an operator enabling the feature
+    must not receive the image's whole backlog at once.
+
+    A report that is not newer than the one already ingested is ignored (identical re-ingestion, or
+    an older report replayed): the derivation is idempotent by construction, not only by dedup key.
+    """
+    now = now or utc_now()
+    previous = dict(state.get("findings") or {})
+    baseline_established = bool(state.get("lastScanAt"))
+    last_scan_at = str(state.get("lastScanAt") or "")
+    stale = False
+    incoming = _parse_iso(scan.scanned_at)
+    known = _parse_iso(last_scan_at)
+    if incoming is not None and known is not None and incoming <= known:
+        stale = True
+
+    if stale:
+        # Returned strictly unchanged on purpose: the caller compares the derived state with the
+        # loaded one and skips the write entirely when they match, so a re-ingested artifact leaves
+        # the state byte-identical and does not even move the file's mtime.
+        return [], dict(state)
+
+    current = {finding.dedup_key: finding for finding in scan.findings}
+    resolved_keys = [
+        key for key in previous if key not in current and not previous[key].get("resolvedAt")
+    ]
+    resolved_count = len(resolved_keys)
+
+    events: list[NotificationEvent] = []
+    findings_state: dict[str, Any] = {}
+    for key, finding in current.items():
+        before = previous.get(key)
+        findings_state[key] = {
+            "cve": finding.cve,
+            "package": finding.package,
+            "severity": finding.severity,
+            "installedVersion": finding.installed_version,
+            "fixedVersion": finding.fixed_version,
+            "firstSeenAt": str((before or {}).get("firstSeenAt") or scan.scanned_at),
+            "lastSeenAt": scan.scanned_at,
+            "resolvedAt": "",
+        }
+        if not settings.enabled or not baseline_established:
+            continue
+        if before is None:
+            if severity_reaches(finding.severity, settings.minimum_severity):
+                events.append(
+                    _container_event(
+                        finding,
+                        dedup_key=finding.dedup_key,
+                        change="new",
+                        resolved_count=resolved_count,
+                        scan=scan,
+                        scanned_at=scan.scanned_at,
+                        report_url=report_url,
+                    )
+                )
+            continue
+        before_severity = str(before.get("severity") or "unknown").lower()
+        if severity_reaches(
+            finding.severity, settings.minimum_severity
+        ) and _SEVERITY_RANK.get(finding.severity, 0) > _SEVERITY_RANK.get(before_severity, 0):
+            change = f"{before_severity}-to-{finding.severity}"
+            events.append(
+                _container_event(
+                    finding,
+                    dedup_key=f"{finding.severity_dedup_key_prefix}|{change}",
+                    change=change,
+                    resolved_count=resolved_count,
+                    scan=scan,
+                    scanned_at=scan.scanned_at,
+                    report_url=report_url,
+                )
+            )
+
+    for key in resolved_keys:
+        findings_state[key] = {**previous[key], "resolvedAt": scan.scanned_at}
+    # Findings resolved by an earlier scan are kept as-is until the retention window elapses.
+    for key, entry in previous.items():
+        if key not in findings_state and entry.get("resolvedAt"):
+            findings_state[key] = dict(entry)
+
+    new_state = {
+        "findings": _prune_resolved_findings(findings_state, now=now),
+        "lastScanAt": scan.scanned_at,
+        "image": scan.image,
+        "commit": scan.commit,
+        "ingestedAt": now,
+        "reportError": "",
+    }
+    return events, new_state
+
+
+def container_security_status(
+    settings: ContainerSecuritySettings,
+    state: dict[str, Any],
+    *,
+    now: str | None = None,
+    error: str = "",
+) -> dict[str, Any]:
+    """What the administration displays, built so "no report" can never read as "0 vulnerability"."""
+    now_dt = _parse_iso(now or utc_now())
+    findings = state.get("findings") or {}
+    open_findings = [
+        entry for entry in findings.values() if not entry.get("resolvedAt")
+    ]
+    resolved = len(findings) - len(open_findings)
+    scanned_at = str(state.get("lastScanAt") or "")
+    if error:
+        report_state, reason = "invalid", error
+    elif not scanned_at:
+        report_state, reason = "absent", ""
+    else:
+        scanned_dt = _parse_iso(scanned_at)
+        age_hours = (
+            (now_dt - scanned_dt).total_seconds() / 3600
+            if now_dt is not None and scanned_dt is not None
+            else None
+        )
+        if age_hours is not None and age_hours > CONTAINER_REPORT_STALE_HOURS:
+            report_state, reason = "stale", scanned_at
+        else:
+            report_state, reason = "current", ""
+    return {
+        "settings": settings.to_payload(),
+        "report": {
+            "state": report_state,
+            "reason": reason,
+            # None (never 0) when no report has been ingested: the UI must distinguish "nothing
+            # parsed" from "parsed, nothing found".
+            "total": len(open_findings) if scanned_at else None,
+            "critical": (
+                sum(1 for entry in open_findings if entry.get("severity") == "critical")
+                if scanned_at
+                else None
+            ),
+            "high": (
+                sum(1 for entry in open_findings if entry.get("severity") == "high")
+                if scanned_at
+                else None
+            ),
+            "resolved": resolved if scanned_at else None,
+            "image": str(state.get("image") or ""),
+            "commit": str(state.get("commit") or ""),
+            "scannedAt": scanned_at,
+            "ingestedAt": str(state.get("ingestedAt") or ""),
+            "staleAfterHours": CONTAINER_REPORT_STALE_HOURS,
+        },
+    }
+
+
+def _is_container_security_event(event: NotificationEvent) -> bool:
+    """True for an image-vulnerability event (Trivy), structured details or not.
+
+    Mirrors _is_release_event(): the ``trivy|cve|`` / ``trivy-severity|`` dedup-key prefixes are
+    the stable format for this category, so an outbox entry queued by a build that predates
+    ``details.kind`` still routes to the container-security email instead of a Fortinet one.
+    """
+    return event.details.get("kind") == "container-cve" or event.dedup_key.startswith(
+        ("trivy|cve|", "trivy-severity|")
+    )
+
+
+def load_container_security_metadata(path: Path) -> tuple[dict[str, Any], str]:
+    """Read the sidecar written by the ingestion sync (``trivy-report.meta.json``).
+
+    The report itself carries no Git SHA (verified on the real artifact), so the commit, the run it
+    came from and the download's checksum live beside it. Missing or unreadable metadata is an
+    explicit refusal: an alert whose provenance cannot be established is worse than a missing one.
+    """
+    if not path.exists():
+        return {}, (
+            "Métadonnées d'ingestion absentes : lancez scripts/sync_trivy_report.py "
+            "pour récupérer le rapport et son commit."
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        return {}, f"Métadonnées d'ingestion illisibles ({type(error).__name__})."
+    if not isinstance(payload, dict):
+        return {}, "Métadonnées d'ingestion invalides."
+    commit = str(payload.get("commit") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{7,40}", commit):
+        return {}, "Commit d'ingestion absent ou invalide."
+    return {
+        "commit": commit,
+        "runId": str(payload.get("runId") or ""),
+        "runUrl": _github_run_url(payload.get("runUrl")),
+        "sha256": str(payload.get("sha256") or ""),
+        "downloadedAt": str(payload.get("downloadedAt") or ""),
+    }, ""
+
+
+def _github_run_url(value: Any) -> str:
+    """Only a GitHub run URL is kept: it becomes the email's CTA target.
+
+    Same reasoning as the renderer's own guard — the ingestion must not carry an arbitrary link
+    into an email, and the report always comes from a GitHub Actions run.
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme != "https" or parsed.netloc.lower() not in ("github.com", "www.github.com"):
+        return ""
+    if not parsed.path.startswith("/"):
+        return ""
+    return value
+
+
+def ingest_container_security_report(
+    report_path: Path,
+    metadata_path: Path,
+    settings: ContainerSecuritySettings,
+    *,
+    history_path: Path,
+    now: str | None = None,
+) -> tuple[list[NotificationEvent], str]:
+    """Ingest the availability report, derive events and commit everything atomically.
+
+    Returns ``(events, error)`` and NEVER raises for a problem with the report: an absent, refused
+    or corrupted report is a state to record and display — never a reason to interrupt a
+    collection, and never something to silently read as "no vulnerability".
+
+    On any refusal the previous baseline is preserved and only ``reportError`` is updated, so the
+    administration can show what is wrong while the last known findings stay visible.
+    """
+    now = now or utc_now()
+    # Nothing was ever ingested: a normal state, not a misconfiguration. Return without writing so
+    # a run does not churn the state, and let the administration say "aucun rapport Trivy ingéré"
+    # rather than inventing an error.
+    if not report_path.exists() and not metadata_path.exists():
+        return [], ""
+
+    state, state_error = _container_security_state(
+        load_notify_state(history_path).get("containerSecurityState")
+    )
+    if state_error:
+        state["reportError"] = state_error
+
+    def refuse(reason: str) -> tuple[list[NotificationEvent], str]:
+        state["reportError"] = reason
+        commit_container_security_transition(history_path, state, [], now=now)
+        return [], reason
+
+    metadata, metadata_error = load_container_security_metadata(metadata_path)
+    if metadata_error:
+        return refuse(metadata_error)
+    if not report_path.exists():
+        return refuse("Aucun rapport Trivy ingéré.")
+
+    # A downloaded artifact is verified against the checksum recorded at download time: a truncated
+    # or altered file must never be diffed against the baseline as if it were a real scan. The bytes
+    # are read ONCE and the same bytes are both checksummed and parsed, so an atomic replacement by
+    # the sync between the two steps cannot make us trust content we did not verify.
+    try:
+        raw = report_path.read_bytes()
+    except OSError as error:
+        return refuse(f"Rapport Trivy illisible ({type(error).__name__}).")
+    expected = str(metadata.get("sha256") or "")
+    if expected and hashlib.sha256(raw).hexdigest() != expected:
+        return refuse("Rapport Trivy altéré (empreinte différente de celle téléchargée).")
+
+    try:
+        scan = trivy_report.parse_container_report(raw, commit=metadata["commit"])
+    except trivy_report.ContainerReportError as error:
+        return refuse(str(error))
+
+    report_url = metadata.get("runUrl") or ""
+    events, new_state = derive_container_security_events(
+        scan, settings, state, now=now, report_url=report_url
+    )
+    if not events and new_state == state:
+        # Nothing changed: the report is not newer than the ingested one, or it produced no
+        # transition. Skip the write entirely so a re-ingestion stays byte-identical AND does not
+        # even touch the file's mtime — an auditable "nothing happened" rather than a rewrite that
+        # happens to contain the same values.
+        return [], ""
+    commit_container_security_transition(history_path, new_state, events, now=now)
+    return events, ""
+
+
 @dataclass(frozen=True)
 class NotificationBatch:
     """Events sharing one effective recipient list, and therefore one email."""
@@ -2902,38 +3461,78 @@ class NotificationBatch:
 
 
 def notification_batches(
-    events: list[NotificationEvent], settings: NotificationSettings
+    events: list[NotificationEvent],
+    settings: NotificationSettings,
+    *,
+    container_security: ContainerSecuritySettings | None = None,
 ) -> list[NotificationBatch]:
     """Partition claimed events into the emails they must actually produce.
 
-    Everything that is not a release (CVEs and the system categories: EOL, collection health,
-    recoveries) delivers to the configured ``recipients``. Releases deliver to their effective
-    list, which is the same list unless the operator detached them.
+    Three categories, three audiences:
+    - container image security (Trivy) -> the dedicated container list;
+    - releases ("nouvelle version") -> their effective list;
+    - everything else (CVEs and the system categories: EOL, collection health, recoveries) -> the
+      configured ``recipients``.
 
-    When both groups resolve to the same recipients they are merged back into a single grouped
-    email, so the historical "one synthetic email per collection" behaviour is preserved for the
-    default (shared) configuration.
+    The container batch is NEVER merged with another one, even when the addresses happen to be
+    identical: the whole point of that category is that an image finding is not a Fortinet CVE, and
+    an email mixing both would be exactly the confusion this separation exists to prevent. The two
+    historical groups keep their merging rule, so the default (shared) configuration still produces
+    one grouped email for CVEs + releases.
 
     Every event belongs to exactly one batch: the caller finalizes or releases each batch on its
-    own, which is what lets one category fail without blocking or duplicating the other while
+    own, which is what lets one category fail without blocking or duplicating the others while
     leaving the dedup key, outbox, claim and retry guarantees untouched.
     """
-    release = [event for event in events if _is_release_event(event)]
-    other = [event for event in events if not _is_release_event(event)]
-    if not release:
-        return [NotificationBatch(settings.recipients, tuple(other))] if other else []
+    container = [event for event in events if _is_container_security_event(event)]
+    rest = [event for event in events if not _is_container_security_event(event)]
 
-    release_recipients = settings.release_recipients_effective()
-    if not other:
-        return [NotificationBatch(release_recipients, tuple(release))]
-    if release_recipients == settings.recipients:
-        return [NotificationBatch(settings.recipients, tuple(events))]
-    # CVEs and system events first, then releases: a deterministic order, and the security email
-    # is delivered before the informational one.
-    return [
-        NotificationBatch(settings.recipients, tuple(other)),
-        NotificationBatch(release_recipients, tuple(release)),
-    ]
+    # Historical path kept verbatim when the container category is absent (it always is while the
+    # switch is off): same batches, same event order, byte-identical emails.
+    if not container:
+        release = [event for event in rest if _is_release_event(event)]
+        other = [event for event in rest if not _is_release_event(event)]
+        if not release:
+            return [NotificationBatch(settings.recipients, tuple(other))] if other else []
+        release_recipients = settings.release_recipients_effective()
+        if not other:
+            return [NotificationBatch(release_recipients, tuple(release))]
+        if release_recipients == settings.recipients:
+            return [NotificationBatch(settings.recipients, tuple(rest))]
+        # CVEs and system events first, then releases: a deterministic order, and the security
+        # email is delivered before the informational one.
+        return [
+            NotificationBatch(settings.recipients, tuple(other)),
+            NotificationBatch(release_recipients, tuple(release)),
+        ]
+
+    release = [event for event in rest if _is_release_event(event)]
+    other = [event for event in rest if not _is_release_event(event)]
+    batches: list[NotificationBatch] = []
+    if not release:
+        if other:
+            batches.append(NotificationBatch(settings.recipients, tuple(other)))
+    elif not other:
+        batches.append(
+            NotificationBatch(settings.release_recipients_effective(), tuple(release))
+        )
+    elif settings.release_recipients_effective() == settings.recipients:
+        batches.append(NotificationBatch(settings.recipients, tuple(rest)))
+    else:
+        batches.append(NotificationBatch(settings.recipients, tuple(other)))
+        batches.append(
+            NotificationBatch(settings.release_recipients_effective(), tuple(release))
+        )
+
+    recipients = container_security.recipients if container_security is not None else ()
+    # No silent fallback, and no email without recipient: a container batch is only ever built with
+    # the dedicated list, and events are not even derived while the switch is off.
+    if not recipients:
+        raise ValueError(
+            "Destinataires de sécurité conteneur absents : aucun email ne peut être construit."
+        )
+    batches.append(NotificationBatch(recipients, tuple(container)))
+    return batches
 
 
 def compose_email(
@@ -2946,10 +3545,13 @@ def compose_email(
     """Folds every event from a single run into one synthetic email (never one email per
     event, to avoid spamming) -- returns None if there's nothing to report.
 
-    Three rendering paths, decided by what the batch actually contains:
-    - at least one security (CVE) event -> scripts/fortios_email_render.py's SNS CVE email,
-      the single authoritative renderer for that identity; releases and the system categories
-      (EOL, collection health) are folded in as an "Autres événements" section;
+    Rendering paths, decided by what the batch actually contains:
+    - container image security only (Trivy) -> scripts/fortios_email_render.py's dedicated SNS
+      email. It never merges with a Fortinet one, and it writes its own automatic hero sentence
+      because the historical `introduction` is scoped to CVE alerts;
+    - at least one security (CVE) event -> the same module's SNS CVE email, the single
+      authoritative renderer for that identity; releases and the system categories (EOL,
+      collection health) are folded in as an "Autres événements" section;
     - no CVE but at least one release ("nouvelle version") event -> the same module's release
       email, which reuses the SNS shell without the CVE business components;
     - neither -> the historical plain-text summary, unchanged (EOL/health only).
@@ -2957,7 +3559,25 @@ def compose_email(
     if not events:
         return None
 
+    container = [event for event in events if _is_container_security_event(event)]
     security = [event for event in events if event.details.get("kind") == "cve"]
+    if container and not security:
+        non_container = [
+            event for event in events if not _is_container_security_event(event)
+        ]
+        display_name = (
+            appearance.display_name if appearance is not None else "FortiUpgrade"
+        )
+        return fortios_email_render.compose_container_security_email(
+            container,
+            app_url=app_url,
+            run_timestamp=run_timestamp,
+            other_events=non_container or None,
+            display_name=display_name,
+            introduction="",
+            signature=appearance.signature if appearance is not None else "",
+        )
+
     if security:
         non_security = [event for event in events if event.details.get("kind") != "cve"]
         display_name = (

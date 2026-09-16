@@ -46,6 +46,8 @@ data/fortios-data.generated.json
 
 # Trivy report produced locally (CI keeps its own copy as the `trivy-report` artifact).
 trivy.json
+trivy-report.json
+trivy-report.meta.json
 
 # Canonical workspace runtime (live compose file, persistent data, runtime docs and
 # rollback archives). The repository's own data/ and docs/ track samples and guides, so the

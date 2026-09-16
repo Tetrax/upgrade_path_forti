@@ -198,6 +198,13 @@
 .test-summary { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 18px; }
 .smtp-checks { grid-column: 1 / -1; margin: 12px 0 0; padding: 0; list-style: none; color: var(--ok); }
 .smtp-checks li { margin: 5px 0; }
+
+/* Sécurité de l'image Docker — état du dernier rapport ingéré. Neutral colours on purpose: this
+   list reports a state (absent / à jour / obsolète / refusé), not a success message. */
+.container-report-list { margin: 12px 0 0; padding: 0; list-style: none; color: var(--ink); }
+.container-report-list li { display: flex; justify-content: space-between; gap: 14px; margin: 6px 0; font-size: 13px; }
+.container-report-list li span:first-child { color: var(--muted); }
+.container-report-list li span:last-child { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
 .smtp-details { margin: 0 0 20px; }
 .smtp-details > div { padding: 10px 0; border-bottom: 1px solid var(--soft-line); }
 .smtp-details dt { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }

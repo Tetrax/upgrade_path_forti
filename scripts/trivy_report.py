@@ -1,28 +1,31 @@
 #!/usr/bin/env python3
-"""Present a Trivy JSON report as a readable GitHub Actions summary.
+"""Read a Trivy container-image report: presentation for CI, strict validation for ingestion.
 
-The `security-scan` job runs Trivy with `format: json` and hands the report to this script,
-which writes a Markdown summary to ``$GITHUB_STEP_SUMMARY`` and emits GitHub annotations on
-stdout (annotations and the summary must therefore stay on separate streams: a ``::warning::``
-line written into the summary file would be shown as literal text instead of an annotation).
+Two responsibilities share this module because they share one format:
 
-The container image scan is INFORMATIVE: this script always exits 0 and never fails the run,
-whatever the report contains — or omits. A missing or unreadable report is reported as such
-(annotation + explicit summary line) rather than silently rendered as "no vulnerability", because
-"the control did not run" and "the control found nothing" must never look alike.
+- ``render_summary()`` / ``main()`` present whatever the report holds, tolerantly, for the GitHub
+  Actions step summary. A scan summary must never fail a run.
+- ``validate_container_report()`` is the STRICT gate used before a report can influence
+  notification state or an email. A report is untrusted input there: bounded size, checked types,
+  whitelisted severities, validated URLs, bounded strings — and a report that violates any of it is
+  refused AS A WHOLE, never partially ingested. A partially ingested report would corrupt the
+  baseline (a finding silently dropped now would read as "new" later or as "fixed" incorrectly),
+  which is worse than an explicitly refused scan.
 
-The extraction below is deliberately TOLERANT: it presents whatever the report holds and says so
-when something is missing. Validating a report before it can influence notification state or an
-email is a DIFFERENT concern with different rules (a report is untrusted input there), and must
-not reuse this tolerance.
+The two must not be confused: tolerance is right for a human-readable summary, and wrong for
+anything that decides whether an alert is sent.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
 
 # Bounded presentation: a summary is read by a human in the Actions UI, so a report with
 # thousands of rows must not produce a thousands-row table.
@@ -30,6 +33,24 @@ MAX_ROWS = 100
 # Most severe first — the order operators triage in.
 SEVERITY_ORDER = ("CRITICAL", "HIGH")
 DEFAULT_REPORT_NAME = "trivy.json"
+
+# --- Ingestion limits and shapes (a report is untrusted input) --------------------------------
+MAX_REPORT_BYTES = 32 * 1024 * 1024
+MAX_FINDINGS = 5000
+MAX_IDENTIFIER_CHARS = 200
+MAX_VERSION_CHARS = 120
+MAX_TITLE_CHARS = 300
+# Every severity the report may carry, lower-cased. `unknown` is accepted because Trivy does emit
+# it for a vulnerability with no score; it simply never passes a configured threshold.
+ALLOWED_SEVERITIES = ("critical", "high", "medium", "low", "unknown")
+SCHEMA_VERSION_MIN = 2
+_CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$")
+# Package and image identifiers are rebuilt into a dedup key and into HTML: an explicit character
+# class keeps a hostile or exotic value out of both.
+_PACKAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:@/~-]{0,199}$")
+_IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/~-]{0,254}$")
+_COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
+_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+:~-]{0,119}$")
 
 
 @dataclass(frozen=True)
@@ -109,6 +130,306 @@ def scan_context(report: dict) -> tuple[str, str]:
     name = str(os_info.get("Name") or "").strip()
     system = " ".join(part for part in (family, name) if part) or "système non précisé"
     return _artifact_name(report), system
+
+
+class ContainerReportError(ValueError):
+    """The ingested report cannot be trusted. Refused as a whole, never partially ingested."""
+
+
+@dataclass(frozen=True)
+class ContainerFinding:
+    """One actionable vulnerability of the image, as the ingestion keeps it."""
+
+    cve: str
+    package: str
+    severity: str
+    installed_version: str
+    fixed_version: str
+    title: str
+    advisory_url: str
+
+    @property
+    def dedup_key(self) -> str:
+        """Stable identity: CVE + package, deliberately WITHOUT the installed version.
+
+        A rebuilt base image keeps the same CVE on the same package while the installed version
+        moves (`u1` -> `u2`); including it would make every already-known CVE look brand new at
+        each rebuild — exactly the flood this system exists to prevent. `FixedVersion` is content,
+        refreshed in the state without creating an event.
+        """
+        return f"trivy|cve|{self.cve}|{self.package}"
+
+    @property
+    def severity_dedup_key_prefix(self) -> str:
+        return f"trivy-severity|{self.cve}|{self.package}"
+
+
+@dataclass(frozen=True)
+class ContainerScan:
+    """A validated report: the image it describes, and where it came from."""
+
+    image: str
+    commit: str
+    scanned_at: str
+    findings: tuple[ContainerFinding, ...]
+
+    def counts(self) -> dict[str, int]:
+        return {
+            severity: sum(1 for finding in self.findings if finding.severity == severity)
+            for severity in ALLOWED_SEVERITIES
+        }
+
+
+def load_container_report(path: Path) -> Any:
+    """Read the report with a hard size cap before any parsing happens."""
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError as error:
+        raise ContainerReportError(f"Rapport Trivy refusé : fichier absent ({path.name}).") from error
+    except OSError as error:
+        raise ContainerReportError(
+            f"Rapport Trivy refusé : fichier illisible ({type(error).__name__})."
+        ) from error
+    if size > MAX_REPORT_BYTES:
+        raise ContainerReportError(
+            f"Rapport Trivy refusé : taille {size} octets au-delà de la limite "
+            f"({MAX_REPORT_BYTES} octets)."
+        )
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        raise ContainerReportError(
+            f"Rapport Trivy refusé : JSON illisible ({type(error).__name__})."
+        ) from error
+
+
+def _text(
+    value: Any,
+    *,
+    where: str,
+    limit: int,
+    pattern: re.Pattern[str] | None = None,
+    truncate: bool = False,
+) -> str:
+    """A bounded, non-empty string, optionally constrained to a safe character class.
+
+    Identity and state-carrying fields (CVE, package, version) are REFUSED when they exceed the
+    limit: truncating them would build a baseline on a mangled identifier. Descriptive text is
+    truncated instead (``truncate=True``), because a future Trivy that writes a longer advisory
+    title must not be able to disable the whole control.
+
+    The offending VALUE is never echoed into the error: a refused report is untrusted, and its
+    content could reach a log line or the administration UI.
+    """
+    if not isinstance(value, str):
+        raise ContainerReportError(f"Rapport Trivy refusé : {where} doit être une chaîne.")
+    if not value:
+        raise ContainerReportError(f"Rapport Trivy refusé : {where} est vide.")
+    if len(value) > limit:
+        if truncate:
+            value = value[:limit]
+        else:
+            raise ContainerReportError(
+                f"Rapport Trivy refusé : {where} dépasse {limit} caractères."
+            )
+    if pattern is not None and not pattern.fullmatch(value):
+        raise ContainerReportError(
+            f"Rapport Trivy refusé : {where} contient des caractères non autorisés."
+        )
+    return value
+
+
+def _optional_text(
+    value: Any,
+    *,
+    where: str,
+    limit: int,
+    pattern: re.Pattern[str] | None = None,
+    truncate: bool = False,
+) -> str:
+    if value is None or value == "":
+        return ""
+    return _text(value, where=where, limit=limit, pattern=pattern, truncate=truncate)
+
+
+def _advisory_url(value: Any) -> str:
+    """An advisory link is only kept when it is a plain https URL.
+
+    A link is decorative: an unusable one is dropped rather than failing the whole scan, but it is
+    never rendered as-is — the renderer must never be handed an unvalidated `href`.
+    """
+    if not isinstance(value, str) or not value:
+        return ""
+    if len(value) > 500:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return ""
+    if any(character in value for character in ("\n", "\r", "\t", "<", ">", '"', "'")):
+        return ""
+    return value
+
+
+def _scan_timestamp(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise ContainerReportError("Rapport Trivy refusé : CreatedAt manquant.")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ContainerReportError("Rapport Trivy refusé : CreatedAt illisible.") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ContainerReportError("Rapport Trivy refusé : CreatedAt sans fuseau horaire.")
+    # Normalised to whole seconds: the engine compares and persists these timestamps, and Trivy
+    # emits nanoseconds, which `fromisoformat` would silently truncate per platform.
+    return parsed.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _finding(payload: Any, *, where: str) -> ContainerFinding:
+    if not isinstance(payload, dict):
+        raise ContainerReportError(f"Rapport Trivy refusé : {where} doit être un objet.")
+    severity = payload.get("Severity")
+    if not isinstance(severity, str) or severity.strip().lower() not in ALLOWED_SEVERITIES:
+        raise ContainerReportError(f"Rapport Trivy refusé : {where}.Severity hors liste.")
+    return ContainerFinding(
+        cve=_text(
+            payload.get("VulnerabilityID"),
+            where=f"{where}.VulnerabilityID",
+            limit=MAX_IDENTIFIER_CHARS,
+            pattern=_CVE_RE,
+        ),
+        package=_text(
+            payload.get("PkgName"),
+            where=f"{where}.PkgName",
+            limit=MAX_IDENTIFIER_CHARS,
+            pattern=_PACKAGE_RE,
+        ),
+        severity=severity.strip().lower(),
+        installed_version=_optional_text(
+            payload.get("InstalledVersion"),
+            where=f"{where}.InstalledVersion",
+            limit=MAX_VERSION_CHARS,
+            pattern=_VERSION_RE,
+        ),
+        fixed_version=_optional_text(
+            payload.get("FixedVersion"),
+            where=f"{where}.FixedVersion",
+            limit=MAX_VERSION_CHARS,
+            pattern=_VERSION_RE,
+        ),
+        # Descriptive, not identity-carrying: bounded by truncation (see _text).
+        title=" ".join(
+            _optional_text(
+                payload.get("Title"),
+                where=f"{where}.Title",
+                limit=MAX_TITLE_CHARS,
+                truncate=True,
+            ).split()
+        ),
+        advisory_url=_advisory_url(payload.get("PrimaryURL")),
+    )
+
+
+def validate_container_report(payload: Any, *, commit: Any) -> ContainerScan:
+    """Strictly validate a report and flatten it into findings. Raises ContainerReportError.
+
+    ``commit`` comes from the ingestion context: the report itself carries no Git SHA (verified on
+    the real artifact), so the caller must supply it, and an unusable one refuses the report —
+    provenance is part of what makes the alert trustworthy.
+    """
+    if not isinstance(payload, dict):
+        raise ContainerReportError("Rapport Trivy refusé : document JSON attendu.")
+    schema = payload.get("SchemaVersion")
+    if not isinstance(schema, int) or isinstance(schema, bool) or schema < SCHEMA_VERSION_MIN:
+        raise ContainerReportError(
+            f"Rapport Trivy refusé : SchemaVersion attendu >= {SCHEMA_VERSION_MIN}."
+        )
+    if payload.get("ArtifactType") != "container_image":
+        raise ContainerReportError("Rapport Trivy refusé : ArtifactType attendu « container_image ».")
+    image = _text(
+        payload.get("ArtifactName"), where="ArtifactName", limit=255, pattern=_IMAGE_RE
+    )
+    scanned_at = _scan_timestamp(payload.get("CreatedAt"))
+    normalised_commit = _text(
+        commit, where="commit (contexte d'ingestion)", limit=40, pattern=_COMMIT_RE
+    )
+
+    results = payload.get("Results")
+    if not isinstance(results, list):
+        raise ContainerReportError("Rapport Trivy refusé : Results doit être une liste.")
+
+    findings: list[ContainerFinding] = []
+    for result_index, result in enumerate(results):
+        if not isinstance(result, dict):
+            raise ContainerReportError(
+                f"Rapport Trivy refusé : Results[{result_index}] doit être un objet."
+            )
+        vulnerabilities = result.get("Vulnerabilities")
+        # The real report writes `0` (not an empty list) for a result with no finding: both mean
+        # "nothing here" and neither may be mistaken for a malformed document.
+        if vulnerabilities in (None, 0, []):
+            continue
+        if not isinstance(vulnerabilities, list):
+            raise ContainerReportError(
+                f"Rapport Trivy refusé : Results[{result_index}].Vulnerabilities doit être une liste."
+            )
+        for finding_index, entry in enumerate(vulnerabilities):
+            findings.append(
+                _finding(
+                    entry, where=f"Results[{result_index}].Vulnerabilities[{finding_index}]"
+                )
+            )
+
+    if len(findings) > MAX_FINDINGS:
+        raise ContainerReportError(
+            f"Rapport Trivy refusé : {len(findings)} findings au-delà de la limite "
+            f"({MAX_FINDINGS})."
+        )
+
+    # Deterministic order, so a re-ingested identical report produces an identical state: most
+    # severe first, then package, then CVE.
+    order = {severity: rank for rank, severity in enumerate(ALLOWED_SEVERITIES)}
+    findings.sort(key=lambda f: (order[f.severity], f.package, f.cve))
+    return ContainerScan(
+        image=image,
+        commit=normalised_commit,
+        scanned_at=scanned_at,
+        findings=tuple(findings),
+    )
+
+
+def parse_container_report(raw: bytes, *, commit: Any) -> ContainerScan:
+    """Strictly validate the report's bytes — the single entry point for ingestion.
+
+    Deliberately takes bytes, not a path: the caller verifies the download's checksum against the
+    very bytes it hands over here. Reading the file twice would open a window where the checksummed
+    content and the parsed content differ (the sync replaces the file atomically), and an alert
+    built on an unverified report is worse than a refused one.
+    """
+    if len(raw) > MAX_REPORT_BYTES:
+        raise ContainerReportError(
+            f"Rapport Trivy refusé : taille {len(raw)} octets au-delà de la limite "
+            f"({MAX_REPORT_BYTES} octets)."
+        )
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError as error:
+        raise ContainerReportError("Rapport Trivy refusé : encodage non UTF-8.") from error
+    except ValueError as error:
+        raise ContainerReportError("Rapport Trivy refusé : JSON invalide.") from error
+    return validate_container_report(payload, commit=commit)
+
+
+def ingest_container_report(path: Path, *, commit: Any) -> ContainerScan:
+    """Read then strictly validate — convenience entry point for a report already on disk."""
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError as error:
+        raise ContainerReportError(f"Rapport Trivy refusé : fichier absent ({path.name}).") from error
+    except OSError as error:
+        raise ContainerReportError(
+            f"Rapport Trivy refusé : fichier illisible ({type(error).__name__})."
+        ) from error
+    return parse_container_report(raw, commit=commit)
 
 
 def render_summary(

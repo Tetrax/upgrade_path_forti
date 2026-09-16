@@ -42,6 +42,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Daily scan of main (04:17 UTC = 06:17 Paris). Its only purpose is to feed the application's
+  # image-security alerts with a fresh report: the VPS sync fetches the `trivy-report` artifact at
+  # 06:50 Paris and the 07:00 collector run ingests it. The rest of the pipeline runs too, so the
+  # daily scan doubles as a full nightly validation of main. `docker-build-push` stays skipped
+  # (its condition requires a push), so the schedule neither publishes nor moves `:latest`.
+  schedule:
+    - cron: "17 4 * * *"
 
 jobs:
   ruff:

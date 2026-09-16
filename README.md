@@ -453,6 +453,11 @@ Les catégories historiques restent actives lorsque les notifications sont activ
 - **OPERATIONS** : source en échec depuis ≥ 2 exécutions consécutives ou retour à la normale ;
 - **CRITICAL** : CVE Critical, avec le seuil de sévérité configurable détaillé ci-dessus.
 
+Les vulnérabilités de l'**image Docker de l'application** (Trivy) forment une catégorie entièrement
+séparée : son propre document de préférences, son propre seuil (Critical/High), sa propre liste de
+destinataires et son propre email. Elle ne partage rien avec les alertes Fortinet ci-dessus et ne
+retombe jamais sur leurs destinataires — voir [Sécurité de l'image Docker](#sécurité-de-limage-docker-trivy).
+
 Une branche FortiOS franchissant sa date de fin de support déclenche un événement même si aucune donnée du catalogue n'a changé ce jour-là (`fortios_watch.py`/`endoflife.date` renvoient la même date de fin de support avant et après — seule l'avancée du calendrier fait la différence) : l'état « cette branche est-elle en fin de support » est donc suivi séparément d'une collecte à l'autre (`eolState` dans `data/fortios-notify-history.json`), pas dérivé d'une comparaison avant/après catalogue. Une branche vue pour la première fois initialise silencieusement cet état sans envoyer d'email, pour ne pas spammer toutes les fins de support déjà passées lors de la toute première activation ; ensuite, l'événement part exactement une fois au moment du franchissement, y compris après plusieurs jours sans collecte.
 
 Chaque événement a une clé de déduplication stable (`type|source|resource_id|new_value`, par exemple `new-cve|psirt|CVE-2026-12345|critical` ou `cve-severity|psirt|CVE-2026-12345|high-to-critical`). Les événements sont toujours calculés par différence entre le checkpoint de notification et la collecte courante, jamais par re-scan du catalogue entier : ni la première activation, ni un `--cve-backfill` historique, ne déclenchent d'email pour des données déjà existantes.
@@ -466,7 +471,8 @@ Désactiver les notifications suspend les envois sans supprimer l'outbox ; les �
   "sentKeys": {"new-cve|psirt|CVE-2026-12345|critical": "2026-07-17T07:23:36Z"},
   "outbox": [{"category": "CRITICAL", "dedupKey": "...", "summary": "...", "severity": "critical", "details": {"kind": "cve"}, "queuedAt": "...", "claimedBy": null, "claimedAt": null}],
   "eolState": {"7.6": true},
-  "checkpoint": {"versionsByProduct": {}, "cvesById": {}, "health": {}}
+  "checkpoint": {"versionsByProduct": {}, "cvesById": {}, "health": {}},
+  "containerSecurityState": {"findings": {}, "lastScanAt": "", "image": "", "commit": "", "ingestedAt": "", "reportError": ""}
 }
 ```
 
@@ -474,6 +480,9 @@ Désactiver les notifications suspend les envois sans supprimer l'outbox ; les �
 - `outbox` : file d'attente des événements pas encore envoyés avec succès.
 - `eolState` : dernier état connu « branche en fin de support ou non » par branche (voir ci-dessus).
 - `checkpoint` : dernier catalogue/état de santé pris comme base du diff de notification.
+- `containerSecurityState` : ligne de base des vulnérabilités de l'image, tenue à part (elle ne
+  dépend ni du catalogue ni du seuil CVE, et une section illisible est isolée sans invalider le
+  checkpoint ni l'outbox).
 
 Chaque collecte réserve («&nbsp;réclame&nbsp;») les entrées de l'outbox qui ne sont pas déjà tenues par une autre exécution encore en cours (`claimedBy`/`claimedAt`, expire après 10&nbsp;minutes — largement au-delà du pire timeout SMTP réaliste — pour qu'une exécution plantée ne bloque pas indéfiniment les tentatives suivantes) : deux collectes qui se chevauchent ne peuvent donc jamais envoyer le même événement en double, la seconde ne réclamant rien de ce que la première tient déjà. Sur un succès d'envoi, les événements réclamés sont retirés de l'outbox et leur clé passe dans `sentKeys` ; sur un échec, la réclamation est simplement relâchée pour la prochaine collecte.
 
@@ -490,6 +499,29 @@ Tester aussi en CLI sans lancer de collecte ni toucher au catalogue, à la sant�
 ```bash
 python3 scripts/fortios_watch.py --test-email
 ```
+
+### Sécurité de l'image Docker (Trivy)
+
+**Documentation complète : [docs/container-security.md](docs/container-security.md).**
+
+Le scan Trivy de la CI produit un rapport JSON que le VPS récupère chaque jour (timer systemd
+`fortios-trivy-report-sync.timer`, 06:50 et 12:30 Paris) et dépose dans le répertoire de données de
+l'application, à côté de ses préférences. La collecte de 07:00 l'ingère ensuite et prévient les
+destinataires dédiés si — et seulement si — une vulnérabilité est **nouvelle** ou gagne en sévérité
+(High → Critical).
+
+Ce qui est refusé par construction :
+
+- lire un rapport absent ou illisible comme « aucune vulnérabilité » : l'état distingue *aucun
+  rapport*, *à jour*, *obsolète* (> 48 h) et *refusé*, et l'interface affiche « — » plutôt que `0` ;
+- envoyer le stock initial à l'activation, ou rejouer l'historique après une baisse de seuil : le
+  premier rapport établit la ligne de base en silence, et toute vulnérabilité connue reste connue ;
+- ingérer un rapport à demi : un document invalide est refusé **en entier** (aucune ligne de base
+  partielle, donc aucune fausse « nouvelle » ni fausse « corrigée »), la ligne de base précédente
+  est conservée et la raison est affichée ;
+- ingérer un contenu non vérifié : l'empreinte du téléchargement est contrôlée sur les octets mêmes
+  qui sont analysés, et un rapport plus ancien ou identique à celui déjà ingéré est ignoré sans
+  aucune écriture (idempotence par construction, pas seulement par clé de déduplication).
 
 ## Automatisation FortiCare / FNDN
 
@@ -550,6 +582,10 @@ Deux conséquences assumées et documentées dans l'en-tête du workflow :
 
 - `ignore-unfixed: true` : seules les vulnérabilités **disposant d'un correctif** sont remontées, pour que chaque alerte soit actionnable (rafraîchir l'image de base épinglée par digest, ou monter le paquet). Une vulnérabilité sans correctif ne produirait qu'une alerte sans action possible.
 - le run reste **vert** même avec des findings : un pipeline rouge à chaque build masquerait les régressions réelles. Pour rendre Trivy bloquant, mettre `exit-code: 1` sur l'étape de scan et retirer `if-no-files-found: warn` de l'upload.
+
+Le workflow tourne aussi **une fois par jour** (`schedule: 17 4 * * *`, soit 06:17 Paris) : c'est ce
+run qui alimente les alertes quotidiennes d'image (voir [Sécurité de l'image Docker](#sécurité-de-limage-docker-trivy)). Le job de construction/push d'image reste ignoré sur cet événement — le scan
+reconstruit sa propre image localement et rien n'est publié ni déplacé.
 
 ## Planification
 

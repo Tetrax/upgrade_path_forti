@@ -593,6 +593,57 @@
           </form>
         </div>
 
+        <!-- Sécurité de l'image Docker : catégorie distincte, document de préférences distinct et
+             endpoint distinct. Un refus d'enregistrement ici ne touche ni les préférences CVE ni la
+             configuration SMTP, et réciproquement. -->
+        <div class="notifications-columns">
+          <form id="container-security-form" class="panel settings-panel notifications-alerts">
+            <div class="panel-header result-heading">
+              <div>
+                <p class="eyebrow">Chaîne de livraison</p>
+                <h3 class="panel-title">Sécurité de l’image Docker</h3>
+                <p class="panel-copy">Vulnérabilités corrigibles détectées par Trivy dans l’image de l’application.</p>
+              </div>
+              <label class="switch-control"><input id="container-security-enabled" type="checkbox"><span>ON</span></label>
+            </div>
+            <div class="panel-body">
+              <div class="field">
+                <label for="container-minimum-severity">Sévérité minimale</label>
+                <select id="container-minimum-severity">
+                  <option value="critical">Critical</option>
+                  <option value="high">High</option>
+                </select>
+                <span class="field-help">Les alertes incluent les vulnérabilités de ce niveau et des niveaux supérieurs. Une baisse du seuil ne renvoie pas les vulnérabilités déjà connues.</span>
+              </div>
+              <section class="form-section recipient-block" aria-labelledby="container-recipients-heading">
+                <div class="recipient-heading">
+                  <h3 id="container-recipients-heading">Destinataires sécurité image</h3>
+                  <button class="btn" id="add-container-recipient-button" type="button">+ Ajouter un destinataire</button>
+                </div>
+                <p class="field-help">Liste indépendante : ces destinataires ne reçoivent ni les alertes CVE ni les nouvelles versions.</p>
+                <div id="container-recipient-list"></div>
+              </section>
+              <button class="btn primary" id="save-container-security-button" type="submit">Enregistrer la sécurité image</button>
+              <p class="form-message" id="container-security-message" role="alert"></p>
+            </div>
+          </form>
+
+          <section class="panel smtp-panel" aria-labelledby="container-report-heading">
+            <div class="panel-header result-heading">
+              <div>
+                <p class="eyebrow">Dernier scan</p>
+                <h3 class="panel-title" id="container-report-heading">Rapport Trivy</h3>
+                <p class="panel-copy" id="container-report-copy">État du dernier rapport ingéré, indépendamment des notifications.</p>
+              </div>
+              <p class="smtp-status"><span class="status-dot neutral" id="container-report-dot" aria-hidden="true"></span><strong id="container-report-state">Chargement…</strong></p>
+            </div>
+            <div class="panel-body">
+              <ul class="container-report-list" id="container-report-details" aria-live="polite"></ul>
+              <p class="field-help" id="container-report-reason"></p>
+            </div>
+          </section>
+        </div>
+
         <!-- Inert form owner: it keeps the test recipient's `required` check for the test flow
              (the button calls reportValidity()) without letting it block "Enregistrer la
              configuration email". Never submitted. -->
