@@ -1083,10 +1083,17 @@ def test_smtp_admin_is_labelled_and_has_no_horizontal_overflow(page, fortios_ser
     assert page.evaluate(
         "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
     )
-    panel_widths = page.locator(".notifications-grid > .panel, .notifications-grid > form").evaluate_all(
-        "elements => elements.map(element => element.getBoundingClientRect().width)"
+    column_widths = page.evaluate(
+        """() => [
+          document.querySelector('#notifications-form').getBoundingClientRect().width,
+          document.querySelector('.notifications-column--email').getBoundingClientRect().width,
+          document.querySelector('.notifications-column--preview').getBoundingClientRect().width,
+        ]"""
     )
-    assert panel_widths[1] >= panel_widths[0] * 0.75
+    # 3 columns on wide desktop: the preview column is the widest, the email column is at least
+    # comparable to the alerts column.
+    assert column_widths[2] >= column_widths[0] * 1.3
+    assert column_widths[1] >= column_widths[0] * 0.75
 
     page.set_viewport_size({"width": 375, "height": 812})
     assert page.evaluate(
@@ -1204,18 +1211,29 @@ def test_notifications_keeps_the_test_card_in_the_email_column(page, fortios_ser
     page.click("#notifications-tab")
 
     order = page.evaluate(
-        """() => [...document.querySelector('#smtp-form').children].map(node => {
-             if (node.classList.contains('smtp-panel')) return 'transport';
-             if (node.classList.contains('test-email-panel')) return 'test';
-             if (node.classList.contains('appearance-panel')) return 'appearance';
-             return `other:${node.className}`;
-           })"""
+        """() => {
+             const card = node => {
+               if (node.classList.contains('smtp-panel')) return 'transport';
+               if (node.classList.contains('test-email-panel')) return 'test';
+               if (node.classList.contains('appearance-panel')) return 'appearance';
+               if (node.classList.contains('preview-panel')) return 'preview';
+               return null;
+             };
+             const emailColumn = [...document.querySelectorAll('.notifications-column--email .panel')]
+               .map(card).filter(Boolean);
+             const previewColumn = [...document.querySelectorAll('.notifications-column--preview .panel')]
+               .map(card).filter(Boolean);
+             return {
+               emailColumn,
+               previewColumn,
+               first: document.querySelector('.notifications-columns').firstElementChild.id,
+             };
+           }"""
     )
-    assert order == ["transport", "test", "appearance"]
+    assert order["emailColumn"] == ["transport", "test"]
+    assert order["previewColumn"] == ["appearance", "preview"]
     # Left column untouched: the CVEs alerts card stays the grid's first column.
-    assert page.evaluate(
-        "document.querySelector('.notifications-grid').firstElementChild.id"
-    ) == "notifications-form"
+    assert order["first"] == "notifications-form"
 
     def boxes() -> dict[str, dict[str, float]]:
         return page.evaluate(
@@ -1260,3 +1278,99 @@ def test_notifications_keeps_the_test_card_in_the_email_column(page, fortios_ser
     assert page.evaluate(
         "document.documentElement.scrollWidth <= document.documentElement.clientWidth"
     )
+
+
+def test_notifications_responsive_columns_and_sticky_guard(page, fortios_server):
+    """The notifications board is a real responsive layout.
+
+    - ≥1400px: three balanced columns, the preview in the third one and the alerts card first;
+    - 900–1399px: two columns, the email pipeline stacked on the right;
+    - <900px: one column, in the spec order (Alertes, Email, Test, Apparence, Aperçu), without
+      horizontal overflow;
+    - the sticky preview only engages when the viewport is tall enough (min-height guard); when it
+      does, the pinned card leaves a usable window for the appearance fields and the save button
+      stays reachable.
+    """
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+
+    def geometry():
+        return page.evaluate(
+            """() => {
+              const box = (selector) => {
+                const r = document.querySelector(selector).getBoundingClientRect();
+                return {x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width)};
+              };
+              return {
+                alerts: box('#notifications-form'),
+                smtp: box('.smtp-panel'),
+                test: box('.test-email-panel'),
+                appearance: box('.appearance-panel'),
+                preview: box('.preview-panel'),
+                overflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+                sticky: getComputedStyle(document.querySelector('.preview-panel')).position,
+              };
+            }"""
+        )
+
+    # Desktop large: three distinct columns, preview in the third one, sticky off at 1080px of
+    # height (the pinned card would leave no usable window for the fields).
+    page.set_viewport_size({"width": 1920, "height": 1080})
+    desktop = geometry()
+    assert desktop["overflowX"] <= 0
+    assert desktop["sticky"] == "static"
+    assert desktop["alerts"]["x"] < desktop["smtp"]["x"] < desktop["preview"]["x"]
+    assert abs(desktop["alerts"]["x"] - desktop["smtp"]["x"]) > desktop["alerts"]["width"] * 0.2
+    assert desktop["alerts"]["y"] == desktop["smtp"]["y"] == desktop["preview"]["y"]
+    assert desktop["preview"]["width"] > desktop["alerts"]["width"]
+
+    # Tablet: two columns, the whole email pipeline stacked in the right one.
+    page.set_viewport_size({"width": 1024, "height": 800})
+    tablet = geometry()
+    assert tablet["overflowX"] <= 0
+    assert tablet["alerts"]["x"] < tablet["smtp"]["x"]
+    assert abs(tablet["smtp"]["x"] - tablet["preview"]["x"]) <= 1
+    assert abs(tablet["appearance"]["x"] - tablet["preview"]["x"]) <= 1
+    assert tablet["smtp"]["y"] < tablet["test"]["y"] < tablet["appearance"]["y"] < tablet["preview"]["y"]
+
+    # Mobile: one column, spec order, no horizontal overflow.
+    page.set_viewport_size({"width": 390, "height": 844})
+    mobile = geometry()
+    assert mobile["overflowX"] <= 0
+    assert abs(mobile["alerts"]["x"] - mobile["smtp"]["x"]) <= 1
+    assert abs(mobile["smtp"]["x"] - mobile["preview"]["x"]) <= 1
+    assert (
+        mobile["alerts"]["y"]
+        < mobile["smtp"]["y"]
+        < mobile["test"]["y"]
+        < mobile["appearance"]["y"]
+        < mobile["preview"]["y"]
+    )
+
+    # Tall desktop: the sticky preview engages, pins while scrolling, and still leaves a usable
+    # window for the appearance fields (the save button is never covered).
+    page.set_viewport_size({"width": 1920, "height": 1300})
+    tall = geometry()
+    assert tall["sticky"] == "sticky"
+    pinned = page.evaluate(
+        """() => {
+          window.scrollTo(0, Math.floor((document.documentElement.scrollHeight - window.innerHeight) / 2));
+          const panel = document.querySelector('.preview-panel');
+          const top = Math.round(panel.getBoundingClientRect().top);
+          const bottom = Math.round(panel.getBoundingClientRect().bottom);
+          window.scrollTo(0, 0);
+          return {top, bottom, viewport: window.innerHeight};
+        }"""
+    )
+    assert pinned["top"] <= 17
+    assert pinned["viewport"] - pinned["bottom"] >= 240
+    reachable = page.evaluate(
+        """() => {
+          const btn = document.getElementById('save-smtp-button');
+          btn.scrollIntoView({block: 'end'});
+          const r = btn.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+          return hit === btn || btn.contains(hit);
+        }"""
+    )
+    assert reachable
