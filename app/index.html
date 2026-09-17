@@ -153,6 +153,21 @@
     // — they get their own catalog/advisories/compatibility page instead (app/forticlient/).
     const NO_PATH_PRODUCT_IDS = ["forticlient", "forticlient-ems"];
 
+    // Products summarised in the home briefing bar. FortiClient (Windows/macOS/Linux) is left out
+    // on purpose — it has its own page (app/forticlient/) with its own summary — while FortiClient
+    // EMS belongs here like FortiManager and FortiAnalyzer even though it has no Upgrade Path Tool
+    // support (see NO_PATH_PRODUCT_IDS just above).
+    const BRIEFING_PRODUCT_IDS = ["fortigate-fortios", "fortimanager", "fortianalyzer", "forticlient-ems"];
+    // Display-only short forms for the CVE badges: a chip must name its product, and the full
+    // catalog label ("FortiClient EMS") would eat the line. The catalog stays the reference for
+    // product identities themselves; anything missing here falls back to its label.
+    const BRIEFING_PRODUCT_SHORT_LABELS = {
+      "fortigate-fortios": "FGT",
+      "fortimanager": "FMG",
+      "fortianalyzer": "FAZ",
+      "forticlient-ems": "EMS"
+    };
+
     const sampleState = {
       generatedAt: "2026-07-09T08:00:00Z",
       products: [
@@ -973,46 +988,92 @@
 
     // Reference info shown regardless of the current product/model/version selection, so it's
     // visible before a technician has even picked a path — refreshed on every renderResult() call
-    // since it only depends on the catalog data, not the current selection. Deliberately a single
-    // compact line (chips/badges, no cards) so it doesn't dominate the page.
+    // since it only depends on the catalog data, not the current selection. One compact row per
+    // monitored product plus the latest-CVE row (chips/badges, no cards) so it doesn't dominate
+    // the page.
     function renderBriefingPanel() {
       if (!els.briefingPanel) return;
-      const versionChips = latestFortiosVersionsByTrain().map(firmware => {
-        const releaseNotesUrl = firmware.links && firmware.links["release-notes"];
-        const maturityTag = firmware.maturity ? ` <span class="briefing-tag">${escapeHtml(firmware.maturity)}</span>` : "";
+      const productRows = BRIEFING_PRODUCT_IDS.map(productId => {
+        const product = state.products.find(item => item.id === productId);
+        const chips = product ? latestVersionsByTrain(product).map(firmware => briefingVersionChip(product, firmware)) : [];
+        return briefingRow(product ? product.label : productId, chips, "Aucune donnée", { productId });
+      }).join("");
+      const cveChips = latestCves(6).map(briefingCveChip);
+      els.briefingPanel.innerHTML = `
+        <div class="briefing-rows">
+          ${productRows}
+          ${briefingRow("Dernières CVE", cveChips, "Aucune CVE récente", { extraClass: " briefing-row-cves" })}
+        </div>
+      `;
+    }
+
+    function briefingRow(label, chips, emptyText, { productId = "", extraClass = "" } = {}) {
+      const body = chips.length ? chips.join("") : `<span class="briefing-empty">${escapeHtml(emptyText)}</span>`;
+      const attribute = productId ? ` data-product="${escapeAttr(productId)}"` : "";
+      return `
+        <div class="briefing-row${extraClass}"${attribute}>
+          <span class="briefing-row-label">${escapeHtml(label)}</span>
+          <span class="briefing-row-chips">${body}</span>
+        </div>
+      `;
+    }
+
+    // One chip per product version. Maturity (Feature/Mature) and support/EOL dates exist for
+    // FortiOS ONLY — the first comes from Fortinet's Upgrade Path Tool, the second from
+    // endoflife.date, both FortiOS-only sources — so every other product shows its version plus
+    // whatever the catalog really carries, never a status invented to fill the gap. "None" is one
+    // of the maturity values the collection produces and means "not classified": rendering it as a
+    // tag would be noise, not information.
+    function briefingVersionChip(product, firmware) {
+      const tags = [];
+      const tooltip = [`Version ${firmware.version}`];
+      if (firmware.build && firmware.build !== "-") tooltip.push(`build ${firmware.build}`);
+      const maturity = firmware.maturity && firmware.maturity !== "None" ? firmware.maturity : "";
+      if (maturity) tags.push(` <span class="briefing-tag">${escapeHtml(maturity)}</span>`);
+      // FortiOS-only lifecycle lookup: state.fortiosLifecycle is keyed by FortiOS trains, so
+      // applying it to another product's branch ("7.4" of FortiClient EMS) would report FortiOS
+      // dates as that product's support status.
+      if (product.id === "fortigate-fortios") {
         const lifecycle = fortiosLifecycleFor(firmware.version);
-        let lifecycleTag = "";
-        let tooltip = "";
         if (lifecycle) {
-          tooltip = `Sortie ${lifecycle.releaseDate || "?"} · Fin de support ${lifecycle.support || "?"} · EOL ${lifecycle.eol || "?"}`;
+          tooltip.push(`Sortie ${lifecycle.releaseDate || "?"}`, `Fin de support ${lifecycle.support || "?"}`, `EOL ${lifecycle.eol || "?"}`);
           if (lifecycle.support) {
             const daysLeft = daysUntil(lifecycle.support);
-            if (daysLeft < 0) lifecycleTag = ` <span class="briefing-tag danger">Hors support</span>`;
-            else if (daysLeft <= 183) lifecycleTag = ` <span class="briefing-tag warn">Support → ${escapeHtml(lifecycle.support)}</span>`;
+            if (daysLeft < 0) tags.push(` <span class="briefing-tag danger">Hors support</span>`);
+            else if (daysLeft <= 183) tags.push(` <span class="briefing-tag warn">Support → ${escapeHtml(lifecycle.support)}</span>`);
           }
         }
-        const newTag = isRecent(firmware.discoveredAt) ? ` <span class="new-badge">New</span>` : "";
-        const label = `${escapeHtml(firmware.version)}${maturityTag}${lifecycleTag}${newTag}`;
-        return releaseNotesUrl
-          ? `<a class="briefing-chip" href="${escapeAttr(releaseNotesUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">${label}</a>`
-          : `<span class="briefing-chip" title="${escapeAttr(tooltip)}">${label}</span>`;
-      }).join("");
+      }
+      if (isRecent(firmware.discoveredAt)) {
+        tags.push(` <span class="new-badge">New</span>`);
+        tooltip.push(`vue le ${firmware.discoveredAt}`);
+      }
+      const releaseNotesUrl = firmware.links && firmware.links["release-notes"];
+      const label = `${escapeHtml(firmware.version)}${tags.join("")}`;
+      const title = escapeAttr(tooltip.join(" · "));
+      return releaseNotesUrl
+        ? `<a class="briefing-chip" href="${escapeAttr(releaseNotesUrl)}" target="_blank" rel="noopener noreferrer" title="${title}">${label}</a>`
+        : `<span class="briefing-chip" title="${title}">${label}</span>`;
+    }
 
-      const cveChips = latestCves(6).map(cve => {
-        const scoreLabel = typeof cve.cvssScore === "number" ? ` CVSS ${cve.cvssScore}` : "";
-        const products = cveProductLabels(cve).join(", ") || "Produit inconnu";
-        const tooltip = `${cve.title} — ${products} · ${cveSeverityLabel(cve.severity)}${scoreLabel}`;
-        const newTag = isRecent(cve.publishedAt) ? ` <span class="new-badge">New</span>` : "";
-        return `<a class="badge ${cveBadgeClass(cve.severity)}" href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">🛡 ${escapeHtml(cve.id)}${newTag}</a>`;
-      }).join(" ");
+    // CVE chip: the product comes FIRST so the badge says who is affected before which CVE it is.
+    // Only the briefing products are named on the chip (a CVE reaching FortiClient too keeps its
+    // full product list in the tooltip and in the per-path CVE cards); severity colouring and the
+    // "New" window stay exactly what the per-path cards use.
+    function briefingCveChip(cve) {
+      const scoreLabel = typeof cve.cvssScore === "number" ? ` CVSS ${cve.cvssScore}` : "";
+      const products = cveProductLabels(cve).join(", ") || "Produit inconnu";
+      const tooltip = `${cve.title} — ${products} · ${cveSeverityLabel(cve.severity)}${scoreLabel}`;
+      const newTag = isRecent(cve.publishedAt) ? ` <span class="new-badge">New</span>` : "";
+      return `<a class="badge ${cveBadgeClass(cve.severity)}" href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}"><span class="briefing-cve-product">${escapeHtml(briefingCveProducts(cve))}</span> · ${escapeHtml(cve.id)}${newTag}</a>`;
+    }
 
-      els.briefingPanel.innerHTML = `
-        <span class="briefing-label">FortiOS</span>
-        ${versionChips || `<span class="muted">catalogue pas encore chargé</span>`}
-        <span class="briefing-sep">·</span>
-        <span class="briefing-label">Dernières CVE</span>
-        ${cveChips || `<span class="muted">catalogue pas encore chargé</span>`}
-      `;
+    function briefingCveProducts(cve) {
+      const productIds = Array.from(new Set((cve.affected || []).map(range => range.product)));
+      const labels = BRIEFING_PRODUCT_IDS
+        .filter(id => productIds.includes(id))
+        .map(id => BRIEFING_PRODUCT_SHORT_LABELS[id] || id);
+      return labels.join("+") || "Fortinet";
     }
 
     // Support/EOL dates come from endoflife.date (see fetch_fortios_lifecycle in
@@ -1033,15 +1094,14 @@
       return ageDays >= 0 && ageDays <= NEW_BADGE_WINDOW_DAYS;
     }
 
-    // Mature/Feature status comes straight from the Upgrade Path Tool's own API (see
-    // apply_fortios_maturity in scripts/fortios_watch.py). One entry per major train, most recent
-    // version first.
-    function latestFortiosVersionsByTrain(limit = 4) {
-      const product = state.products.find(item => item.id === "fortigate-fortios");
-      if (!product) return [];
+    // Latest version of each major train for one product, most recent first — the "one line per
+    // branch" summary the briefing bar shows for every monitored product. Maturity/support
+    // metadata is not read here: it is added per chip only where it really exists (FortiOS).
+    function latestVersionsByTrain(product, limit = 4) {
       const latestByVersion = new Map();
-      for (const model of product.models) {
+      for (const model of product.models || []) {
         for (const firmware of model.firmwares || []) {
+          if (!firmware.version) continue;
           if (!latestByVersion.has(firmware.version)) latestByVersion.set(firmware.version, firmware);
         }
       }
@@ -1056,11 +1116,13 @@
         .slice(0, limit);
     }
 
-    // FortiClient/EMS CVEs have their own briefing bar on app/forticlient/ (no recommended-path
-    // support there, so they don't belong mixed in with FortiOS/FortiAnalyzer/FortiManager here).
+    // Latest PSIRT advisories for the products the home page summarises. FortiClient
+    // (Windows/macOS/Linux) keeps its advisories on its own page (app/forticlient/) where its
+    // compatibility matrix lives, so an advisory that only concerns it stays out of this bar —
+    // but one that also touches FortiClient EMS belongs here like any other briefing product.
     function latestCves(limit) {
       return [...(state.cves || [])]
-        .filter(cve => (cve.affected || []).some(range => !NO_PATH_PRODUCT_IDS.includes(range.product)))
+        .filter(cve => (cve.affected || []).some(range => BRIEFING_PRODUCT_IDS.includes(range.product)))
         .sort((a, b) => (b.publishedAt || "").localeCompare(a.publishedAt || ""))
         .slice(0, limit);
     }
