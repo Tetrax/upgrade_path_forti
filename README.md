@@ -321,6 +321,16 @@ end",Base interne SNS
 
 Puis lancer `python3 scripts/fortios_watch.py --base data/fortios-data.generated.json`. La colonne `version` ne prend qu'une seule version par ligne ; pour cibler plusieurs versions avec la même alerte, passer par la page `/alerte/` (colonne `versions`, tableau) ou dupliquer la ligne CSV.
 
+## Bandeau de synthèse de l'accueil
+
+En haut de `/`, le bandeau de briefing résume en une carte compacte l'état des produits surveillés :
+
+- **une ligne par produit** — FortiGate/FortiOS, FortiManager, FortiAnalyzer et FortiClient EMS. FortiClient (Windows/macOS/Linux) en est volontairement absent : son suivi vit sur la page `/forticlient/` ;
+- **la version la plus récente de chaque branche**, pour les quatre trains les plus récents du catalogue. La règle est la même pour tous les produits et ne code aucune branche en dur : une version qui sort apparaît dans le bandeau dès la collecte suivante ;
+- des annotations de statut **propres à FortiOS** seulement : `Feature`/`Mature` (Upgrade Path Tool) et `Hors support`/`Support → date` (cycle de vie endoflife.date). Les autres produits n'ont pas ces données côté Fortinet ; leur pastille n'affiche que la version réellement collectée, jamais un statut inventé ;
+- **les dernières CVE** des quatre produits, chaque badge préfixé par le produit concerné (`FGT`, `FMG`, `FAZ`, `EMS`). Un advisory qui ne concerne que FortiClient (Windows/macOS/Linux) reste sur `/forticlient/` ; celui qui touche aussi EMS apparaît ici, avec la liste complète des produits dans son infobulle ;
+- en l'absence de données pour un produit, la mention discrète « Aucune donnée » — jamais de version ou de statut fabriqué.
+
 ## CVE PSIRT Fortinet
 
 En plus des alertes internes (bugs remontés par l'équipe), l'outil croise automatiquement les versions avec les **CVE publiées par le Fortinet PSIRT** pour FortiOS, FortiAnalyzer, FortiManager, FortiClient et FortiClient EMS. Fortinet publie pour chaque advisory (`FG-IR-xx-xxx`) un export **CVRF** (Common Vulnerability Reporting Framework, un format XML standard et structuré) dont les `ProductID` décrivent les versions exactes ou le train concerné — bien plus fiable qu'un scraping de la page HTML humaine.
@@ -328,6 +338,7 @@ En plus des alertes internes (bugs remontés par l'équipe), l'outil croise auto
 Affichage :
 
 - Sur l'outil principal (`/`), chaque version du chemin affiche un badge `🛡 CVE-xxxx-xxxxx` si elle est concernée, et une section dédiée liste les CVE du chemin avec sévérité CVSS, score, lien vers la fiche PSIRT, et indique si le chemin choisi corrige la CVE ou si la version cible reste vulnérable.
+- Le bandeau du haut de `/` affiche les CVE récentes des quatre produits qui y sont résumés, chacune préfixée par son produit (`FGT · CVE-…`) — voir « Bandeau de synthèse de l'accueil ».
 - Sur `/forticlient/`, les cartes de combinaisons EMS ↔ FortiClient affichent la même pastille et le même détail si l'une des versions du couple est concernée.
 
 Collecte (`scripts/fortios_watch.py`) :

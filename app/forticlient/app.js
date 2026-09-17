@@ -100,9 +100,9 @@ function loadState(state) {
   renderBriefingPanel();
 }
 
-// Mirrors the FortiOS/FortiAnalyzer/FortiManager briefing bar on app/index.html, but scoped to
-// FortiClient/EMS CVEs — those never show over there (see NO_PATH_PRODUCT_IDS filtering in
-// app/index.html's latestCves()) since this page is the one place they belong.
+// Mirrors the product briefing bar on app/index.html, but scoped to the FortiClient/EMS page's own
+// subjects: the home page summarises FortiClient EMS too, while a FortiClient
+// (Windows/macOS/Linux)-only advisory belongs here and nowhere else.
 const NEW_BADGE_WINDOW_DAYS = 14;
 
 function isRecent(dateStr) {

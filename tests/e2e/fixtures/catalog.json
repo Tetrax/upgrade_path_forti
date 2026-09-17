@@ -3,7 +3,7 @@
   "products": [
     {
       "id": "fortigate-fortios",
-      "label": "FortiGate/FortiOS",
+      "label": "FortiGate / FortiOS",
       "models": [
         {
           "id": "FGT60F",
@@ -12,6 +12,36 @@
             {"version": "6.2.4", "build": "1234", "notes": ["release-notes"], "maturity": "Mature"},
             {"version": "7.0.14", "build": "2345", "notes": ["release-notes"], "maturity": "Mature"},
             {"version": "8.0.0", "build": "3456", "notes": ["release-notes"], "maturity": "Feature", "discoveredAt": "2026-07-16"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fortimanager",
+      "label": "FortiManager",
+      "models": [
+        {
+          "id": "FMGAPP",
+          "label": "FortiManager-VM",
+          "firmwares": [
+            {"version": "7.4.11", "build": "2804", "notes": ["release-notes"]},
+            {"version": "7.6.3", "build": "3101", "notes": ["release-notes"]},
+            {"version": "8.0.1", "build": "0189", "notes": ["release-notes"], "discoveredAt": "2026-07-16"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fortianalyzer",
+      "label": "FortiAnalyzer",
+      "models": [
+        {
+          "id": "FAZAPP",
+          "label": "FortiAnalyzer-VM",
+          "firmwares": [
+            {"version": "7.4.10", "build": "2750", "notes": ["release-notes"]},
+            {"version": "7.6.2", "build": "3010", "notes": ["release-notes"]},
+            {"version": "8.0.1", "build": "0189", "notes": ["release-notes"]}
           ]
         }
       ]
@@ -45,6 +75,86 @@
       "updatedAt": "2026-07-01",
       "affected": [
         {"product": "fortigate-fortios", "models": [], "branch": "6.2", "from": "6.2.0", "to": "6.2.4"}
+      ]
+    },
+    {
+      "id": "CVE-2026-88881",
+      "advisoryId": "FG-IR-26-881",
+      "title": "FortiManager fixture vulnerability",
+      "severity": "medium",
+      "cvssScore": 5.3,
+      "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-881",
+      "publishedAt": "2026-07-10",
+      "updatedAt": "2026-07-10",
+      "affected": [
+        {"product": "fortimanager", "models": [], "branch": "7.6", "from": null, "to": null}
+      ]
+    },
+    {
+      "id": "CVE-2026-88882",
+      "advisoryId": "FG-IR-26-882",
+      "title": "FortiAnalyzer fixture vulnerability",
+      "severity": "high",
+      "cvssScore": 8.1,
+      "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-882",
+      "publishedAt": "2026-07-09",
+      "updatedAt": "2026-07-09",
+      "affected": [
+        {"product": "fortianalyzer", "models": [], "branch": "7.6", "from": null, "to": null}
+      ]
+    },
+    {
+      "id": "CVE-2026-88883",
+      "advisoryId": "FG-IR-26-883",
+      "title": "FortiClient EMS fixture vulnerability",
+      "severity": "low",
+      "cvssScore": 3.1,
+      "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-883",
+      "publishedAt": "2026-07-08",
+      "updatedAt": "2026-07-08",
+      "affected": [
+        {"product": "forticlient-ems", "models": [], "branch": "7.4", "from": null, "to": null}
+      ]
+    },
+    {
+      "id": "CVE-2026-88884",
+      "advisoryId": "FG-IR-26-884",
+      "title": "FortiClient-only fixture vulnerability",
+      "severity": "high",
+      "cvssScore": 7.8,
+      "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-884",
+      "publishedAt": "2026-07-07",
+      "updatedAt": "2026-07-07",
+      "affected": [
+        {"product": "forticlient", "models": ["windows"], "branch": "7.4", "from": null, "to": null}
+      ]
+    },
+    {
+      "id": "CVE-2026-88885",
+      "advisoryId": "FG-IR-26-885",
+      "title": "FortiClient and EMS fixture vulnerability",
+      "severity": "medium",
+      "cvssScore": 4.9,
+      "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-885",
+      "publishedAt": "2026-07-06",
+      "updatedAt": "2026-07-06",
+      "affected": [
+        {"product": "forticlient", "models": [], "branch": "7.2", "from": null, "to": null},
+        {"product": "forticlient-ems", "models": [], "branch": "7.2", "from": null, "to": null}
+      ]
+    },
+    {
+      "id": "CVE-2026-88886",
+      "advisoryId": "FG-IR-26-886",
+      "title": "FortiGate and FortiManager fixture vulnerability",
+      "severity": "critical",
+      "cvssScore": 9.6,
+      "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-886",
+      "publishedAt": "2026-07-05",
+      "updatedAt": "2026-07-05",
+      "affected": [
+        {"product": "fortigate-fortios", "models": [], "branch": "7.0", "from": null, "to": null},
+        {"product": "fortimanager", "models": [], "branch": "7.0", "from": null, "to": null}
       ]
     }
   ],
