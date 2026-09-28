@@ -95,16 +95,16 @@ class UpgradeExportParsingTests(unittest.TestCase):
 class OfficialUpgradePathValidationTests(unittest.TestCase):
     def setUp(self):
         self._orig_resolve = fw.resolve_fortinet_model
-        self._orig_post = fw.post_official_upgrade_tool
+        self._orig_payload = fw.fetch_upgrade_tool_payload
         fw.resolve_fortinet_model = lambda *a, **k: "FG60F"
 
     def tearDown(self):
         fw.resolve_fortinet_model = self._orig_resolve
-        fw.post_official_upgrade_tool = self._orig_post
+        fw.fetch_upgrade_tool_payload = self._orig_payload
 
     def test_mismatched_endpoints_are_rejected_not_cached(self):
-        fw.post_official_upgrade_tool = lambda payload, timeout: {
-            "result": {"path": [{"version": "6.2.4"}, {"version": "7.0.1"}, {"version": "7.4.2"}]}
+        fw.fetch_upgrade_tool_payload = lambda *a, **k: {
+            "path": [{"version": "6.2.4"}, {"version": "7.0.1"}, {"version": "7.4.2"}]
         }
         request = fw.OfficialPathRequest(
             product="fortigate-fortios", model="FGT60F", from_version="6.2.4", to_version="8.0.0",
@@ -112,8 +112,8 @@ class OfficialUpgradePathValidationTests(unittest.TestCase):
         self.assertIsNone(fw.fetch_official_upgrade_path(request, timeout=5))
 
     def test_matching_endpoints_are_accepted(self):
-        fw.post_official_upgrade_tool = lambda payload, timeout: {
-            "result": {"path": [{"version": "6.2.4"}, {"version": "7.0.1"}, {"version": "8.0.0"}]}
+        fw.fetch_upgrade_tool_payload = lambda *a, **k: {
+            "path": [{"version": "6.2.4"}, {"version": "7.0.1"}, {"version": "8.0.0"}]
         }
         request = fw.OfficialPathRequest(
             product="fortigate-fortios", model="FGT60F", from_version="6.2.4", to_version="8.0.0",
@@ -132,10 +132,10 @@ class OfficialUpgradePathValidationTests(unittest.TestCase):
         self.assertLess(fw.version_key("7.2.13"), fw.version_key("7.4.12"))
 
     def test_downgrade_and_equal_versions_are_rejected_before_calling_fortinet(self):
-        def unexpected_call(payload, timeout):
-            self.fail(f"Fortinet must not be called for an invalid direction: {payload}")
+        def unexpected_call(*args, **kwargs):
+            self.fail(f"Fortinet must not be called for an invalid direction: {args} {kwargs}")
 
-        fw.post_official_upgrade_tool = unexpected_call
+        fw.fetch_upgrade_tool_payload = unexpected_call
         for from_version, to_version in (("7.2.10", "7.2.8"), ("7.4.12", "7.2.13"), ("7.2.10", "7.2.10")):
             with self.subTest(from_version=from_version, to_version=to_version):
                 request = fw.OfficialPathRequest(
@@ -150,21 +150,32 @@ class OfficialUpgradePathValidationTests(unittest.TestCase):
                 ):
                     fw.fetch_official_upgrade_path(request, timeout=5)
 
+    def _assert_normal_upgrade_accepted(self, expected_from, expected_to):
+        def fake_payload(
+            product_slug, model, timeout, from_version=None, to_version=None
+        ):
+            self.assertEqual(
+                (from_version, to_version),
+                (expected_from, expected_to),
+                "the requested bounds must reach the Upgrade Path Tool unchanged",
+            )
+            return {"path": [{"version": from_version}, {"version": to_version}]}
+
+        fw.fetch_upgrade_tool_payload = fake_payload
+        request = fw.OfficialPathRequest(
+            product="fortigate-fortios",
+            model="FGT60F",
+            from_version=expected_from,
+            to_version=expected_to,
+        )
+        result = fw.fetch_official_upgrade_path(request, timeout=5)
+        self.assertIsNotNone(result)
+        self.assertEqual(result[0].hops, (expected_from, expected_to))
+
     def test_normal_upgrades_are_accepted(self):
         for from_version, to_version in (("7.2.8", "7.2.10"), ("7.2.13", "7.4.12")):
             with self.subTest(from_version=from_version, to_version=to_version):
-                fw.post_official_upgrade_tool = lambda payload, timeout, from_version=from_version, to_version=to_version: {
-                    "result": {"path": [{"version": from_version}, {"version": to_version}]}
-                }
-                request = fw.OfficialPathRequest(
-                    product="fortigate-fortios",
-                    model="FGT60F",
-                    from_version=from_version,
-                    to_version=to_version,
-                )
-                result = fw.fetch_official_upgrade_path(request, timeout=5)
-                self.assertIsNotNone(result)
-                self.assertEqual(result[0].hops, (from_version, to_version))
+                self._assert_normal_upgrade_accepted(from_version, to_version)
 
 
 if __name__ == "__main__":

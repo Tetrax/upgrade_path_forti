@@ -155,6 +155,8 @@ La base générée contient alors :
 
 Les très anciennes branches peuvent ne pas exposer la section modèles dans le HTML public. Elles sont listées dans `docs/last_report.md` comme non intégrées.
 
+Une branche dont la page produit n'existe pas encore (`/product/fortigate/<train>`, ex. `8.4` avant publication) répond 404 : elle est simplement ignorée et signalée dans le rapport, et les autres branches sont collectées normalement. En revanche, si **aucune** branche n'est exploitable (toutes en 404, ou page présente mais aucune version trouvée), la source `fortios-docs` passe en erreur visible et le catalogue existant est conservé tel quel — jamais un « 0 version » vert. Une erreur réseau ou un 5xx sur une branche fait échouer la source comme avant, il n'est jamais confondu avec une branche absente.
+
 Important : ce catalogue ne remplace pas l'Upgrade Path Tool. Il sert à connaître les versions disponibles par modèle.
 
 ## FortiAnalyzer et FortiManager
@@ -167,7 +169,9 @@ Pour récupérer le catalogue modèles/versions de FortiAnalyzer et FortiManager
 python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --tool-products fortianalyzer,fortimanager
 ```
 
-Contrairement à FortiGate (scraping des release notes), cette commande utilise directement les endpoints JSON de l'Upgrade Path Tool (`/upgrade-tool/products/<slug>.json` pour la liste des modèles, puis `/upgrade-tool/upgrade-path` pour les versions/builds par modèle) — plus rapide et plus fiable, mais uniquement disponible pour les produits que l'outil connaît.
+Contrairement à FortiGate (scraping des release notes), cette commande utilise directement l'API JSON du nouvel Upgrade Path Tool : `GET /api/tools/upgrade-path/models?product=<slug>` pour la liste des modèles (`[{"name": ..., "value": ...}]`), puis `GET /api/tools/upgrade-path?product=<slug>&model=<id>` pour les versions/builds par modèle (`{"availableFrom": [...], "availableTo": [...], "path": [...]}`, entrées `{"version", "type", "build", "links"}`). Les anciens endpoints `/upgrade-tool/products/<slug>.json` et `POST /upgrade-tool/upgrade-path` répondent 404 depuis fin septembre 2026 ; ces deux appels GET sont ceux que la page publique `docs.fortinet.com/upgrade-tool/<slug>` utilise elle-même.
+
+**Limite connue** : cette API est observée sur la page publique de Fortinet, elle n'est pas contractuellement garantie. Une réponse de forme inattendue (liste de modèles vide, modèle sans aucune version, JSON illisible) fait échouer la source du produit avec une erreur visible et **conserve le catalogue existant** ; elle n'est jamais interprétée comme « aucune version ». Les formats attendus sont figés par les tests (`tests/test_upgrade_tool_api.py`).
 
 Dans l'interface (outil principal comme page `/alerte/`), un sélecteur **Produit** permet de basculer entre FortiGate/FortiOS, FortiAnalyzer et FortiManager. Chaque alerte interne est rattachée à un seul produit ; la liste des alertes se filtre par produit par défaut (option "Tous les produits" disponible).
 
@@ -229,7 +233,7 @@ Puis lancer :
 python3 scripts/fortios_watch.py --docs-catalog
 ```
 
-Le script interroge `https://docs.fortinet.com/upgrade-tool/upgrade-path` et stocke le chemin retourné dans `data/fortios-data.generated.json`.
+Le script interroge l'API publique utilisée par les pages de l'Upgrade Path Tool Fortinet : la page `https://docs.fortinet.com/upgrade-tool/<produit>` charge elle-même `GET https://docs.fortinet.com/api/tools/upgrade-path?product=<slug>&model=<id>&from=<version>&to=<version>` (et `/models?product=<slug>` pour peupler son sélecteur de modèles). Le script utilise ces mêmes appels GET, `from` et `to` toujours transmis ensemble. Une réponse de forme inattendue est traitée comme une erreur de format remontée en 502 par le serveur local, jamais comme un « aucun chemin » silencieux ; l'interface bascule alors sur le repli « chemin affiché depuis le cache local » décrit plus haut.
 
 Pour une requête ponctuelle sans CSV :
 
@@ -327,7 +331,7 @@ En haut de `/`, le bandeau de briefing résume en une carte compacte l'état des
 
 - **une ligne par produit** — FortiGate/FortiOS, FortiManager, FortiAnalyzer et FortiClient EMS. FortiClient (Windows/macOS/Linux) en est volontairement absent : son suivi vit sur la page `/forticlient/` ;
 - **la version la plus récente de chaque branche**, pour les quatre trains les plus récents du catalogue. La règle est la même pour tous les produits et ne code aucune branche en dur : une version qui sort apparaît dans le bandeau dès la collecte suivante ;
-- des annotations de statut **propres à FortiOS** seulement : `Feature`/`Mature` (Upgrade Path Tool) et `Hors support`/`Support → date` (cycle de vie endoflife.date). Les autres produits n'ont pas ces données côté Fortinet ; leur pastille n'affiche que la version réellement collectée, jamais un statut inventé ;
+- des annotations de statut **propres à FortiOS** seulement : `Feature`/`Mature` (Upgrade Path Tool, lu dans le code `type` de chaque version — `M` → Mature, `F` → Feature, vide → non classé) et `Hors support`/`Support → date` (cycle de vie endoflife.date). Les autres produits n'ont pas ces données côté Fortinet ; leur pastille n'affiche que la version réellement collectée, jamais un statut inventé ;
 - **les dernières CVE** des quatre produits, chaque badge préfixé par le produit concerné (`FGT`, `FMG`, `FAZ`, `EMS`). Un advisory qui ne concerne que FortiClient (Windows/macOS/Linux) reste sur `/forticlient/` ; celui qui touche aussi EMS apparaît ici, avec la liste complète des produits dans son infobulle ;
 - en l'absence de données pour un produit, la mention discrète « Aucune donnée » — jamais de version ou de statut fabriqué.
 
