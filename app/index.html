@@ -589,11 +589,14 @@
         return;
       }
       stopCollectionRefreshPoll();
+      // Le serveur fournit toujours une heure de fin pour un état terminé ; un fichier d'état
+      // incomplet ne doit pas se traduire par « 01/01/1970 » à l'écran.
+      const finished = payload && payload.finishedAt ? ` le ${formatDateTime(payload.finishedAt)}` : "";
       if (state === "success") {
-        setCollectionRefreshMessage(`Dernière relance terminée le ${formatDateTime(payload.finishedAt)}.`);
+        setCollectionRefreshMessage(`Dernière relance terminée${finished}.`);
       } else if (state === "error") {
         setCollectionRefreshMessage(
-          `Dernière relance terminée avec des erreurs le ${formatDateTime(payload.finishedAt)} — voir le détail par source.`,
+          `Dernière relance terminée avec des erreurs${finished} — voir le détail par source.`,
           { error: true }
         );
       } else if (state === "interrupted") {
