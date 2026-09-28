@@ -44,7 +44,13 @@ DEFAULT_PRODUCT_ID = "fortigate-fortios"
 DEFAULT_PRODUCT_LABEL = "FortiGate / FortiOS"
 PSIRT_RSS_URL = "https://www.fortiguard.com/rss/ir.xml"
 FORTINET_DOCS_BASE_URL = "https://docs.fortinet.com"
-FORTINET_UPGRADE_PATH_URL = f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/upgrade-path"
+# Fortinet's Upgrade Path Tool moved in 2026-09: `/upgrade-tool/products/<slug>.json` and
+# `POST /upgrade-tool/upgrade-path` now answer 404. The tool's own page
+# (docs.fortinet.com/upgrade-tool/<slug>) calls these two JSON endpoints instead — observed on the
+# public page's JS bundle, not a contractually guaranteed API; a change there is treated as a
+# response-format failure (UpgradeToolResponseError), never as "no versions available".
+FORTINET_UPGRADE_TOOL_API_URL = f"{FORTINET_DOCS_BASE_URL}/api/tools/upgrade-path"
+FORTINET_UPGRADE_TOOL_MODELS_URL = f"{FORTINET_UPGRADE_TOOL_API_URL}/models"
 DEFAULT_DOCS_MAJOR_VERSIONS = (
     "8.4",
     "8.2",
@@ -92,6 +98,16 @@ RELEASE_NOTES_DOC_SLUGS = {
     "fortianalyzer": "release-notes",
     "fortimanager": "release-notes",
 }
+
+
+class UpgradeToolResponseError(Exception):
+    """The Upgrade Path Tool answered with a shape this collector doesn't understand.
+
+    Deliberately NOT a ValueError: a malformed upstream body is a gateway/format problem, so the
+    server must not report it to a browser as a 400 "bad request" (see fortios_server.py's
+    handle_official_path). Raised instead of returning an empty result so a broken or evolved
+    Fortinet response can never be mistaken for "this model/product has no version".
+    """
 
 
 @dataclass(frozen=True)
@@ -823,17 +839,59 @@ def html_to_text(raw_html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def discover_docs_versions(major_versions: tuple[str, ...], timeout: int) -> list[str]:
+def _discover_published_versions(
+    product_slug: str,
+    doc_slug: str,
+    label: str,
+    major_versions: tuple[str, ...],
+    timeout: int,
+) -> tuple[list[str], list[str]]:
+    """Versions listed on each train page, plus the trains Fortinet has no page for (yet).
+
+    Fortinet only publishes `<base>/product/<slug>/<train>` once that train exists: a 404 means
+    "nothing published on this train yet, try the others", never a reason to abort the whole
+    catalog (that's how the 8.4/8.2 pages took the FortiOS and FortiClient/EMS sources down in
+    2026-09 — the first train of DEFAULT_DOCS_MAJOR_VERSIONS had no page at all). Every other
+    failure (timeout, DNS, 5xx, 403...) still fails the source, and a run where no train could be
+    read *at all* raises: an empty catalog must never masquerade as a successful, genuinely
+    empty scan. Idem when a page answers 200 but carries none of the expected release-notes links
+    (a parsing breakage, not an empty train).
+    """
     versions: set[str] = set()
+    missing: list[str] = []
     for major in major_versions:
-        product_url = f"{FORTINET_DOCS_BASE_URL}/product/fortigate/{major}"
-        raw_html = fetch_text(product_url, timeout)
+        url = f"{FORTINET_DOCS_BASE_URL}/product/{product_slug}/{major}"
+        try:
+            raw_html = fetch_text(url, timeout)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            missing.append(f"{product_slug}/{major}")
+            continue
         versions.update(
             re.findall(
-                r"/document/fortigate/(\d+\.\d+\.\d+)/fortios-release-notes", raw_html
+                rf"/document/{re.escape(product_slug)}/(\d+\.\d+\.\d+)/{re.escape(doc_slug)}",
+                raw_html,
             )
         )
-    return sorted(versions, key=version_key)
+    if not versions:
+        details = (
+            f"branches absentes (HTTP 404) : {', '.join(missing)}"
+            if missing
+            else "aucune version publiée trouvée sur les pages testées"
+        )
+        raise ValueError(
+            f"Aucune branche {label} exploitable sur docs.fortinet.com ({details})"
+        )
+    return sorted(versions, key=version_key), missing
+
+
+def discover_docs_versions(
+    major_versions: tuple[str, ...], timeout: int
+) -> tuple[list[str], list[str]]:
+    return _discover_published_versions(
+        "fortigate", "fortios-release-notes", "FortiOS", major_versions, timeout
+    )
 
 
 def parse_docs_release(version: str, timeout: int) -> DocsRelease | None:
@@ -881,9 +939,15 @@ def collect_docs_catalog(
     major_versions: tuple[str, ...], timeout: int
 ) -> tuple[dict[str, Any], list[str]]:
     state = normalize_state({})
-    skipped: list[str] = []
+    versions, missing_branches = discover_docs_versions(major_versions, timeout)
+    # A train with no published page is reported as a skip, not as an error: the other trains are
+    # still collected (see _discover_published_versions). It shows up in the run report so a
+    # genuinely new train (e.g. 8.4 before Fortinet publishes it) stays visible.
+    skipped: list[str] = [
+        f"{branch} (page absente, HTTP 404)" for branch in missing_branches
+    ]
 
-    for version in discover_docs_versions(major_versions, timeout):
+    for version in versions:
         try:
             release = parse_docs_release(version, timeout)
         except (urllib.error.URLError, TimeoutError, OSError):
@@ -911,33 +975,73 @@ def collect_docs_catalog(
     return state, skipped
 
 
-# The Upgrade Path Tool's own available_from/to_extended items carry a "type": "Mature"|"Feature"
-# per version that release-notes scraping (collect_docs_catalog above) never sees. This is a
-# property of the FortiOS version itself, not of the hardware model, so one reference model is
-# enough to read every version's status — no need to repeat this call per model.
+# The Upgrade Path Tool's own availability items carry a maturity code per version ("M" = Mature,
+# "F" = Feature, "" = the tool doesn't classify that old version) that release-notes scraping
+# (collect_docs_catalog above) never sees. This is a property of the FortiOS version itself, not
+# of the hardware model, so one reference model is enough to read every version's status — no need
+# to repeat this call per model.
 FORTIOS_MATURITY_REFERENCE_MODEL = "FGT60F"
+
+# Translation to the two maturity labels the catalog and the UI have always stored, plus the
+# "None" the UI already treats as "not classified". Any other token is a vocabulary we don't
+# understand: fail closed rather than invent a classification (the caller treats maturity as a
+# soft enrichment, so a future Fortinet change degrades to "no maturity", never to wrong data).
+MATURITY_TYPE_LABELS = {
+    "M": "Mature",
+    "F": "Feature",
+    "Mature": "Mature",
+    "Feature": "Feature",
+    "": "None",
+    None: "None",
+}
+
+
+def _availability_entry(item: Any, context: str) -> tuple[str, str, str]:
+    """One version item of a payload (path hop or availability entry) -> (version, build, type).
+
+    Every usable field is read from the new response keys (`version`, `build`, `type`); a missing
+    or non-string version — the one field the whole catalog is keyed on — fails closed instead of
+    silently producing a gap-free-looking hop list.
+    """
+    if not isinstance(item, dict):
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool invalide ({context}) : entrée de version attendue, "
+            f"reçu {item!r}."
+        )
+    version = item.get("version")
+    if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool invalide ({context}) : version manquante ou invalide "
+            f"({item!r})."
+        )
+    build = item.get("build")
+    if build is not None and not isinstance(build, str):
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool invalide ({context}) : build non textuel "
+            f"({item!r})."
+        )
+    item_type = item.get("type")
+    if item_type not in MATURITY_TYPE_LABELS:
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool invalide ({context}) : maturité inconnue "
+            f"({item_type!r})."
+        )
+    return version, (build or "-"), MATURITY_TYPE_LABELS[item_type]
 
 
 def fetch_fortios_version_maturity(timeout: int) -> dict[str, str]:
-    payload_json = post_official_upgrade_tool(
-        {
-            "product_slug": PRODUCTS[DEFAULT_PRODUCT_ID]["slug"],
-            "model": FORTIOS_MATURITY_REFERENCE_MODEL,
-        },
+    payload = fetch_upgrade_tool_payload(
+        PRODUCTS[DEFAULT_PRODUCT_ID]["slug"],
+        FORTIOS_MATURITY_REFERENCE_MODEL,
         timeout,
     )
-    result = payload_json.get("result")
-    if not isinstance(result, dict):
-        return {}
-
+    context = f"{PRODUCTS[DEFAULT_PRODUCT_ID]['slug']}/{FORTIOS_MATURITY_REFERENCE_MODEL}"
     maturity: dict[str, str] = {}
-    for item in (result.get("available_from_extended") or []) + (
-        result.get("available_to_extended") or []
+    for item in _payload_list(payload, "availableFrom", context) + _payload_list(
+        payload, "availableTo", context
     ):
-        version = item.get("version")
-        item_type = item.get("type")
-        if version and item_type:
-            maturity[version] = item_type
+        version, _build, label = _availability_entry(item, context)
+        maturity[version] = label
     return maturity
 
 
@@ -995,18 +1099,10 @@ FORTICLIENT_EMS_MODEL_ID = "ems"
 
 def discover_forticlient_versions(
     major_versions: tuple[str, ...], doc_slug: str, timeout: int
-) -> list[str]:
-    versions: set[str] = set()
-    for major in major_versions:
-        url = f"{FORTINET_DOCS_BASE_URL}/product/forticlient/{major}"
-        raw_html = fetch_text(url, timeout)
-        versions.update(
-            re.findall(
-                rf"/document/forticlient/(\d+\.\d+\.\d+)/{re.escape(doc_slug)}",
-                raw_html,
-            )
-        )
-    return sorted(versions, key=version_key)
+) -> tuple[list[str], list[str]]:
+    return _discover_published_versions(
+        "forticlient", doc_slug, "FortiClient", major_versions, timeout
+    )
 
 
 def parse_forticlient_build(version: str, doc_slug: str, timeout: int) -> str | None:
@@ -1031,6 +1127,7 @@ def collect_forticlient_catalog(
     """
     state = normalize_state({})
     skipped: list[str] = []
+    skipped_branches: list[str] = []
 
     fc_product = ensure_product(
         state, FORTICLIENT_PRODUCT_ID, PRODUCT_LABELS[FORTICLIENT_PRODUCT_ID]
@@ -1045,7 +1142,13 @@ def collect_forticlient_catalog(
                 }
             )
 
-        for version in discover_forticlient_versions(major_versions, doc_slug, timeout):
+        versions, missing_branches = discover_forticlient_versions(
+            major_versions, doc_slug, timeout
+        )
+        skipped_branches.extend(
+            f"{branch} (page absente, HTTP 404)" for branch in missing_branches
+        )
+        for version in versions:
             try:
                 build = parse_forticlient_build(version, doc_slug, timeout)
             except (urllib.error.URLError, TimeoutError, OSError):
@@ -1081,9 +1184,13 @@ def collect_forticlient_catalog(
             }
         )
 
-    for version in discover_forticlient_versions(
+    ems_versions, ems_missing_branches = discover_forticlient_versions(
         major_versions, FORTICLIENT_EMS_DOC_SLUG, timeout
-    ):
+    )
+    skipped_branches.extend(
+        f"{branch} (page absente, HTTP 404)" for branch in ems_missing_branches
+    )
+    for version in ems_versions:
         try:
             build = parse_forticlient_build(version, FORTICLIENT_EMS_DOC_SLUG, timeout)
         except (urllib.error.URLError, TimeoutError, OSError):
@@ -1105,22 +1212,40 @@ def collect_forticlient_catalog(
             ),
         )
 
-    return state, skipped
+    return state, unique_in_order(skipped_branches + skipped)
+
+
+# The Upgrade Path Tool's per-item `links` map is keyed by the release-notes section slug; the
+# catalog and the UI have always named those same sections with short keys (the R/K/U/B badges,
+# plus "release-notes" for the general page / D badge). One mapping for both notes and links so a
+# section can never be listed as a badge without its deep link, or the other way around.
+OFFICIAL_NOTE_LINK_SLUGS = {
+    "resolved-issues": "resolved",
+    "known-issues": "known",
+    "upgrade-information": "upgrade",
+    "changes-in-default-behavior": "behavior",
+    "special-notices": "special",
+}
+
+
+def _official_links(item: dict[str, Any]) -> dict[str, Any]:
+    links = item.get("links")
+    if links is None:
+        return {}
+    if not isinstance(links, dict):
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool invalide : 'links' doit être un objet "
+            f"(version {item.get('version')!r})."
+        )
+    return links
 
 
 def official_note_keys(item: dict[str, Any]) -> tuple[str, ...]:
-    slug_to_note = {
-        "resolved-issues": "resolved",
-        "known-issues": "known",
-        "upgrade-information": "upgrade",
-        "changes-in-default-behavior": "behavior",
-        "special-notices": "special",
-    }
-    notes: list[str] = []
-    for permalink in item.get("permalinks") or []:
-        note = slug_to_note.get(permalink.get("slug"))
-        if note:
-            notes.append(note)
+    notes = [
+        OFFICIAL_NOTE_LINK_SLUGS[slug]
+        for slug in _official_links(item)
+        if slug in OFFICIAL_NOTE_LINK_SLUGS
+    ]
     return tuple(unique_in_order(notes))
 
 
@@ -1134,39 +1259,75 @@ def official_note_links(
     item: dict[str, Any], product_id: str, version: str
 ) -> dict[str, str]:
     """Deep links into the version's release notes, one per section badge (R/K/U/B), plus a
-    "release-notes" entry for the general page (the D badge)."""
-    slug_to_note = {
-        "resolved-issues": "resolved",
-        "known-issues": "known",
-        "upgrade-information": "upgrade",
-        "changes-in-default-behavior": "behavior",
-    }
-    base_url = release_notes_url(product_id, version)
-    links: dict[str, str] = {"release-notes": base_url}
-    for permalink in item.get("permalinks") or []:
-        slug = permalink.get("slug")
-        note = slug_to_note.get(slug)
-        permanent_id = permalink.get("permanent_id")
-        if note and permanent_id:
-            links[note] = f"{base_url}/{permanent_id}/{slug}"
+    "release-notes" entry for the general page (the D badge).
+
+    Fortinet now returns those deep links directly in the item's `links` map. Only absolute
+    https:// URLs are kept: they end up as hrefs in the UI, so anything else is dropped rather
+    than trusted blind.
+    """
+    links: dict[str, str] = {"release-notes": release_notes_url(product_id, version)}
+    for slug, url in _official_links(item).items():
+        note = OFFICIAL_NOTE_LINK_SLUGS.get(slug)
+        if note and isinstance(url, str) and url.startswith("https://"):
+            links[note] = url
     return links
 
 
-def post_official_upgrade_tool(payload: dict[str, str], timeout: int) -> dict[str, Any]:
-    product_slug = payload.get("product_slug", "fortigate")
-    body = urllib.parse.urlencode(payload).encode("utf-8")
+def _decode_upgrade_tool_payload(raw: bytes, context: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="ignore"))
+    except json.JSONDecodeError as error:
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool illisible ({context}) : {error}"
+        ) from error
+    if not isinstance(payload, dict):
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool invalide ({context}) : objet JSON attendu."
+        )
+    return payload
+
+
+def _payload_list(payload: dict[str, Any], key: str, context: str) -> list[Any]:
+    """One list field of an upgrade-path payload — fail closed when it isn't a list at all."""
+    value = payload.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool invalide ({context}) : '{key}' doit être une liste."
+        )
+    return value
+
+
+def fetch_upgrade_tool_payload(
+    product_slug: str,
+    model: str,
+    timeout: int,
+    from_version: str | None = None,
+    to_version: str | None = None,
+) -> dict[str, Any]:
+    """GET the Upgrade Path Tool's JSON for one product/model, optionally between two versions.
+
+    This is the endpoint the tool's own pages call since 2026-09, when the previous
+    `/upgrade-tool/products/<slug>.json` + `POST /upgrade-tool/upgrade-path` pair was retired
+    (both now answer 404). It is observed on a public page's JS bundle, not a contractually
+    guaranteed API — so an unexpected shape raises UpgradeToolResponseError instead of being
+    mistaken for "no versions". `from`/`to` are only sent as a pair: a path is only meaningful
+    between an explicit source and target, so a lone bound is dropped rather than sent alone.
+    """
+    params = {"product": product_slug, "model": model}
+    if from_version and to_version:
+        params["from"] = from_version
+        params["to"] = to_version
     request = urllib.request.Request(
-        FORTINET_UPGRADE_PATH_URL,
-        data=body,
+        f"{FORTINET_UPGRADE_TOOL_API_URL}?{urllib.parse.urlencode(params)}",
         headers={
             "User-Agent": "sns-fortios-upgrade-watch/0.1",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "Origin": FORTINET_DOCS_BASE_URL,
             "Referer": f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/{product_slug}",
         },
     )
-    return json.loads(
-        read_url_with_retry(request, timeout).decode("utf-8", errors="ignore")
+    return _decode_upgrade_tool_payload(
+        read_url_with_retry(request, timeout), f"{product_slug}/{model}"
     )
 
 
@@ -1205,7 +1366,13 @@ def resolve_fortinet_model(product_id: str, model_id: str, timeout: int) -> str:
         return model_id
     try:
         alias_map = fortinet_model_alias_map(PRODUCTS[product_id]["slug"], timeout)
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+        json.JSONDecodeError,
+        UpgradeToolResponseError,
+    ):
         return model_id
     return alias_map.get(normalize_model_key(model_label(model_id)), model_id)
 
@@ -1218,23 +1385,29 @@ def fetch_official_upgrade_path(
     if version_key(requested.to_version) <= version_key(requested.from_version):
         raise ValueError(UPGRADE_DIRECTION_ERROR)
     product_slug = PRODUCTS[requested.product]["slug"]
-    api_model = resolve_fortinet_model(requested.product, requested.model, timeout)
-    payload = {
-        "product_slug": product_slug,
-        "model": api_model,
-        "current_version": requested.from_version,
-        "target_version": requested.to_version,
-    }
-    payload_json = post_official_upgrade_tool(payload, timeout)
-    result = payload_json.get("result")
-    path_items = result.get("path") if isinstance(result, dict) else None
-    path_items = path_items or []
+    # Alias resolution only concerns FortiGate: its catalog model ids come from release-notes
+    # scraping (FGT60F...) and must be translated to the tool's own hardware ids through the
+    # models endpoint. FortiAnalyzer/FortiManager catalogs are built from that same tool list, so
+    # their model ids already are the ids the tool expects — never rewrite them.
+    api_model = (
+        resolve_fortinet_model(requested.product, requested.model, timeout)
+        if requested.product == DEFAULT_PRODUCT_ID
+        else requested.model
+    )
+    payload = fetch_upgrade_tool_payload(
+        product_slug,
+        api_model,
+        timeout,
+        from_version=requested.from_version,
+        to_version=requested.to_version,
+    )
+    context = f"{product_slug}/{api_model} {requested.from_version}->{requested.to_version}"
+    path_items = _payload_list(payload, "path", context)
     if len(path_items) < 2:
         return None
 
-    hops = tuple(item["version"] for item in path_items if item.get("version"))
-    if len(hops) < 2:
-        return None
+    parsed = [_availability_entry(item, context) for item in path_items]
+    hops = tuple(version for version, _build, _type in parsed)
     # Trust the endpoints we asked for over whatever Fortinet's response claims only once we've
     # confirmed the hops themselves actually start/end there — otherwise a stored path's title
     # (from -> to) could contradict its own hop list. Treat a mismatch the same as "no path".
@@ -1253,15 +1426,26 @@ def fetch_official_upgrade_path(
         Firmware(
             product=requested.product,
             model=requested.model,
-            version=item["version"],
-            build=item.get("build_number") or "-",
+            version=version,
+            build=build,
             notes=official_note_keys(item),
-            links=official_note_links(item, requested.product, item["version"]),
+            links=official_note_links(item, requested.product, version),
         )
-        for item in path_items
-        if item.get("version")
+        for item, (version, build, _type) in zip(path_items, parsed)
     ]
     return path, firmwares
+
+
+def _model_entry(entry: Any, product_slug: str) -> dict[str, str]:
+    """One {name, value} entry of the models endpoint -> the catalog's own field names."""
+    name = entry.get("name") if isinstance(entry, dict) else None
+    value = entry.get("value") if isinstance(entry, dict) else None
+    if not isinstance(name, str) or not name or not isinstance(value, str) or not value:
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool invalide : modèle inexploitable pour {product_slug} "
+            f"({entry!r})."
+        )
+    return {"product_name": name, "hardware_model_name": value}
 
 
 def fetch_product_models(product_slug: str, timeout: int) -> list[dict[str, str]]:
@@ -1271,19 +1455,28 @@ def fetch_product_models(product_slug: str, timeout: int) -> list[dict[str, str]
     more reliable model source than scraping release notes for a "Supported models" section (which
     FortiAnalyzer/FortiManager release notes don't reliably have in the same format as FortiOS).
     """
-    url = f"{FORTINET_DOCS_BASE_URL}/upgrade-tool/products/{product_slug}.json"
+    url = f"{FORTINET_UPGRADE_TOOL_MODELS_URL}?{urllib.parse.urlencode({'product': product_slug})}"
     request = urllib.request.Request(
         url, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"}
     )
     # Use the same three-total-attempt budget as transport retries. A syntactically valid but empty
     # payload is not usable catalog data, so give Fortinet's endpoint two bounded chances to recover.
     for attempt in range(3):
-        data = json.loads(
-            read_url_with_retry(request, timeout).decode("utf-8", errors="ignore")
-        )
-        products = data.get("products")
-        if isinstance(products, list) and products:
-            return products
+        try:
+            payload = json.loads(
+                read_url_with_retry(request, timeout).decode("utf-8", errors="ignore")
+            )
+        except json.JSONDecodeError as error:
+            raise UpgradeToolResponseError(
+                f"Réponse Upgrade Path Tool illisible ({product_slug}/models) : {error}"
+            ) from error
+        if not isinstance(payload, list):
+            raise UpgradeToolResponseError(
+                f"Réponse Upgrade Path Tool invalide ({product_slug}/models) : liste attendue."
+            )
+        models = [_model_entry(entry, product_slug) for entry in payload]
+        if models:
+            return models
         if attempt < 2:
             time.sleep((2**attempt) + random.uniform(0, 1))
     return []
@@ -1292,21 +1485,25 @@ def fetch_product_models(product_slug: str, timeout: int) -> list[dict[str, str]
 def fetch_model_firmwares(
     product_slug: str, hardware_model_name: str, timeout: int
 ) -> list[dict[str, str]]:
-    """Version/build catalog for one model, from the tool's own available_from/to_extended lists."""
-    payload_json = post_official_upgrade_tool(
-        {"product_slug": product_slug, "model": hardware_model_name}, timeout
-    )
-    result = payload_json.get("result")
-    if not isinstance(result, dict):
-        return []
+    """Version/build catalog for one model, from the tool's own availability lists.
 
+    A model the tool answers nothing for fails closed instead of reading as "this model has no
+    version": every model coming from the tool's own list does have versions in practice, so an
+    empty answer means a degraded API or an unknown model id, never a legitimate empty catalog.
+    """
+    payload = fetch_upgrade_tool_payload(product_slug, hardware_model_name, timeout)
+    context = f"{product_slug}/{hardware_model_name}"
     by_version: dict[str, dict[str, str]] = {}
-    for item in (result.get("available_from_extended") or []) + (
-        result.get("available_to_extended") or []
+    for item in _payload_list(payload, "availableFrom", context) + _payload_list(
+        payload, "availableTo", context
     ):
-        version = item.get("version")
-        if version:
-            by_version[version] = item
+        version, build, _type = _availability_entry(item, context)
+        by_version[version] = {"version": version, "build": build}
+    if not by_version:
+        raise UpgradeToolResponseError(
+            f"Réponse Upgrade Path Tool vide pour {context} : aucune version disponible "
+            f"(modèle inconnu ou réponse dégradée)."
+        )
     return list(by_version.values())
 
 
@@ -1316,7 +1513,12 @@ def collect_tool_catalog(product_id: str, timeout: int) -> dict[str, Any]:
     state = normalize_state({})
     product = ensure_product(state, product_id, meta["label"])
 
-    for entry in fetch_product_models(meta["slug"], timeout):
+    model_entries = fetch_product_models(meta["slug"], timeout)
+    if not model_entries:
+        raise UpgradeToolResponseError(
+            f"Upgrade Path Tool : aucun modèle retourné pour {product_id}."
+        )
+    for entry in model_entries:
         model_id = entry.get("hardware_model_name")
         if not model_id:
             continue
@@ -1335,7 +1537,7 @@ def collect_tool_catalog(product_id: str, timeout: int) -> dict[str, Any]:
                     product=product_id,
                     model=model_id,
                     version=firmware_info["version"],
-                    build=firmware_info.get("build_number") or "-",
+                    build=firmware_info.get("build") or "-",
                     links={
                         "release-notes": release_notes_url(
                             product_id, firmware_info["version"]
@@ -2497,7 +2699,13 @@ def main(argv: list[str]) -> int:
                 apply_fortios_maturity(
                     state, fetch_fortios_version_maturity(args.timeout)
                 )
-            except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                OSError,
+                json.JSONDecodeError,
+                UpgradeToolResponseError,
+            ):
                 pass  # maturity is a soft enrichment on top of the docs catalog, not its core success
             record_source(
                 SOURCE_FORTIOS_DOCS,

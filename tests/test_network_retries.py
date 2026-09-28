@@ -105,9 +105,9 @@ class HttpReadRetryTests(unittest.TestCase):
 
     def test_empty_product_catalog_is_retried_before_accepting_models(self):
         responses = [
-            b'{"products": []}',
-            b'{"products": []}',
-            b'{"products": [{"product_name": "FMG_1000F", "hardware_model_name": "FMG1KF"}]}',
+            b"[]",
+            b"[]",
+            b'[{"name": "FMG_1000F", "value": "FMG1KF"}]',
         ]
 
         with (
@@ -123,7 +123,7 @@ class HttpReadRetryTests(unittest.TestCase):
 
     def test_empty_product_catalog_stops_after_three_total_attempts(self):
         with (
-            patch.object(fw, "read_url_with_retry", return_value=b'{"products": []}') as read_url,
+            patch.object(fw, "read_url_with_retry", return_value=b"[]") as read_url,
             patch.object(fw.time, "sleep") as sleep,
             patch.object(fw.random, "uniform", return_value=0),
         ):
