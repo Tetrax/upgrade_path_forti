@@ -414,7 +414,12 @@ login on its authorized network before calling the enterprise deployment complet
 3. Check web healthy, scheduler running/next slot, HTTPS, catalogue/products,
    official path request, CVE display, admin, email preview and logs. Compare
    credential/cert/settings/checkpoint hashes with the baseline, accounting for
-   legitimate new collection events only.
+   legitimate new collection events only. The home page's on-demand relaunch
+   (`POST /api/cert/data-refresh`) is session/origin/CSRF protected and shares the
+   scheduler's collection lock: an anonymous call must answer 401, a second
+   relaunch while one runs 409, and the run itself must be identical to the
+   scheduled full pass. Do not exercise it on the live instance while validating:
+   it is a real collection (and a real notification opportunity).
 4. If unhealthy, restore the previous image and deployment config plus matching
    helper. No notification/catalogue schema migration is required by this release.
    The older account code ignores the recovery sidecar. Follow the SMTP rollback
@@ -425,6 +430,12 @@ login on its authorized network before calling the enterprise deployment complet
    checkpoint after successful sends risks replay: freeze sends and reconcile
    sent keys before any state rollback. Never blindly restore a whole old volume
    over newly acquired data.
+6. The on-demand relaunch adds no persistent-state migration: an older image simply
+   ignores `data/fortios-manual-refresh.json`, which only records the last relaunch
+   outcome for the home page and may be kept or deleted. The systemd deployment
+   already allows `data/` and `docs/` writes (`ReadWritePaths`), which is what the
+   in-process full pass needs; the Compose stack mounts both on `web` already. No
+   unit, Compose, mount or lock change is required, so rollback is image-only.
 
 On the shared VPS, hold `/home/tetrax/workspace/.locks/valdev-infra.lock` only
 around targeted infrastructure mutation and verification. Do not hold it for builds

@@ -778,6 +778,8 @@ a.note-token:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  row-gap: 6px;
   user-select: none;
   font-size: 13px;
   font-weight: 800;
@@ -823,6 +825,45 @@ a.note-token:hover {
 
 .health-warning-banner {
   margin: 10px 0 0;
+}
+
+/* Relaunch button + its live status, right-aligned in the "État des données" header. Kept small
+   on purpose: the header row must stay a status line, not become a toolbar. */
+.health-refresh-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.health-refresh-state {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+  text-align: right;
+}
+
+.health-refresh-state.error {
+  color: var(--danger);
+}
+
+.health-refresh-state a {
+  color: var(--brand-dark);
+}
+
+.health-refresh-button {
+  min-height: 26px;
+  padding: 0 10px;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.health-refresh-button svg {
+  width: 12px;
+  height: 12px;
 }
 
 .health-table-wrap {

@@ -154,6 +154,74 @@ def refresh_lock(root: Path = ROOT) -> Iterator[None]:
             fcntl.flock(descriptor.fileno(), fcntl.LOCK_UN)
 
 
+class RefreshLockBusy(RuntimeError):
+    """The shared collection lock is already held by another full/recovery/afternoon run."""
+
+
+class RefreshLock:
+    """A collection lock taken immediately, without waiting (acquire_refresh_lock()).
+
+    It is the exact same flock refresh_lock() takes on data/fortios-scheduled-refresh.lock, kept
+    open until release() — so a run started through this handle excludes, and is excluded by, the
+    scheduler container's jobs and the systemd timers, word for word like a scheduled run does.
+    """
+
+    def __init__(self, descriptor: Any) -> None:
+        self._descriptor = descriptor
+
+    @property
+    def held(self) -> bool:
+        return self._descriptor is not None
+
+    def release(self) -> None:
+        """Release the lock (idempotent — a second call is a no-op)."""
+        descriptor, self._descriptor = self._descriptor, None
+        if descriptor is None:
+            return
+        try:
+            fcntl.flock(descriptor.fileno(), fcntl.LOCK_UN)
+        finally:
+            descriptor.close()
+
+    def run_full_refresh(
+        self,
+        *,
+        root: Path = ROOT,
+        runner: Runner = subprocess.run,
+        python: str = sys.executable,
+        compatibility_python: str | None = None,
+    ) -> int:
+        """The authoritative full pass (see run_full_refresh()), run under this held lock."""
+        if self._descriptor is None:
+            raise RuntimeError("Le verrou de collecte a déjà été relâché.")
+        return _run_full_and_mark_unlocked(
+            root=root,
+            runner=runner,
+            python=python,
+            compatibility_python=compatibility_python or _compatibility_python(root),
+        )
+
+
+def acquire_refresh_lock(root: Path = ROOT) -> RefreshLock:
+    """Take the collection lock without waiting, or refuse immediately.
+
+    On-demand runs (the web UI's manual relaunch) must answer *now*: waiting here would silently
+    queue a second collection behind whichever full/recovery/afternoon run already holds the lock
+    instead of telling the operator the tool is busy. Raises RefreshLockBusy when it is held.
+    """
+    lock_path = root / "data" / LOCK_NAME
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = lock_path.open("w", encoding="utf-8")
+    try:
+        fcntl.flock(descriptor.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        descriptor.close()
+        raise RefreshLockBusy(
+            "Une collecte est déjà en cours (collecte planifiée ou autre relance)."
+        ) from error
+    return RefreshLock(descriptor)
+
+
 def _run(command: list[str], *, root: Path, runner: Runner) -> int:
     return runner(command, cwd=root, check=False).returncode
 
@@ -299,6 +367,11 @@ def run_full_refresh(
     python: str = sys.executable,
     compatibility_python: str | None = None,
 ) -> int:
+    """The scheduled full pass: take the collection lock (waiting), then run it.
+
+    On-demand callers that must answer immediately instead of waiting use acquire_refresh_lock()
+    and RefreshLock.run_full_refresh() — same lock, same _run_full_and_mark_unlocked() body.
+    """
     with refresh_lock(root):
         return _run_full_and_mark_unlocked(
             root=root,
