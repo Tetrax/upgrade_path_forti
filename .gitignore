@@ -4,6 +4,7 @@ __pycache__/
 data/advisory-images/
 data/fortios-health.json
 data/fortios-notify-history.json
+data/fortios-manual-refresh.json
 data/notification-settings.json*
 data/smtp-settings.json*
 data/email-transport-settings.json*

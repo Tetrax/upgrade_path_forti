@@ -42,6 +42,14 @@
             <span class="health-dot" id="healthSummaryDot"></span>
             <span>État des données</span>
             <span class="muted" id="healthSummaryText">Chargement…</span>
+            <span class="health-refresh-actions">
+              <span class="health-refresh-state" id="healthRefreshState" role="status" aria-live="polite"></span>
+              <button class="btn health-refresh-button" id="healthRefreshButton" type="button"
+                      title="Relancer la collecte globale (collecte réelle de toutes les sources Fortinet ; session administrateur requise)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+                Relancer
+              </button>
+            </span>
           </summary>
           <div id="healthWarningBanner"></div>
           <div id="healthTableContainer"></div>
@@ -149,6 +157,17 @@
     };
     const HEALTH_SOURCE_ORDER = Object.keys(HEALTH_SOURCE_LABELS);
     let healthState = null;
+    // Relance manuelle de la collecte (bouton de l'en-tête « État des données »). La page ne
+    // lance jamais un scan elle-même : elle passe par l'API administrateur, qui exige une
+    // session, un jeton CSRF et la même origine, et réutilise le runner planifié. Un simple
+    // rechargement du navigateur ne déclenche donc rien et ne peut pas être confondu avec une
+    // collecte en cours.
+    const DATA_REFRESH_URL = "/api/cert/data-refresh";
+    // Cadence de suivi pendant une relance : réactive sans marteler l'API pendant les minutes
+    // que dure une vraie collecte.
+    const DATA_REFRESH_POLL_MS = 2500;
+    let collectionRefreshTimer = null;
+    let lastCollectionRefreshState = null;
     // FortiClient/EMS have no Fortinet Upgrade Path Tool support, so no "Afficher le chemin" here
     // — they get their own catalog/advisories/compatibility page instead (app/forticlient/).
     const NO_PATH_PRODUCT_IDS = ["forticlient", "forticlient-ems"];
@@ -276,11 +295,22 @@
       historyList: document.getElementById("historyList"),
       healthSummaryDot: document.getElementById("healthSummaryDot"),
       healthSummaryText: document.getElementById("healthSummaryText"),
+      healthRefreshState: document.getElementById("healthRefreshState"),
+      healthRefreshButton: document.getElementById("healthRefreshButton"),
       healthWarningBanner: document.getElementById("healthWarningBanner"),
       healthTableContainer: document.getElementById("healthTableContainer")
     };
 
     els.go.addEventListener("click", showPath);
+    // Le bouton vit dans le <summary> : l'action du panneau est neutralisée explicitement pour
+    // que l'activation du bouton (souris, Entrée, Espace) ne serve qu'à la relance et ne replie
+    // jamais la section, quel que soit le moteur qui propage l'action du summary depuis un
+    // descendant interactif.
+    els.healthRefreshButton.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      triggerCollectionRefresh();
+    });
     document.getElementById("cveSearchButton").addEventListener("click", searchCve);
     els.cveSearchInput.addEventListener("keydown", event => {
       if (event.key === "Enter") searchCve();
@@ -323,6 +353,9 @@
       renderResult();
       autoLoadGeneratedData();
       autoLoadHealthState();
+      // Silencieux quand il n'y a pas de session : personne ne doit voir un avertissement de
+      // connexion simplement parce qu'il consulte l'état des données.
+      loadCollectionRefreshState({ silent: true });
     }
 
     function loadState() {
@@ -515,6 +548,158 @@
           </table>
         </div>
       `;
+    }
+
+    // --- Relance manuelle de la collecte (bouton de l'en-tête) ---------------------------------
+    function setCollectionRefreshMessage(text, options = {}) {
+      els.healthRefreshState.className = `health-refresh-state${options.error ? " error" : ""}`;
+      if (options.link) {
+        els.healthRefreshState.innerHTML = `${escapeHtml(text)} <a href="${options.link.href}">${escapeHtml(options.link.label)}</a>`;
+      } else {
+        els.healthRefreshState.textContent = text || "";
+      }
+      els.healthRefreshButton.disabled = Boolean(options.busy);
+    }
+
+    function stopCollectionRefreshPoll() {
+      if (collectionRefreshTimer !== null) {
+        clearTimeout(collectionRefreshTimer);
+        collectionRefreshTimer = null;
+      }
+    }
+
+    function scheduleCollectionRefreshPoll() {
+      if (collectionRefreshTimer !== null) return;
+      collectionRefreshTimer = setTimeout(() => {
+        collectionRefreshTimer = null;
+        loadCollectionRefreshState();
+      }, DATA_REFRESH_POLL_MS);
+    }
+
+    // Un état « en cours » n'est affiché que si l'API le dit réellement (le serveur ne le
+    // rapporte que tant qu'un processus exécute la collecte) : un rechargement de page ne
+    // fabrique jamais un faux « scan en cours », et un service redémarré pendant une relance est
+    // rapporté comme interrompu.
+    function renderCollectionRefreshState(payload) {
+      const state = payload && payload.state;
+      if (state === "running") {
+        const since = payload.startedAt ? ` depuis ${formatDateTime(payload.startedAt)}` : "";
+        setCollectionRefreshMessage(`Collecte en cours${since}…`, { busy: true });
+        scheduleCollectionRefreshPoll();
+        return;
+      }
+      stopCollectionRefreshPoll();
+      if (state === "success") {
+        setCollectionRefreshMessage(`Dernière relance terminée le ${formatDateTime(payload.finishedAt)}.`);
+      } else if (state === "error") {
+        setCollectionRefreshMessage(
+          `Dernière relance terminée avec des erreurs le ${formatDateTime(payload.finishedAt)} — voir le détail par source.`,
+          { error: true }
+        );
+      } else if (state === "interrupted") {
+        setCollectionRefreshMessage("Dernière relance interrompue (service redémarré).", { error: true });
+      } else {
+        setCollectionRefreshMessage("");
+      }
+    }
+
+    function showCollectionRefreshFailure(message, options = {}) {
+      stopCollectionRefreshPoll();
+      setCollectionRefreshMessage(message, { error: true, ...options });
+    }
+
+    async function loadCollectionRefreshState(options = {}) {
+      let response;
+      try {
+        response = await fetch(DATA_REFRESH_URL, { cache: "no-store", credentials: "same-origin" });
+      } catch {
+        if (!options.silent) showCollectionRefreshFailure("Service local indisponible.");
+        return;
+      }
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        if (!options.silent) {
+          showCollectionRefreshFailure("Session administrateur requise pour relancer la collecte.", {
+            link: { href: "/admin/", label: "Se connecter" }
+          });
+        } else {
+          stopCollectionRefreshPoll();
+        }
+        return;
+      }
+      if (response.status !== 200) {
+        if (!options.silent) showCollectionRefreshFailure("État de la relance indisponible.");
+        else stopCollectionRefreshPoll();
+        return;
+      }
+      const previous = lastCollectionRefreshState;
+      lastCollectionRefreshState = payload.state || null;
+      renderCollectionRefreshState(payload);
+      if (previous === "running" && payload.state !== "running") {
+        // La collecte vient réellement de se terminer : relire l'état des données, c'est le
+        // résultat que l'opérateur attend, pas la promesse du bouton.
+        autoLoadHealthState();
+      }
+    }
+
+    async function triggerCollectionRefresh() {
+      if (els.healthRefreshButton.disabled) return;
+      setCollectionRefreshMessage("Démarrage de la collecte…", { busy: true });
+      let csrfToken = null;
+      try {
+        const statusResponse = await fetch("/api/cert/status", { cache: "no-store", credentials: "same-origin" });
+        const statusPayload = await statusResponse.json().catch(() => ({}));
+        if (statusResponse.status !== 200 || !statusPayload.authenticated || !statusPayload.csrfToken) {
+          showCollectionRefreshFailure("Session administrateur requise pour relancer la collecte.", {
+            link: { href: "/admin/", label: "Se connecter" }
+          });
+          return;
+        }
+        csrfToken = statusPayload.csrfToken;
+      } catch {
+        showCollectionRefreshFailure("Service local indisponible.");
+        return;
+      }
+
+      let response;
+      try {
+        response = await fetch(DATA_REFRESH_URL, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+          body: "{}"
+        });
+      } catch {
+        showCollectionRefreshFailure("Service local indisponible.");
+        return;
+      }
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 202) {
+        lastCollectionRefreshState = payload.state || "running";
+        renderCollectionRefreshState(payload);
+        return;
+      }
+      if (response.status === 409) {
+        // Une collecte (planifiée ou autre relance) tient le verrou : rien n'a été démarré ici,
+        // et rien n'est mis en file d'attente derrière elle.
+        stopCollectionRefreshPoll();
+        setCollectionRefreshMessage(
+          "Une collecte est déjà en cours (planifiée ou autre relance) : réessayez dans quelques minutes.",
+          { error: true }
+        );
+        return;
+      }
+      if (response.status === 401) {
+        showCollectionRefreshFailure("Session administrateur requise pour relancer la collecte.", {
+          link: { href: "/admin/", label: "Se connecter" }
+        });
+        return;
+      }
+      if (response.status === 403) {
+        showCollectionRefreshFailure("Jeton de sécurité refusé : rechargez la page puis reconnectez-vous.");
+        return;
+      }
+      showCollectionRefreshFailure(payload.error || "La relance de collecte a été refusée.");
     }
 
     function populateProducts() {

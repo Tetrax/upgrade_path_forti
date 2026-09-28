@@ -88,7 +88,17 @@ class FortiosTestServer:
 
 
 @pytest.fixture
-def fortios_server(tmp_path: Path):
+def fortios_server_env() -> dict[str, str]:
+    """Extra environment for the isolated server.
+
+    A test file that needs its own knob (e.g. the relaunch suite's FORTIOS_E2E_REFRESH_HOLD_FILE)
+    overrides this fixture locally; every other suite gets the standard environment unchanged.
+    """
+    return {}
+
+
+@pytest.fixture
+def fortios_server(tmp_path: Path, fortios_server_env: dict[str, str]):
     admin_password = secrets.token_urlsafe(24)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -129,6 +139,9 @@ def fortios_server(tmp_path: Path):
     smtp_password_path = tmp_path / "smtp-secrets" / "password"
     smtp_password_path.parent.mkdir(mode=0o700)
     env["FORTIOS_SMTP_PASSWORD_FILE"] = str(smtp_password_path)
+
+    # Per-test-file additions last: they are the caller's explicit intent.
+    env.update(fortios_server_env)
 
     process = subprocess.Popen(
         [sys.executable, str(REPO_ROOT / "scripts" / "fortios_server.py"), "--host", "127.0.0.1", "--port", str(port)],

@@ -13,11 +13,14 @@ import os
 import re
 import secrets
 import ssl
+import subprocess
 import sys
 import threading
+import time
 import traceback
 import urllib.error
 import urllib.parse
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.cookies import CookieError, SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +30,7 @@ from typing import Any
 import certctl
 import fortios_email_render
 import fortios_notify
+import scheduled_refresh
 from cert_admin import (
     DEFAULT_CREDENTIALS,
     MAX_PASSWORD_LENGTH,
@@ -86,6 +90,8 @@ from fortios_watch import (
     DEFAULT_PRODUCT_ID,
     PRODUCT_LABELS,
     PRODUCTS,
+    SOURCE_COMPAT_MATRIX,
+    SOURCE_FORTIOS_DOCS,
     UPGRADE_DIRECTION_ERROR,
     Firmware,
     OfficialPathRequest,
@@ -93,6 +99,7 @@ from fortios_watch import (
     cross_process_lock,
     fetch_official_upgrade_path,
     normalize_state,
+    read_health_state,
     read_json,
     record_search_history,
     slugify,
@@ -105,6 +112,11 @@ from fortios_watch import (
     write_json,
 )
 from tls_lock import managed_pair_lock
+
+# The manual relaunch (home page "État des données" header) runs scripts/scheduled_refresh.py's
+# full pass in this process; subprocess.run is its real runner, replaced below only under the
+# same inert E2E gate as the Fortinet fetch hook.
+_E2E_MOCK_REFRESH_RUNNER: Any = None
 
 if os.environ.get("FORTIOS_E2E_MOCK_NETWORK") == "1":
     # Inert unless this exact env var is set — never touched in production, only by the
@@ -138,6 +150,65 @@ if os.environ.get("FORTIOS_E2E_MOCK_NETWORK") == "1":
         return path, firmwares
 
     fetch_official_upgrade_path = _mock_fetch_official_upgrade_path
+
+    # Same inert gate, for the home page's relaunch button: the isolated E2E fixture drives the
+    # whole on-demand collection flow — lock, states, health refresh — with zero real collectors.
+    # FORTIOS_E2E_REFRESH_HOLD_FILE, when set, keeps the fake collection open until that file
+    # exists, and its content ("1") simulates a pass that reported failing sources, so the browser
+    # suite can assert both the honest "en cours" state and what it becomes at the real end.
+    # FORTIOS_E2E_REFRESH_COMMAND_LOG records every fake run's argv, which is how a test proves
+    # the exact scheduled full command is reused.
+    def _mock_collection_health_effect(source_ids: tuple[str, ...], *, ok: bool) -> None:
+        health_path = DATA_DIR / "fortios-health.json"
+        state = read_health_state(health_path)
+        sources = state.setdefault("sources", {})
+        now = utc_now()
+        for source_id in source_ids:
+            record = dict(sources.get(source_id) or {})
+            record["status"] = "ok" if ok else "error"
+            record["lastAttemptAt"] = now
+            record["durationSeconds"] = 0.0
+            if ok:
+                record["lastSuccessAt"] = now
+                record["consecutiveFailures"] = 0
+                record["lastError"] = None
+            else:
+                record["lastError"] = "Simulation E2E : collecte en échec"
+                record["consecutiveFailures"] = (record.get("consecutiveFailures") or 0) + 1
+            sources[source_id] = record
+        state["updatedAt"] = now
+        write_json(health_path, state)
+
+    def _mock_full_refresh_runner(command, *, cwd=None, check=False):
+        log_value = os.environ.get("FORTIOS_E2E_REFRESH_COMMAND_LOG", "")
+        if log_value:
+            with open(log_value, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps({"command": list(command), "cwd": str(cwd)}) + "\n")
+        hold_value = os.environ.get("FORTIOS_E2E_REFRESH_HOLD_FILE", "")
+        status = 0
+        if hold_value:
+            hold = Path(hold_value)
+            deadline = time.monotonic() + 30
+            while not hold.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if hold.exists():
+                try:
+                    status = int(hold.read_text(encoding="utf-8").strip() or "0")
+                except (OSError, ValueError):
+                    status = 0
+        if any("import_forticlient_compat.py" in str(part) for part in command):
+            # The real importer finalizes its own health record, and the runner treats a record
+            # still marked "running" as a failed phase — the fake one must do the same.
+            _mock_collection_health_effect(
+                (SOURCE_COMPAT_MATRIX,), ok=status == 0
+            )
+        else:
+            _mock_collection_health_effect(
+                (SOURCE_FORTIOS_DOCS, "daily-run"), ok=status == 0
+            )
+        return subprocess.CompletedProcess(command, status)
+
+    _E2E_MOCK_REFRESH_RUNNER = _mock_full_refresh_runner
 
 VALID_SEVERITIES = {"critical", "important", "warning", "info"}
 ADVISORIES_PREFIX = "/api/advisories/"
@@ -487,6 +558,239 @@ NOTIFY_HISTORY_PATH = DATA_DIR / "fortios-notify-history.json"
 CONTAINER_SECURITY_SETTINGS_PATH = DATA_DIR / "container-security-settings.json"
 CONTAINER_SECURITY_REPORT_PATH = DATA_DIR / "trivy-report.json"
 CONTAINER_SECURITY_REPORT_META_PATH = DATA_DIR / "trivy-report.meta.json"
+# On-demand collection relaunch (home page "État des données" header). This file is UI state for
+# the browser — what the last relaunch did — and never a queue: the real work is always
+# scripts/scheduled_refresh.py's full pass, started under the same shared collection lock the
+# scheduler container and the systemd timers use.
+MANUAL_REFRESH_STATE_PATH = DATA_DIR / "fortios-manual-refresh.json"
+MANUAL_REFRESH_STATE_RUNNING = "running"
+MANUAL_REFRESH_STATE_SUCCESS = "success"
+MANUAL_REFRESH_STATE_ERROR = "error"
+MANUAL_REFRESH_STATE_INTERRUPTED = "interrupted"
+MANUAL_REFRESH_STATE_IDLE = "idle"
+# scheduled_refresh.py resolves data/ (collection lock, health, durable attempt marker) and docs/
+# against its deployment root. In production that root IS ROOT — DATA_DIR is ROOT/data — and the
+# isolated test fixture's DATA_DIR override moves its parent instead, so a test run can never
+# reach the real data/ tree.
+MANUAL_REFRESH_ROOT = DATA_DIR.parent.resolve()
+
+
+@dataclass
+class _ManualRefreshRun:
+    """The one on-demand collection this web process is currently running, if any."""
+
+    lock: scheduled_refresh.RefreshLock
+    started_at: str
+    thread: threading.Thread | None = None
+
+
+_manual_refresh_guard = threading.Lock()
+_manual_refresh_run: _ManualRefreshRun | None = None
+
+
+def _manual_refresh_runner() -> scheduled_refresh.Runner:
+    """subprocess.run in production; the inert E2E stub when FORTIOS_E2E_MOCK_NETWORK=1."""
+    return _E2E_MOCK_REFRESH_RUNNER or subprocess.run
+
+
+def _manual_refresh_payload(
+    state: str,
+    *,
+    started_at: str | None,
+    finished_at: str | None,
+    status: int | None,
+    message: str | None,
+) -> dict[str, Any]:
+    return {
+        "state": state,
+        "startedAt": started_at,
+        "finishedAt": finished_at,
+        "status": status,
+        "message": message,
+    }
+
+
+def manual_refresh_status() -> dict[str, Any]:
+    """What the home page shows for the current/last on-demand relaunch.
+
+    "running" is only ever reported while THIS process is really running the collection: a state
+    file left at "running" by a web process that restarted (its collector subprocesses went with
+    it) is reported as interrupted, never as a scan still going on.
+    """
+    with _manual_refresh_guard:
+        run = _manual_refresh_run
+    if run is not None:
+        return _manual_refresh_payload(
+            MANUAL_REFRESH_STATE_RUNNING,
+            started_at=run.started_at,
+            finished_at=None,
+            status=None,
+            message="Collecte en cours…",
+        )
+    try:
+        stored = read_json(MANUAL_REFRESH_STATE_PATH, None)
+    except (OSError, ValueError):
+        stored = None
+    if not isinstance(stored, dict):
+        return _manual_refresh_payload(
+            MANUAL_REFRESH_STATE_IDLE,
+            started_at=None,
+            finished_at=None,
+            status=None,
+            message=None,
+        )
+    if stored.get("state") == MANUAL_REFRESH_STATE_RUNNING:
+        return _manual_refresh_payload(
+            MANUAL_REFRESH_STATE_INTERRUPTED,
+            started_at=stored.get("startedAt"),
+            finished_at=None,
+            status=None,
+            message=(
+                "Relance interrompue par un redémarrage du service ; l’état réel des données "
+                "reste celui de la dernière collecte terminée."
+            ),
+        )
+    stored_state = stored.get("state")
+    return _manual_refresh_payload(
+        stored_state
+        if stored_state in (MANUAL_REFRESH_STATE_SUCCESS, MANUAL_REFRESH_STATE_ERROR)
+        else MANUAL_REFRESH_STATE_IDLE,
+        started_at=stored.get("startedAt"),
+        finished_at=stored.get("finishedAt"),
+        status=stored.get("status") if isinstance(stored.get("status"), int) else None,
+        message=stored.get("message") if isinstance(stored.get("message"), str) else None,
+    )
+
+
+def start_manual_refresh(
+    *, root: Path = MANUAL_REFRESH_ROOT
+) -> tuple[dict[str, Any], HTTPStatus]:
+    """Start one authoritative full collection for the home page's relaunch button.
+
+    Returns 202 with the fresh "running" state once the run has been started, or 409 with the
+    current state when a collection is already in progress — this process's own run, or a
+    scheduled one holding the shared lock in the scheduler container / a systemd timer. The
+    collection runs on a background thread, so the HTTP request never waits for a scan, and a
+    second scan is refused instead of being queued behind the first one.
+    """
+    global _manual_refresh_run
+
+    with _manual_refresh_guard:
+        current = _manual_refresh_run
+    if current is not None:
+        return (
+            _manual_refresh_payload(
+                MANUAL_REFRESH_STATE_RUNNING,
+                started_at=current.started_at,
+                finished_at=None,
+                status=None,
+                message="Une collecte est déjà en cours (relance de cette session).",
+            ),
+            HTTPStatus.CONFLICT,
+        )
+
+    try:
+        lock = scheduled_refresh.acquire_refresh_lock(root)
+    except scheduled_refresh.RefreshLockBusy as error:
+        return (
+            _manual_refresh_payload(
+                MANUAL_REFRESH_STATE_RUNNING,
+                started_at=None,
+                finished_at=None,
+                status=None,
+                message=str(error),
+            ),
+            HTTPStatus.CONFLICT,
+        )
+
+    started_at = utc_now()
+    try:
+        write_json(
+            MANUAL_REFRESH_STATE_PATH,
+            _manual_refresh_payload(
+                MANUAL_REFRESH_STATE_RUNNING,
+                started_at=started_at,
+                finished_at=None,
+                status=None,
+                message="Collecte en cours…",
+            ),
+        )
+    except OSError:
+        lock.release()
+        return (
+            {"error": "Impossible d’enregistrer l’état de la relance de collecte."},
+            HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+
+    run = _ManualRefreshRun(lock=lock, started_at=started_at)
+    run.thread = threading.Thread(
+        target=_run_manual_refresh,
+        args=(run,),
+        name="fortios-manual-refresh",
+        daemon=True,
+    )
+    with _manual_refresh_guard:
+        _manual_refresh_run = run
+    run.thread.start()
+    return (
+        _manual_refresh_payload(
+            MANUAL_REFRESH_STATE_RUNNING,
+            started_at=started_at,
+            finished_at=None,
+            status=None,
+            message="Collecte en cours…",
+        ),
+        HTTPStatus.ACCEPTED,
+    )
+
+
+def _run_manual_refresh(run: _ManualRefreshRun) -> None:
+    """Run the authoritative full pass under the lock taken by start_manual_refresh().
+
+    The success verdict is only ever persisted after the real pass returned, and the health file
+    is what tells the operator which sources (if any) failed — this only records whether the run
+    finished and whether it reported failures at all.
+    """
+    global _manual_refresh_run
+
+    status = 1
+    message = "La collecte a échoué."
+    try:
+        status = run.lock.run_full_refresh(
+            root=MANUAL_REFRESH_ROOT,
+            runner=_manual_refresh_runner(),
+        )
+        message = (
+            "Collecte terminée."
+            if status == 0
+            else "Collecte terminée avec des sources en erreur : voir le détail par source."
+        )
+    except Exception:  # noqa: BLE001 - a failed relaunch must never take the web process down.
+        sys.stderr.write("Relance de collecte : échec inattendu du runner.\n")
+        traceback.print_exc(file=sys.stderr)
+    finally:
+        finished_at = utc_now()
+        try:
+            write_json(
+                MANUAL_REFRESH_STATE_PATH,
+                _manual_refresh_payload(
+                    MANUAL_REFRESH_STATE_SUCCESS
+                    if status == 0
+                    else MANUAL_REFRESH_STATE_ERROR,
+                    started_at=run.started_at,
+                    finished_at=finished_at,
+                    status=status,
+                    message=message,
+                ),
+            )
+        except OSError:
+            sys.stderr.write(
+                "Relance de collecte : état final non enregistré (écriture impossible).\n"
+            )
+        run.lock.release()
+        with _manual_refresh_guard:
+            if _manual_refresh_run is run:
+                _manual_refresh_run = None
 
 
 def referenced_image_filenames(description: str) -> set[str]:
@@ -700,6 +1004,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_container_security_read()
             elif url_path == "/api/cert/smtp":
                 self.handle_smtp_settings_read()
+            elif url_path == "/api/cert/data-refresh":
+                self.handle_data_refresh_read()
             elif url_path.startswith(EMAIL_PREVIEW_RENDER_PREFIX):
                 self.handle_notification_email_preview_render(url_path)
             else:
@@ -1348,6 +1654,36 @@ class FortiosHandler(SimpleHTTPRequestHandler):
             extra_headers={"Cache-Control": "no-store"},
         )
 
+    def handle_data_refresh_read(self) -> None:
+        """Current/last on-demand collection state for the home page."""
+        if self.require_admin_session(csrf=False) is None:
+            return
+        self.write_json_response(
+            manual_refresh_status(),
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
+    def handle_data_refresh_trigger(self) -> None:
+        """Start exactly one real full collection — or refuse, never queue a second one."""
+        if self.require_admin_session(csrf=True) is None:
+            return
+        try:
+            if self.read_json_body(max_bytes=1024):
+                raise ValueError("Corps de requête inattendu.")
+        except (TypeError, ValueError) as error:
+            self.write_json_response(
+                {"error": str(error)[:500]},
+                HTTPStatus.BAD_REQUEST,
+                extra_headers={"Cache-Control": "no-store"},
+            )
+            return
+        payload, status = start_manual_refresh()
+        self.write_json_response(
+            payload,
+            status,
+            extra_headers={"Cache-Control": "no-store"},
+        )
+
     def translate_path(self, path: str) -> str:
         # Checking the raw request string against an allowed prefix before decoding/normalizing
         # is not enough: "/data/%2e%2e/scripts/fortios_server.py" starts with "/data/" as a
@@ -1389,6 +1725,7 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 ".notification-settings.json",
                 "fortios-notify-history.json",
                 ".fortios-notify-history.json",
+                "fortios-manual-refresh.json",
                 "smtp-settings.json",
                 ".smtp-settings.json",
                 "email-transport-settings.json",
@@ -1486,6 +1823,8 @@ class FortiosHandler(SimpleHTTPRequestHandler):
                 self.handle_container_security_write()
             elif self.path == "/api/cert/smtp":
                 self.handle_smtp_settings_write()
+            elif url_path == "/api/cert/data-refresh":
+                self.handle_data_refresh_trigger()
             elif url_path == "/api/cert/smtp/password":
                 self.handle_smtp_password_write()
             elif self.path == "/api/cert/notifications/test":

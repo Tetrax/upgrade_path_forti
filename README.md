@@ -361,6 +361,14 @@ Une CVE n'est retenue que si elle touche au moins un des 5 produits suivis par l
 
 Affiché dans `/` sous le bandeau de briefing : section repliable « État des données » avec un point vert/orange/rouge par source (rouge = échecs répétés ou données de plus de 48h, orange = source vieillissante/ignorée/échec isolé, vert = collecte récente réussie), un bandeau d'avertissement si une source est en rouge, et le détail complet par source dans un tableau replié par défaut. Le point global du bandeau (`#healthSummaryDot`) reflète TOUTES les sources, pas seulement `daily-run` : comme `compat-matrix` tourne dans une étape séparée après que `fortios_watch.py` a déjà figé son propre statut `daily-run`, un échec de `compat-matrix` seul doit quand même faire passer le point global au rouge — `daily-run` structurellement ne peut pas savoir ce qu'une étape ultérieure va faire.
 
+### Relance manuelle de la collecte
+
+Le bouton **Relancer**, dans l'en-tête de cette même section, déclenche une collecte complète réelle à la demande (une seule relance globale, pas un bouton par source). Il appelle la route administrateur `POST /api/cert/data-refresh`, soumise aux protections existantes des mutations `/api/cert/` : session administrateur, contrôle d'origine et jeton CSRF. Sans session, l'interface propose la connexion à `/admin/` et ne démarre rien ; l'accueil reste public.
+
+La passe exécutée est exactement la passe complète planifiée (`scripts/scheduled_refresh.py` : importeur de compatibilité puis `fortios_watch.py --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog --cve-catalog`), sous le **même verrou de collecte** `data/fortios-scheduled-refresh.lock` que le scheduler Docker et les timers systemd : une relance lancée pendant une collecte planifiée — ou une seconde relance — reçoit `409` et n'est jamais mise en file d'attente. La requête HTTP ne bloque pas pendant le scan (`202` puis suivi d'état via `GET /api/cert/data-refresh`) ; la réussite n'est annoncée qu'une fois la passe réellement terminée, et c'est l'état des données rechargé qui indique quelles sources restent en erreur.
+
+`data/fortios-manual-refresh.json` (gitignored) ne conserve que l'état de la dernière relance (`running`/`success`/`error`), jamais les données collectées. Il n'est pas servi en statique (comme les autres fichiers privés de `data/`), les redémarrages ne le transforment pas en file d'attente, et une relance interrompue par un redémarrage du service est rapportée comme interrompue plutôt que comme une collecte en cours.
+
 ## Notifications email
 
 Le moteur existant de `scripts/fortios_notify.py` est conservé : déduplication, checkpoint, outbox persistante, retry et isolation des erreurs de transport. Deux modes sont disponibles dans **Administration → Notifications** : **SMTP** et **Microsoft 365 / Azure**, via Microsoft Graph et OAuth 2.0 non interactif. Aucun daemon ni scheduler supplémentaire n'est nécessaire ; les notifications sont déclenchées par le diff de chaque collecte PSIRT existante.
@@ -585,7 +593,7 @@ uv venv .venv-test && uv pip install --python .venv-test/bin/python -r requireme
 .venv-test/bin/python -m pytest tests/e2e/
 ```
 
-Chaque test lance sa propre instance isolée de `scripts/fortios_server.py` (port libre, répertoire `data/` temporaire — jamais `data/fortios-data.generated.json` ni `data/advisory-images/` réels), avec les appels Fortinet remplacés par une réponse simulée déterministe (`FORTIOS_TEST_DATA_DIR` / `FORTIOS_E2E_MOCK_NETWORK` / `FORTIOS_E2E_MOCK_RESPONSE_FILE`, inertes tant que ces variables ne sont pas positionnées — aucun effet en production). Capture d'écran, vidéo et trace Playwright conservées uniquement en cas d'échec. Le workflow GitHub Actions (`.github/workflows/tests.yml`) lance les deux suites à chaque push/PR, sans secret SMTP réel ni appel PSIRT/Fortinet.
+Chaque test lance sa propre instance isolée de `scripts/fortios_server.py` (port libre, répertoire `data/` temporaire — jamais `data/fortios-data.generated.json` ni `data/advisory-images/` réels), avec les appels Fortinet remplacés par une réponse simulée déterministe (`FORTIOS_TEST_DATA_DIR` / `FORTIOS_E2E_MOCK_NETWORK` / `FORTIOS_E2E_MOCK_RESPONSE_FILE`, inertes tant que ces variables ne sont pas positionnées — aucun effet en production). La relance manuelle suit le même principe : `FORTIOS_E2E_REFRESH_HOLD_FILE` (le collecteur simulé reste ouvert jusqu'à l'existence de ce fichier, dont le contenu est son code de sortie) et `FORTIOS_E2E_REFRESH_COMMAND_LOG` (journal des commandes simulées), également inertes en production. `tests/test_manual_refresh.py` vérifie en plus, hors navigateur, que la passe relancée est mot pour mot la passe planifiée et que le verrou de collecte est bien partagé avec un processus planifié, à partir d'une copie jetable de l'arborescence. Capture d'écran, vidéo et trace Playwright conservées uniquement en cas d'échec. Le workflow GitHub Actions (`.github/workflows/tests.yml`) lance les deux suites à chaque push/PR, sans secret SMTP réel ni appel PSIRT/Fortinet.
 
 ### Contrôles CI : bloquants et informatif
 
@@ -637,6 +645,12 @@ conteneurs :
 - `web` sert l'interface et l'API sur un listener unique, HTTP ou HTTPS ;
 - `scheduler` lance le rafraîchissement complet à 07:00, le rattrapage à 07:45 et la
   passe CVE à 15:30 Europe/Paris.
+
+`web` exécute aussi, à la demande, la **relance manuelle** de la section « État des données »
+(voir plus haut) : la passe complète y tourne dans le processus web, avec le même runner et le
+même verrou que le scheduler. Cela n'ajoute ni conteneur, ni service, ni montage — les répertoires
+`data/` et `docs/` sont déjà montés en écriture sur `web` comme sur `scheduler` — et les deux
+conteneurs restent mutuellement exclusifs pendant une collecte grâce au verrou partagé.
 
 Les répertoires `data/`, `docs/` et `certificates/` sont des montages persistants. Ils
 doivent être conservés ensemble lors d'une migration : ils contiennent le
