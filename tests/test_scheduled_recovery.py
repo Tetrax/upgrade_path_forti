@@ -407,6 +407,20 @@ class FullRefreshExecutionTests(unittest.TestCase):
 
 
 class CompatibilityNotificationTests(unittest.TestCase):
+    def _enabled_config(self, root, appearance=None):
+        from dataclasses import replace
+
+        from tests.test_security_notifications import settings_payload
+
+        payload = settings_payload(enabled=False)
+        payload.update(systemNotificationsEnabled=True, systemRecipients=["operations@example.invalid"])
+        path = root / refresh.DEFAULT_NOTIFICATION_SETTINGS_PATH
+        settings = refresh.fortios_notify.save_notification_settings(path, payload)
+        return replace(
+            refresh.fortios_notify.load_email_config({}, settings=settings, settings_path=path),
+            app_url="https://example.test/app/", email_appearance=appearance,
+        )
+
     def test_compatibility_only_recovery_alerts_at_threshold_and_advances_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -426,11 +440,7 @@ class CompatibilityNotificationTests(unittest.TestCase):
                     "health": {refresh.SOURCE_COMPAT_MATRIX: before},
                 },
             }), encoding="utf-8")
-            config = MagicMock(
-                enabled=True,
-                app_url="https://example.test/app/",
-                email_appearance=None,
-            )
+            config = self._enabled_config(root)
 
             with (
                 patch.object(refresh.fortios_notify, "load_email_config", return_value=config),
@@ -487,11 +497,7 @@ class CompatibilityNotificationTests(unittest.TestCase):
                 introduction="Introduction planifiée.",
                 signature="Signature planifiée.",
             )
-            config = MagicMock(
-                enabled=True,
-                app_url="https://example.test/app/",
-                email_appearance=appearance,
-            )
+            config = self._enabled_config(root, appearance)
 
             with (
                 patch.object(
@@ -510,7 +516,7 @@ class CompatibilityNotificationTests(unittest.TestCase):
             for call in send.call_args_list:
                 for body in (call.args[2], call.args[3]):
                     self.assertIn("FortiUpgrade SOC", body)
-                    self.assertIn("Introduction planifiée.", body)
+                    self.assertNotIn("Introduction planifiée.", body)  # CVE-only introduction.
                     self.assertIn("Signature planifiée.", body)
                     self.assertIn("Ancienne alerte à reprendre", body)
                     self.assertIn(

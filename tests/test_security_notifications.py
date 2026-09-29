@@ -76,13 +76,21 @@ def settings_payload(
         "recipients": ["security@example.com"],
         "releaseRecipientsShared": release_recipients_shared,
         "releaseRecipients": list(release_recipients or []),
+        "systemNotificationsEnabled": False,
+        "systemRecipients": [],
     }
 
 
 def legacy_settings_payload(*, enabled: bool = True) -> dict[str, Any]:
     """The four-key shape persisted before any release-notification key existed."""
     payload = settings_payload(enabled=enabled)
-    for key in ("releaseNotificationsEnabled", "releaseRecipientsShared", "releaseRecipients"):
+    for key in (
+        "releaseNotificationsEnabled",
+        "releaseRecipientsShared",
+        "releaseRecipients",
+        "systemNotificationsEnabled",
+        "systemRecipients",
+    ):
         payload.pop(key)
     return payload
 

@@ -1322,3 +1322,168 @@ def compose_release_email(
         signature=signature,
     )
     return subject, text_body, html_body
+
+
+# --- System alerts (end of support, collection health, recoveries) ---------------------------
+# A category of its own since the system alerts were separated from the CVE recipients: the same
+# SNS identity and shell as the other FortiUpgrade emails, none of the CVE business components
+# (no severity badge, no CVE counters) and none of the release components (no version card, no
+# release-notes link). The historical plain-text "<pre>" summary is deliberately not reused.
+MAX_SYSTEM_EVENTS_PER_EMAIL = 20
+_SYSTEM_CATEGORY_LABELS = {
+    "OPERATIONS": "OPÉRATION",
+    "DAILY": "SYSTÈME",
+    "CRITICAL": "SYSTÈME",
+}
+
+
+def system_hero_title(total: int) -> str:
+    """Automatic system headline, plural-aware, written by the renderer itself."""
+    if total <= 1:
+        return "FortiUpgrade a détecté un événement système nécessitant votre attention."
+    return (
+        f"FortiUpgrade a détecté {total} événements système "
+        "nécessitant votre attention."
+    )
+
+
+def _system_card_html(event: Any) -> str:
+    label = _SYSTEM_CATEGORY_LABELS.get(str(event.category), "SYSTÈME")
+    return (
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+        f"style='border-collapse:collapse;border:1px solid {SNS_GRAY_BORDER};margin:0 0 16px'>"
+        "<tr>"
+        f"<td style='padding:5px 12px;background:{SNS_ROSE_PALE};color:{SNS_BLACK};"
+        "font-size:12px;font-weight:700;letter-spacing:1px;border-radius:3px'>"
+        f"{label}</td>"
+        "</tr>"
+        "<tr><td style='padding:14px 14px;font-size:15px;line-height:1.5;"
+        f"color:{SNS_BLACK}'>{html.escape(str(event.summary))}</td></tr>"
+        "</table>"
+    )
+
+
+def compose_system_subject(system_events: list[Any]) -> str:
+    if len(system_events) == 1:
+        return f"[FortiUpgrade] Alerte système — {system_events[0].summary}"
+    return f"[FortiUpgrade] {len(system_events)} alertes système"
+
+
+def compose_system_text_body(
+    system_events: list[Any],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[Any] | None = None,
+    display_name: str,
+    introduction: str = "",
+    signature: str = "",
+) -> str:
+    lines: list[str] = [display_name]
+    if introduction:
+        lines.extend(["", introduction])
+    lines.extend(["", system_hero_title(len(system_events)), ""])
+    lines.append(
+        "Événement système"
+        if len(system_events) == 1
+        else f"{len(system_events)} événements système"
+    )
+    shown = system_events[:MAX_SYSTEM_EVENTS_PER_EMAIL]
+    for event in shown:
+        lines.append(f"- {event.summary}")
+    if len(system_events) > len(shown):
+        lines.append(f"... et {len(system_events) - len(shown)} de plus (liste tronquée).")
+    lines.append("")
+    lines.extend(_other_events_text(other_events))
+    lines.extend(
+        [
+            "Cet email a été généré automatiquement par FortiUpgrade.",
+            "Merci de ne pas répondre à cet email.",
+            "",
+            f"FortiUpgrade : {app_url}",
+            f"Collecte : {run_timestamp}",
+        ]
+    )
+    if signature:
+        lines.extend(["", signature])
+    return "\n".join(lines)
+
+
+def compose_system_html_body(
+    system_events: list[Any],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[Any] | None = None,
+    display_name: str,
+    introduction: str = "",
+    signature: str = "",
+) -> str:
+    run_date = run_timestamp[:10]
+    hero = _hero_html(
+        display_name=display_name,
+        hero_title=system_hero_title(len(system_events)),
+        run_date=run_date,
+    )
+    section_label = (
+        "ÉVÉNEMENT SYSTÈME" if len(system_events) == 1 else "ÉVÉNEMENTS SYSTÈME"
+    )
+    shown = system_events[:MAX_SYSTEM_EVENTS_PER_EMAIL]
+    cards = "".join(_system_card_html(event) for event in shown)
+    if len(system_events) > len(shown):
+        cards += (
+            "<div style='margin:0 0 16px;font-size:13px;"
+            f"color:{SNS_GRAY_TEXT}'>… et {len(system_events) - len(shown)} de plus "
+            "(liste tronquée).</div>"
+        )
+    return (
+        _document_head()
+        + f"<tr><td>{hero}</td></tr>"
+        + _introduction_html(introduction)
+        + "<tr><td style='padding:24px 20px 6px'>"
+        + f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
+        "margin:0 0 14px'>"
+        + section_label
+        + "</div>"
+        + cards
+        + "</td></tr>"
+        + _other_events_html(other_events)
+        + _cta_html(app_url)
+        + _footer_html(signature)
+        + _document_tail()
+    )
+
+
+def compose_system_email(
+    system_events: list[Any],
+    *,
+    app_url: str,
+    run_timestamp: str,
+    other_events: list[Any] | None = None,
+    display_name: str,
+    introduction: str = "",
+    signature: str = "",
+) -> tuple[str, str, str]:
+    """Render system alerts into (subject, text_body, html_body) with the SNS identity."""
+    if not system_events:
+        raise ValueError("Aucun événement système à rendre.")
+    subject = compose_system_subject(system_events)
+    text_body = compose_system_text_body(
+        system_events,
+        app_url=app_url,
+        run_timestamp=run_timestamp,
+        other_events=other_events,
+        display_name=display_name,
+        introduction=introduction,
+        signature=signature,
+    )
+    html_body = compose_system_html_body(
+        system_events,
+        app_url=app_url,
+        run_timestamp=run_timestamp,
+        other_events=other_events,
+        display_name=display_name,
+        introduction=introduction,
+        signature=signature,
+    )
+    return subject, text_body, html_body

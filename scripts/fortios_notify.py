@@ -116,9 +116,10 @@ _SETTINGS_PRODUCT_KEYS = (
     "fortianalyzer",
     "forticlient-ems",
 )
-# Every key below must be present. releaseNotificationsEnabled is deliberately NOT listed here:
-# a settings file written before release notifications existed carries no such key, and must keep
-# loading unchanged (see validate_notification_settings). Any other key stays rejected.
+# Every key below must be present. releaseNotificationsEnabled, systemNotificationsEnabled and
+# their dedicated recipient lists are deliberately NOT listed here: a settings file written
+# before them carries no such key and must keep loading unchanged (see
+# validate_notification_settings). Any other key stays rejected.
 _NOTIFICATION_SETTINGS_REQUIRED_KEYS = (
     "enabled",
     "minimumSeverity",
@@ -129,6 +130,8 @@ _NOTIFICATION_SETTINGS_OPTIONAL_KEYS = (
     "releaseNotificationsEnabled",
     "releaseRecipientsShared",
     "releaseRecipients",
+    "systemNotificationsEnabled",
+    "systemRecipients",
 )
 _NOTIFICATION_SETTINGS_ALLOWED_KEYS = frozenset(
     (*_NOTIFICATION_SETTINGS_REQUIRED_KEYS, *_NOTIFICATION_SETTINGS_OPTIONAL_KEYS)
@@ -181,6 +184,7 @@ def _default_notification_settings_payload() -> dict[str, Any]:
     return {
         "enabled": False,
         "releaseNotificationsEnabled": False,
+        "systemNotificationsEnabled": False,
         "minimumSeverity": DEFAULT_MINIMUM_SEVERITY,
         "products": {
             **{key: True for key in _SETTINGS_PRODUCT_KEYS},
@@ -189,6 +193,7 @@ def _default_notification_settings_payload() -> dict[str, Any]:
         "recipients": [],
         "releaseRecipientsShared": True,
         "releaseRecipients": [],
+        "systemRecipients": [],
     }
 
 
@@ -198,14 +203,21 @@ class NotificationSettings:
     minimum_severity: str
     products: dict[str, Any]
     recipients: tuple[str, ...]
-    # Release ("nouvelle version") notifications are gated independently of `enabled`, which
-    # keeps its historical meaning for CVEs and for the system categories (EOL, collection
-    # health, recovery). See fortios_watch's notification block for the derivation gates.
+    # Release ("nouvelle version") notifications are gated independently of `enabled`. `enabled`
+    # is the CVE switch alone; every other category has its own switch -- releases here, system
+    # alerts (EOL, collection health, recoveries) with systemNotificationsEnabled below. See
+    # fortios_watch's notification block for the derivation gates.
     release_notifications_enabled: bool = False
     # Release recipients are shared with the CVE list by default; a dedicated list is only used
     # when sharing is explicitly disabled (and then it must not be empty).
     release_recipients_shared: bool = True
     release_recipients: tuple[str, ...] = ()
+    # System alerts have their own switch and their own recipient list, with NO sharing and NO
+    # fallback to the CVE list in either direction. A settings file written before these keys
+    # resolves to `false` / `[]`: the category stays suspended, and enabling it with an empty
+    # list is refused (see validate_notification_settings).
+    system_notifications_enabled: bool = False
+    system_recipients: tuple[str, ...] = ()
 
     def release_recipients_effective(self) -> tuple[str, ...]:
         """Recipients the release category actually delivers to."""
@@ -225,6 +237,8 @@ class NotificationSettings:
             "recipients": list(self.recipients),
             "releaseRecipientsShared": self.release_recipients_shared,
             "releaseRecipients": list(self.release_recipients),
+            "systemNotificationsEnabled": self.system_notifications_enabled,
+            "systemRecipients": list(self.system_recipients),
         }
 
     def selected_product_keys(self) -> dict[str, bool]:
@@ -331,6 +345,24 @@ def validate_notification_settings(payload: Any) -> NotificationSettings:
             "Liste de destinataires de nouvelles versions obligatoire lorsque le partage avec "
             "les alertes CVE est désactivé."
         )
+    # Both system-alert keys are optional too: a settings file written before them inherits
+    # `false` / `[]` (the category stays suspended and nothing is rewritten). There is no
+    # sharing with the CVE list in either direction: the dedicated list is the only recipient
+    # list this category ever uses.
+    system_notifications_enabled = payload.get("systemNotificationsEnabled", False)
+    if not isinstance(system_notifications_enabled, bool):
+        raise TypeError("Le champ systemNotificationsEnabled doit être un booléen.")
+    system_recipients = _normalize_recipients(
+        payload.get("systemRecipients", []), label="destinataire système"
+    )
+    if system_notifications_enabled and not system_recipients:
+        # Refused explicitly: falling back to the CVE list would send system alerts to an
+        # audience the operator never chose for them, and a switch sending nowhere would hide
+        # the misconfiguration.
+        raise ValueError(
+            "Liste de destinataires système obligatoire lorsque les alertes système sont "
+            "activées."
+        )
 
     return NotificationSettings(
         enabled=payload["enabled"],
@@ -343,6 +375,8 @@ def validate_notification_settings(payload: Any) -> NotificationSettings:
         release_notifications_enabled=release_notifications_enabled,
         release_recipients_shared=release_recipients_shared,
         release_recipients=release_recipients,
+        system_notifications_enabled=system_notifications_enabled,
+        system_recipients=system_recipients,
     )
 
 
@@ -350,8 +384,8 @@ def _legacy_settings_from_env(env: dict[str, str]) -> NotificationSettings:
     payload = _default_notification_settings_payload()
     # An environment-only installation has no settings file either: it inherits release
     # notifications from FORTIOS_EMAIL_ENABLED exactly like a legacy file inherits them from
-    # `enabled`, and keeps the shared CVE recipient list, so migrating to this version keeps
-    # sending what it already sent.
+    # `enabled`, and keeps the shared CVE recipient list for releases. System alerts deliberately
+    # remain OFF with an empty dedicated list until an operator configures them.
     payload.pop("releaseNotificationsEnabled", None)
     payload.pop("releaseRecipientsShared", None)
     payload.pop("releaseRecipients", None)
@@ -476,10 +510,10 @@ class EmailConfig:
     graph_mailbox_identity: str = ""
     smtp_password_storage_state: str = SMTP_PASSWORD_STORAGE_UNAVAILABLE
     smtp_password_write_available: bool = False
-    # Independent gate for release ("nouvelle version") notifications. `enabled` keeps its
-    # historical meaning (CVE + system categories); a release-only notification must still be
-    # deliverable when `enabled` is false, which is why the send gate reads both flags.
+    # Independent category gates: a release-only or system-only batch remains deliverable
+    # when the CVE switch (`enabled`) is off. Audiences are resolved before transport.
     release_notifications_enabled: bool = False
+    system_notifications_enabled: bool = False
 
     def is_complete(self) -> bool:
         if self.transport == EMAIL_TRANSPORT_MICROSOFT365:
@@ -1749,6 +1783,9 @@ def load_smtp_snapshot(
         config = EmailConfig(
             enabled=settings.enabled,
             release_notifications_enabled=settings.release_notifications_enabled,
+            system_notifications_enabled=bool(
+                settings.system_notifications_enabled and settings.system_recipients
+            ),
             smtp_host=smtp.host,
             smtp_port=smtp.port,
             smtp_username=smtp.username,
@@ -2210,15 +2247,28 @@ def _claim_outstanding(
     now: str,
     now_dt: dt.datetime,
     transport: str | None = None,
+    settings: NotificationSettings | None = None,
 ) -> list[NotificationEvent]:
     """Claims every outbox entry not currently held by another still-live attempt, mutating
     `outbox` in place. A claim is "live" for CLAIM_STALE_SECONDS: long enough to cover any real
     SMTP timeout many times over, so only a genuinely crashed run's claim is ever stolen. Shared
     by enqueue_and_claim() and commit_events_with_checkpoint() so both agree on exactly the same
-    claim rule.
+    claim rule. With settings supplied, disabled categories are skipped without touching their
+    entries; callers using the low-level primitive without settings retain claim-only behaviour.
     """
     claimed: list[NotificationEvent] = []
     for entry in outbox:
+        event = NotificationEvent(
+            category=entry["category"],
+            dedup_key=entry["dedupKey"],
+            summary=entry["summary"],
+            severity=entry.get("severity"),
+            details=dict(entry.get("details") or {}),
+        )
+        # The collector supplies its validated settings snapshot. Suspended entries keep
+        # their claim/retry metadata untouched, including any other process's live claim.
+        if settings is not None and not _event_enabled(event, settings):
+            continue
         next_attempt_at = _parse_iso(entry.get("nextAttemptAt"))
         blocked_by_cooldown = next_attempt_at is not None and next_attempt_at > now_dt
         if blocked_by_cooldown and not (
@@ -2234,15 +2284,7 @@ def _claim_outstanding(
             continue  # actively held by another still-live attempt
         entry["claimedBy"] = claimant
         entry["claimedAt"] = now
-        claimed.append(
-            NotificationEvent(
-                category=entry["category"],
-                dedup_key=entry["dedupKey"],
-                summary=entry["summary"],
-                severity=entry.get("severity"),
-                details=dict(entry.get("details") or {}),
-            )
-        )
+        claimed.append(event)
     return claimed
 
 
@@ -2253,6 +2295,7 @@ def enqueue_and_claim(
     claimant: str,
     now: str | None = None,
     transport: str | None = None,
+    settings: NotificationSettings | None = None,
 ) -> list[NotificationEvent]:
     """Atomically (a) add any of `new_events` not already sent or already queued to the
     persistent outbox -- BEFORE any attempt to send, so a crash or an SMTP failure right after
@@ -2282,6 +2325,7 @@ def enqueue_and_claim(
             now=now,
             now_dt=now_dt,
             transport=transport,
+            settings=settings,
         )
         write_json(path, state)
     return claimed
@@ -2348,6 +2392,7 @@ def commit_events_with_checkpoint(
     claimant: str,
     now: str | None = None,
     transport: str | None = None,
+    settings: NotificationSettings | None = None,
 ) -> list[NotificationEvent]:
     """Atomically (a) advance the persisted notify checkpoint to `checkpoint`, (b) enqueue
     `new_events` into the outbox, and (c) claim every outstanding entry for `claimant` -- all
@@ -2371,6 +2416,7 @@ def commit_events_with_checkpoint(
             now=now,
             now_dt=now_dt,
             transport=transport,
+            settings=settings,
         )
         write_json(path, state)
     return claimed
@@ -2413,9 +2459,11 @@ def release_claim(
     now: str | None = None,
     outcome: SmtpResult | None = None,
     transport: str | None = None,
+    events: list[NotificationEvent] | None = None,
 ) -> None:
     """Release a claim and persist a bounded retry decision.
 
+    With `events`, release only that batch's keys; other live claims remain exclusive.
     A failed Microsoft 365 configuration or permission request gets a durable cooldown instead of
     being retried on every scheduler pass. Provider throttling/server failures honour Retry-After
     when present; connection failures use a short bounded delay. The legacy SMTP path keeps its
@@ -2423,11 +2471,14 @@ def release_claim(
     """
     now = now or utc_now()
     now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+    event_keys = {event.dedup_key for event in events} if events is not None else None
     with cross_process_lock(path):
         state = load_notify_state(path)
         changed = False
         for entry in state["outbox"]:
             if entry.get("claimedBy") != claimant:
+                continue
+            if event_keys is not None and entry["dedupKey"] not in event_keys:
                 continue
             entry["claimedBy"] = None
             entry["claimedAt"] = None
@@ -3334,6 +3385,34 @@ def _is_container_security_event(event: NotificationEvent) -> bool:
     )
 
 
+def _is_system_event(event: NotificationEvent) -> bool:
+    """True for a system alert -- the complement of the CVE, release and container categories.
+
+    End-of-support crossings and collection-health failures/recoveries are the events the system
+    category was created for; anything else that is neither a CVE, a release nor an image finding
+    is a technical event, so it is classified as system by construction rather than by an
+    exhaustive list -- a future event class can never silently fall into the CVE batch. The
+    ``new-cve|`` / ``cve-severity|`` prefixes mirror _is_release_event(): an outbox entry queued
+    by a build that predates ``details.kind`` still classifies correctly.
+    """
+    if _is_release_event(event) or _is_container_security_event(event):
+        return False
+    if event.details.get("kind") == "cve":
+        return False
+    return not event.dedup_key.startswith(("new-cve|", "cve-severity|"))
+
+
+def _event_enabled(event: NotificationEvent, settings: NotificationSettings) -> bool:
+    """Delivery gate shared by claims and partitions; no recipient fallback for system alerts."""
+    if _is_container_security_event(event):
+        return True  # This category retains its separate configuration and ingestion rules.
+    if _is_release_event(event):
+        return settings.release_notifications_enabled
+    if _is_system_event(event):
+        return bool(settings.system_notifications_enabled and settings.system_recipients)
+    return settings.enabled
+
+
 def load_container_security_metadata(path: Path) -> tuple[dict[str, Any], str]:
     """Read the sidecar written by the ingestion sync (``trivy-report.meta.json``).
 
@@ -3468,46 +3547,35 @@ def notification_batches(
 ) -> list[NotificationBatch]:
     """Partition claimed events into the emails they must actually produce.
 
-    Three categories, three audiences:
+    Four categories, three audience rules:
     - container image security (Trivy) -> the dedicated container list;
+    - system alerts (EOL, collection health, recoveries, technical events) -> the dedicated
+      system list, NEVER merged with the CVE batch even when the addresses are identical -- the
+      whole point of the separation is that a system alert is not a CVE. While the system switch
+      is off or its list is empty no batch is built at all: those entries stay in the outbox,
+      suspended, and are never delivered to the CVE list;
     - releases ("nouvelle version") -> their effective list;
-    - everything else (CVEs and the system categories: EOL, collection health, recoveries) -> the
-      configured ``recipients``.
+    - everything else (CVEs) -> the configured ``recipients``.
 
-    The container batch is NEVER merged with another one, even when the addresses happen to be
-    identical: the whole point of that category is that an image finding is not a Fortinet CVE, and
-    an email mixing both would be exactly the confusion this separation exists to prevent. The two
-    historical groups keep their merging rule, so the default (shared) configuration still produces
-    one grouped email for CVEs + releases.
+    The container batch is NEVER merged with another one either. The two historical groups
+    (CVEs + releases) keep their merging rule, so the default (shared) configuration still
+    produces one grouped email for CVEs + releases; with no system event and no container
+    security the batches, their event order and their emails are exactly the historical ones.
 
-    Every event belongs to exactly one batch: the caller finalizes or releases each batch on its
-    own, which is what lets one category fail without blocking or duplicating the others while
-    leaving the dedup key, outbox, claim and retry guarantees untouched.
+    Every event belongs to exactly one batch -- or to none at all while its category is
+    suspended. The caller finalizes or releases each batch on its own, which is what lets one
+    category fail without blocking or duplicating the others while leaving the dedup key, outbox,
+    claim and retry guarantees untouched.
     """
+    events = [event for event in events if _event_enabled(event, settings)]
     container = [event for event in events if _is_container_security_event(event)]
     rest = [event for event in events if not _is_container_security_event(event)]
-
-    # Historical path kept verbatim when the container category is absent (it always is while the
-    # switch is off): same batches, same event order, byte-identical emails.
-    if not container:
-        release = [event for event in rest if _is_release_event(event)]
-        other = [event for event in rest if not _is_release_event(event)]
-        if not release:
-            return [NotificationBatch(settings.recipients, tuple(other))] if other else []
-        release_recipients = settings.release_recipients_effective()
-        if not other:
-            return [NotificationBatch(release_recipients, tuple(release))]
-        if release_recipients == settings.recipients:
-            return [NotificationBatch(settings.recipients, tuple(rest))]
-        # CVEs and system events first, then releases: a deterministic order, and the security
-        # email is delivered before the informational one.
-        return [
-            NotificationBatch(settings.recipients, tuple(other)),
-            NotificationBatch(release_recipients, tuple(release)),
-        ]
+    system = [event for event in rest if _is_system_event(event)]
+    rest = [event for event in rest if not _is_system_event(event)]
 
     release = [event for event in rest if _is_release_event(event)]
     other = [event for event in rest if not _is_release_event(event)]
+
     batches: list[NotificationBatch] = []
     if not release:
         if other:
@@ -3519,20 +3587,65 @@ def notification_batches(
     elif settings.release_recipients_effective() == settings.recipients:
         batches.append(NotificationBatch(settings.recipients, tuple(rest)))
     else:
+        # CVEs first, then releases: a deterministic order, and the security email is delivered
+        # before the informational one.
         batches.append(NotificationBatch(settings.recipients, tuple(other)))
         batches.append(
             NotificationBatch(settings.release_recipients_effective(), tuple(release))
         )
 
+    if system and settings.system_notifications_enabled and settings.system_recipients:
+        # Its own batch even when the addresses are identical to the CVE list; no batch at all
+        # otherwise, so a suspended system event waits in the outbox instead of being delivered
+        # to an audience it does not belong to. No silent fallback, and no email without
+        # recipient: the dedicated list is the only one this category ever uses.
+        batches.append(NotificationBatch(settings.system_recipients, tuple(system)))
+
     recipients = container_security.recipients if container_security is not None else ()
-    # No silent fallback, and no email without recipient: a container batch is only ever built with
-    # the dedicated list, and events are not even derived while the switch is off.
-    if not recipients:
+    if container and not recipients:
+        # No silent fallback, and no email without recipient: a container batch is only ever
+        # built with the dedicated list, and events are not even derived while the switch is off.
         raise ValueError(
             "Destinataires de sécurité conteneur absents : aucun email ne peut être construit."
         )
-    batches.append(NotificationBatch(recipients, tuple(container)))
+    if container:
+        batches.append(NotificationBatch(recipients, tuple(container)))
     return batches
+
+
+def deliver_notification_batches(
+    path: Path,
+    pending: list[NotificationEvent],
+    *,
+    claimant: str,
+    settings: NotificationSettings,
+    config: EmailConfig,
+    run_timestamp: str,
+    container_security: ContainerSecuritySettings | None = None,
+) -> None:
+    """Deliver claimed events through the same partitions for collection and recovery.
+
+    A failure releases only its own batch, never another batch's live claim. Persistence
+    failures deliberately propagate: never relabel an accepted send as a transport failure.
+    """
+    for batch in notification_batches(pending, settings, container_security=container_security):
+        events = list(batch.events)
+        try:
+            composed = compose_email(
+                events, app_url=config.app_url, run_timestamp=run_timestamp,
+                appearance=config.email_appearance,
+            )
+            if not composed:
+                raise ValueError("Lot de notifications sans contenu.")
+            result = deliver_email_result(replace(config, smtp_to=batch.recipients), *composed)
+        except Exception:  # noqa: BLE001 - isolate composition/delivery per batch.
+            sys.stderr.write("Avertissement : échec de composition/envoi d'un lot email.\n")
+            release_claim(path, claimant, events=events)
+            continue
+        if result.sent:
+            finalize_sent_events(path, events)
+        else:
+            release_claim(path, claimant, outcome=result, transport=config.transport, events=events)
 
 
 def compose_email(
@@ -3549,12 +3662,14 @@ def compose_email(
     - container image security only (Trivy) -> scripts/fortios_email_render.py's dedicated SNS
       email. It never merges with a Fortinet one, and it writes its own automatic hero sentence
       because the historical `introduction` is scoped to CVE alerts;
-    - at least one security (CVE) event -> the same module's SNS CVE email, the single
-      authoritative renderer for that identity; releases and the system categories (EOL,
-      collection health) are folded in as an "Autres événements" section;
+    - at least one security (CVE) event -> the same module's SNS CVE email; shared-list
+      releases are folded in as an "Autres événements" section. Production partitions
+      exclude system and Trivy events from CVE/release batches;
     - no CVE but at least one release ("nouvelle version") event -> the same module's release
       email, which reuses the SNS shell without the CVE business components;
-    - neither -> the historical plain-text summary, unchanged (EOL/health only).
+    - system-only -> the dedicated SNS system email (EOL/health/technical events), with
+      an automatic introduction and no CVE/release business components;
+    - legacy unstructured CVEs -> the historical plain-text summary.
     """
     if not events:
         return None
@@ -3614,6 +3729,27 @@ def compose_email(
             display_name=display_name,
             introduction=introduction,
             signature=signature,
+        )
+
+    system = [event for event in events if _is_system_event(event)]
+    if system:
+        # System alerts (EOL, collection health, recoveries) get their own email: the SNS
+        # identity without any CVE or release business component, and never the historical
+        # plain-text <pre> summary. They travel in a batch of their own (see
+        # notification_batches), so `non_system` is normally empty; it stays here for the same
+        # structural reason as the other composers.
+        non_system = [event for event in events if not _is_system_event(event)]
+        display_name = (
+            appearance.display_name if appearance is not None else "FortiUpgrade"
+        )
+        return fortios_email_render.compose_system_email(
+            system,
+            app_url=app_url,
+            run_timestamp=run_timestamp,
+            other_events=non_system or None,
+            display_name=display_name,
+            introduction="",
+            signature=appearance.signature if appearance is not None else "",
         )
 
     critical = [event for event in events if event.category == CATEGORY_CRITICAL]
@@ -4315,7 +4451,9 @@ def send_email_result(
     (e.g. a fat-fingered FORTIOS_SMTP_FROM, or a "To" header injection attempt) -- building the
     message before the try block used to let exactly that kind of ValueError escape uncaught.
     """
-    if not (config.enabled or config.release_notifications_enabled) and not force:
+    if not (
+        config.enabled or config.release_notifications_enabled or config.system_notifications_enabled
+    ) and not force:
         result = SmtpResult(False, "Notifications désactivées.", transport=config.transport)
         if config.transport == EMAIL_TRANSPORT_MICROSOFT365:
             _log_graph_result("config", result)

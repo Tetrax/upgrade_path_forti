@@ -46,6 +46,8 @@ const recipientList = byId("recipient-list");
 const releaseRecipientList = byId("release-recipient-list");
 const releaseRecipientsShared = byId("release-recipients-shared");
 const releaseRecipientsBlock = byId("release-recipients-block");
+const systemNotificationsEnabled = byId("system-notifications-enabled");
+const systemRecipientList = byId("system-recipient-list");
 const containerSecurityForm = byId("container-security-form");
 const containerRecipientList = byId("container-recipient-list");
 const PRODUCT_CHECKBOXES = {
@@ -524,6 +526,12 @@ function renderNotificationSettings(payload) {
     addRecipient(recipient, releaseRecipientList);
   }
   updateReleaseRecipientsVisibility();
+  // System alerts: their own switch and their own list, never shared with the CVE recipients.
+  systemNotificationsEnabled.checked = settings.systemNotificationsEnabled;
+  systemRecipientList.replaceChildren();
+  for (const recipient of settings.systemRecipients) {
+    addRecipient(recipient, systemRecipientList);
+  }
 }
 
 async function loadNotificationSettings() {
@@ -594,6 +602,8 @@ function buildNotificationSettingsPayload() {
     recipients,
     releaseRecipientsShared: releaseRecipientsShared.checked,
     releaseRecipients: liveRecipients(releaseRecipientList),
+    systemNotificationsEnabled: systemNotificationsEnabled.checked,
+    systemRecipients: liveRecipients(systemRecipientList),
   };
 }
 
@@ -1002,6 +1012,9 @@ byId("add-release-recipient-button").addEventListener("click", () =>
   addRecipient("", releaseRecipientList)
 );
 releaseRecipientsShared.addEventListener("change", updateReleaseRecipientsVisibility);
+byId("add-system-recipient-button").addEventListener("click", () =>
+  addRecipient("", systemRecipientList)
+);
 byId("add-container-recipient-button").addEventListener("click", () =>
   addRecipient("", containerRecipientList)
 );
@@ -1046,6 +1059,16 @@ notificationsForm.addEventListener("submit", async (event) => {
     setMessage(
       "notifications-message",
       "Renseignez au moins un destinataire pour les alertes de nouvelles versions, ou réactivez le partage avec les alertes CVE."
+    );
+    return;
+  }
+  if (payload.systemNotificationsEnabled && payload.systemRecipients.length === 0) {
+    // Explicit refusal rather than a green switch that sends system alerts nowhere (or,
+    // worse, silently to the CVE list the operator never chose for them). The engine refuses
+    // the same combination, so this is a courtesy check, not the only guard.
+    setMessage(
+      "notifications-message",
+      "Renseignez au moins un destinataire pour activer les alertes système."
     );
     return;
   }

@@ -71,24 +71,28 @@ Les identifiants produits du catalogue constituent une taxonomie commune à tout
 
 ### Catégories et commutateurs
 
-Deux commutateurs fonctionnels indépendants, persistés dans `data/notification-settings.json` :
+Trois commutateurs fonctionnels indépendants, persistés dans `data/notification-settings.json` :
 
-- `enabled` — portée **historique** : les CVE **et** les catégories système (fin de support, échecs répétés de collecte, retours à la normale, reprise de compatibilité). Ce n’est pas un alias des CVE ; le réduire à cette seule catégorie casserait les notifications système existantes.
+- `enabled` — les alertes **CVE** uniquement.
 - `releaseNotificationsEnabled` — les alertes de **nouvelles versions** uniquement.
+- `systemNotificationsEnabled` — les alertes **système** uniquement : fin de support, échecs répétés de collecte, retours à la normale, reprise de compatibilité et autres événements techniques existants hors CVE, release et Trivy.
 - `releaseRecipientsShared` — `true` par défaut : les nouvelles versions utilisent la liste `recipients`.
 - `releaseRecipients` — liste dédiée aux nouvelles versions, utilisée uniquement si `releaseRecipientsShared` est `false` ; elle est alors obligatoirement non vide.
+- `systemRecipients` — liste toujours dédiée aux alertes système ; elle est obligatoirement non vide lorsque `systemNotificationsEnabled` vaut `true`.
 
 Les trois clés de release sont **optionnelles** au chargement : un fichier antérieur hérite de `enabled` / `true` / `[]`. Un partage désactivé avec une liste dédiée vide est **refusé** explicitement (jamais de repli silencieux vers les destinataires CVE, jamais d’email sans destinataire).
 
+Les deux clés système sont également **optionnelles** au chargement : un fichier antérieur hérite de `false` / `[]` et reste byte-identique sur une simple lecture. L’activation sans destinataire système est refusée explicitement. Quand la catégorie est désactivée, les baselines EOL et santé continuent d’avancer sans produire d’événement afin qu’une activation ultérieure ne rejoue pas l’historique. Les événements système déjà présents dans l’outbox restent suspendus et ne sont jamais routés vers les destinataires CVE.
+
 ### Routage de livraison
 
-Les événements sont regroupés en **un email par liste de destinataires effective** : CVE et catégories système vers `recipients`, nouvelles versions vers la liste effective des releases. Quand les deux listes sont identiques, un seul email groupé est conservé (comportement historique) ; quand elles diffèrent, deux emails distincts sont produits. Chaque lot est composé, livré, finalisé ou relâché **indépendamment** : un échec sur une catégorie ne bloque ni ne duplique l’autre, et la catégorie déjà délivrée n’est jamais renvoyée. Clés de déduplication, point de contrôle, réclamations et concurrence restent inchangés.
+Les événements sont regroupés par catégorie et liste de destinataires effective : CVE vers `recipients`, nouvelles versions vers leur liste effective, alertes système vers `systemRecipients` et Trivy vers sa configuration dédiée. Les lots CVE et release peuvent rester groupés quand leurs listes sont identiques ; le lot système est toujours séparé, même si ses adresses sont identiques à celles des CVE. Chaque lot est composé, livré, finalisé ou relâché **indépendamment** : un échec sur une catégorie ne bloque ni ne duplique l’autre, et la catégorie déjà délivrée n’est jamais renvoyée. Clés de déduplication, point de contrôle, réclamations et concurrence restent inchangés.
 
-L’apparence est commune aux deux catégories, **sauf l’introduction** : `introduction` alimente les emails CVE, `releaseIntroduction` les emails de nouvelle version. Les deux acceptent d’être vides, auquel cas le renderer écrit son propre texte. Quand `releaseIntroduction` est vide, l’email de release garde la phrase automatique du renderer, accordée au nombre de versions rapportées : « FortiUpgrade a détecté une nouvelle version Fortinet disponible au téléchargement. » pour une seule, « FortiUpgrade a détecté N nouvelles versions Fortinet disponibles au téléchargement. » pour plusieurs.
+L’identité visuelle est commune aux trois catégories. `introduction` alimente les emails CVE, `releaseIntroduction` les emails de nouvelle version, et les alertes système utilisent leur propre introduction automatique. Les deux champs configurables acceptent d’être vides, auquel cas leur renderer écrit son propre texte. Quand `releaseIntroduction` est vide, l’email de release garde la phrase automatique du renderer, accordée au nombre de versions rapportées : « FortiUpgrade a détecté une nouvelle version Fortinet disponible au téléchargement. » pour une seule, « FortiUpgrade a détecté N nouvelles versions Fortinet disponibles au téléchargement. » pour plusieurs.
 
 `releaseIntroduction` est **optionnelle au chargement** : un document d’apparence écrit avant elle (`displayName`, `introduction`, `signature`) continue de se charger sans perte — `introduction` garde sa portée historique (le paragraphe des alertes CVE) et les emails de nouvelle version prennent le texte automatique du renderer. Une clé inconnue reste rejetée, et un enregistrement depuis l’interface écrit toujours les deux champs.
 
-Les destinataires sont communs par défaut et peuvent être rendus dédiés aux nouvelles versions (`releaseRecipientsShared: false`). Une collecte produit alors un email par liste de destinataires effective, et au maximum un par catégorie.
+Les destinataires CVE et release sont communs par défaut ; ils peuvent être séparés pour les nouvelles versions (`releaseRecipientsShared: false`). Le lot système possède toujours ses destinataires dédiés et reste un email distinct, même si ses adresses sont identiques à celles d’un autre lot. Une collecte produit au maximum un email par catégorie et liste de destinataires effective.
 
 Un fichier `notification-settings.json` écrit avant l’existence de `releaseNotificationsEnabled` n’en contient pas la clé : il l’hérite alors de `enabled`. Le chargement d’un fichier légitime ne doit ni déclencher la reprise « configuration corrompue », ni perdre les destinataires existants, ni réécrire le fichier. Le champ est **optionnel** au chargement ; les véritables clés inconnues restent rejetées.
 

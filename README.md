@@ -426,6 +426,11 @@ Format persistant :
 ```json
 {
   "enabled": true,
+  "releaseNotificationsEnabled": true,
+  "releaseRecipientsShared": true,
+  "releaseRecipients": [],
+  "systemNotificationsEnabled": false,
+  "systemRecipients": [],
   "minimumSeverity": "high",
   "products": {
     "fortigate-fortios": true,
@@ -468,13 +473,17 @@ Le filtre est appliqué **avant** la composition : une CVE écartée n'apparaît
 
 **Le seuil ne provoque aucun rattrapage.** Le checkpoint enregistre toute CVE collectée, y compris celles que le seuil écarte ; une CVE déjà observée n'est donc jamais « nouvelle » parce que l'administrateur baisse le seuil. Seules les CVE découvertes après le changement suivent le nouveau seuil, et une escalade de sévérité observée ensuite reste notifiée selon la logique existante.
 
-Un run produit au maximum un email synthétique. L'objet annonce le volume puis la répartition réellement retenue (`[FortiUpgrade] 3 nouvelles vulnérabilités — 1 Critical / 1 High / 1 Medium`) ; le corps contient les compteurs par sévérité présente, le nombre de CVE par produit, puis une section par CVE badgée de son propre niveau. Le message est multipart `text/plain` + HTML compact compatible avec les clients email limités.
+Un run produit au maximum un email synthétique CVE. L'objet annonce le volume puis la répartition réellement retenue (`[FortiUpgrade] 3 nouvelles vulnérabilités — 1 Critical / 1 High / 1 Medium`) ; le corps contient les compteurs par sévérité présente, le nombre de CVE par produit, puis une section par CVE badgée de son propre niveau. Le message est multipart `text/plain` + HTML compact compatible avec les clients email limités.
 
-Les catégories historiques restent actives lorsque les notifications sont activées :
+Les commutateurs sont indépendants : `enabled` pour les CVE, `releaseNotificationsEnabled` pour les nouvelles versions, `systemNotificationsEnabled` pour les événements système. Les catégories historiques sont conservées :
 
 - **DAILY** : nouvelles versions FortiOS/FortiAnalyzer/FortiManager et branche passant en fin de support ;
 - **OPERATIONS** : source en échec depuis ≥ 2 exécutions consécutives ou retour à la normale ;
 - **CRITICAL** : CVE Critical, avec le seuil de sévérité configurable détaillé ci-dessus.
+
+Dans **Administration → Notifications → Alertes système**, activer le switch exige au moins un `systemRecipients` dédié (API 400 et message UI sinon). Aucun partage ni fallback vers `recipients` CVE. Le lot système est toujours séparé des lots CVE/releases, même avec des adresses identiques ; sujet, texte et HTML SNS dédiés sans composants CVE/release ni `<pre>` brut. Les releases conservent leur partage CVE optionnel ; Trivy reste séparé.
+
+Migration : les nouvelles clés système sont optionnelles au chargement (`false` / `[]`), sans réécriture des fichiers historiques. Toute sauvegarde courante les écrit. OFF avance silencieusement les baselines EOL/santé, y compris en reprise de compatibilité, sans rattrapage à l'activation. Les événements système déjà en outbox sont conservés sans claim/envoi jusqu'à activation valide, puis reprennent uniquement vers la liste dédiée. Un rollback vers l'image précédente exige de restaurer le `notification-settings.json` antérieur : son validateur strict rejette les clés nouvelles (voir `docs/delivery.md`).
 
 Les vulnérabilités de l'**image Docker de l'application** (Trivy) forment une catégorie entièrement
 séparée : son propre document de préférences, son propre seuil (Critical/High), sa propre liste de

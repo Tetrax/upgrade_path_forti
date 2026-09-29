@@ -220,6 +220,23 @@ Functional notification preferences and recipients stay in
 `data/notification-settings.json`; non-secret SMTP settings and appearance reside
 in `data/smtp-settings.json`. The password path always remains environment-owned.
 
+## Dedicated system notifications: migration and rollback
+
+Before upgrading, capture the existing `data/notification-settings.json` with the current image
+and Compose configuration. The two new optional fields (`systemNotificationsEnabled`,
+`systemRecipients`) load as `false` / `[]` without rewriting a valid historical file. CVE/release
+settings and all outbox/dedup keys stay intact. Saving from Administration → Notifications writes
+both fields. System activation requires a dedicated non-empty list; there is no CVE fallback.
+While OFF, EOL/health baselines advance silently and existing system outbox entries stay suspended.
+
+**A rollback to the previous image requires restoring the previous `notification-settings.json`
+before restarting it**, not just switching the image: its strict validator rejects the new keys
+and its recovery path would overwrite preferences with safe defaults. Retain the new file for a
+later re-upgrade. Do not delete/rewind notification history to bypass a diagnostic. The older image
+also restores historical routing (system events to the CVE list under `enabled`); if that is not
+acceptable, keep delivery disabled in the restored old-format preferences until re-upgrade.
+SMTP/Graph credentials, certificates, volumes and live runtime are not changed by this schema.
+
 ## Adding the Microsoft 365 transport
 
 The new image adds an optional Graph transport without replacing SMTP, data

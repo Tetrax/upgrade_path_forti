@@ -1057,6 +1057,65 @@ def test_system_tab_two_cards_stack_without_overflow(page, fortios_server):
     assert tracks_per_width[390] == 1, "une seule colonne attendue en 390"
 
 
+def test_system_alerts_migrate_validate_persist_and_match_existing_layout(page, fortios_server):
+    from tests.test_security_notifications import legacy_settings_payload
+
+    path = fortios_server.data_dir / "notification-settings.json"
+    path.write_text(json.dumps(legacy_settings_payload()), encoding="utf-8")
+    original = path.read_bytes()
+    login_cert_admin(page, fortios_server)
+    page.click("#notifications-tab")
+    switch = page.locator("#system-notifications-enabled")
+    rows = page.locator("#system-recipient-list input[type=email]")
+    expect(switch).not_to_be_checked()
+    expect(rows).to_have_count(0)
+    assert path.read_bytes() == original
+    switch.check()
+    page.click("#save-notifications-button")
+    expect(page.locator("#notifications-message")).to_contain_text("au moins un destinataire")
+    assert path.read_bytes() == original
+    page.click("#add-system-recipient-button")
+    rows.first.fill("operations@example.invalid")
+    page.click("#add-system-recipient-button")
+    rows.last.fill("removed@example.invalid")
+    page.locator("#system-recipient-list .recipient-remove").last.click()
+    with page.expect_response(lambda response: response.url.endswith("/api/cert/notifications")) as saved:
+        page.click("#save-notifications-button")
+    assert saved.value.status == 200
+    payload = saved.value.json()["settings"]
+    assert payload["systemNotificationsEnabled"] is True
+    assert payload["systemRecipients"] == ["operations@example.invalid"]
+    assert payload["recipients"] == ["security@example.com"]
+    page.reload()
+    expect(page.locator("#admin-view")).to_be_visible()
+    page.click("#notifications-tab")
+    expect(switch).to_be_checked()
+    expect(rows).to_have_value("operations@example.invalid")
+
+    for width in (1920, 1440, 1024, 390):
+        page.set_viewport_size({"width": width, "height": 1000})
+        assert page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth")
+        system = page.locator('section[aria-labelledby="system-alerts-heading"]')
+        styles = system.evaluate("""el => {
+            const release = document.querySelector('section[aria-labelledby="release-alerts-heading"]');
+            const properties = ['borderTopWidth', 'borderTopColor', 'marginTop', 'paddingTop', 'fontFamily'];
+            return properties.map(p => [getComputedStyle(el)[p], getComputedStyle(release)[p]]);
+        }""")
+        assert all(left == right for left, right in styles)
+        for selector in ("#system-notifications-enabled", "#add-system-recipient-button", "#system-recipient-list .recipient-remove"):
+            element = page.locator(selector)
+            element.scroll_into_view_if_needed()
+            assert element.evaluate("""el => {
+                const r = el.getBoundingClientRect();
+                return r.x >= 0 && r.right <= innerWidth && el.contains(document.elementFromPoint(r.x + r.width/2, r.y + r.height/2));
+            }"""), f"control clipped/covered at {width}px: {selector}"
+    switch.uncheck()
+    page.click("#save-notifications-button")
+    expect(page.locator("#notifications-message")).to_contain_text("Configuration enregistrée")
+    assert json.loads(path.read_text())["systemNotificationsEnabled"] is False
+    assert json.loads(path.read_text())["systemRecipients"] == ["operations@example.invalid"]
+
+
 def test_release_recipients_can_be_detached_from_the_cve_list(page, fortios_server):
     """The dedicated release list is opt-in, validated, persisted and reflected in the preview."""
     login_cert_admin(page, fortios_server)
