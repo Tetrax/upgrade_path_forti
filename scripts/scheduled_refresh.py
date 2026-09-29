@@ -269,11 +269,13 @@ def _run_compatibility(*, root: Path, runner: Runner, python: str) -> int:
 def _notify_compatibility_transition(*, root: Path) -> None:
     """Advance the shared checkpoint when recovery only ran the compatibility importer."""
     settings_path = root / DEFAULT_NOTIFICATION_SETTINGS_PATH
+    settings = fortios_notify.load_notification_settings(settings_path)
     config = fortios_notify.load_email_config(
-        settings_path=settings_path
+        settings=settings, settings_path=settings_path
     )
     history_path = root / DEFAULT_NOTIFY_HISTORY_PATH
-    if not config.enabled and not settings_path.exists() and not history_path.exists():
+    system_enabled = bool(settings.system_notifications_enabled and settings.system_recipients)
+    if not system_enabled and not settings_path.exists() and not history_path.exists():
         return
     health_after = read_health_state(root / DEFAULT_HEALTH_PATH).get("sources", {})
     checkpoint = fortios_notify.ensure_checkpoint(
@@ -296,7 +298,7 @@ def _notify_compatibility_transition(*, root: Path) -> None:
         new_health[SOURCE_COMPAT_MATRIX] = compatibility_after
     new_checkpoint = dict(checkpoint)
     new_checkpoint["health"] = new_health
-    if not config.enabled:
+    if not system_enabled:
         fortios_notify.advance_checkpoint_silently(history_path, new_checkpoint)
         return
     claimant = f"recovery-{os.getpid()}-{uuid.uuid4().hex[:8]}"
@@ -306,26 +308,20 @@ def _notify_compatibility_transition(*, root: Path) -> None:
         events,
         claimant=claimant,
         transport=config.transport,
+        settings=settings,
     )
-    composed = fortios_notify.compose_email(
+    container_settings, _ = fortios_notify.load_container_security_settings(
+        settings_path.parent / fortios_notify.CONTAINER_SECURITY_SETTINGS_FILENAME
+    )
+    fortios_notify.deliver_notification_batches(
+        history_path,
         pending,
-        app_url=config.app_url,
+        claimant=claimant,
+        settings=settings,
+        config=config,
         run_timestamp=utc_now(),
-        appearance=config.email_appearance,
+        container_security=container_settings,
     )
-    if not composed:
-        return
-    subject, text_body, html_body = composed
-    result = fortios_notify.deliver_email_result(config, subject, text_body, html_body)
-    if result.sent:
-        fortios_notify.finalize_sent_events(history_path, pending)
-    else:
-        fortios_notify.release_claim(
-            history_path,
-            claimant,
-            outcome=result,
-            transport=config.transport,
-        )
 
 
 def _run_full_unlocked(

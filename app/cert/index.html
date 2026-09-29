@@ -309,7 +309,7 @@
           <div>
             <p class="eyebrow">Alertes PSIRT</p>
             <h2>Notifications de sécurité</h2>
-            <p>Configure le seuil de sévérité et les produits surveillés pour les CVE, ainsi que les alertes de nouvelles versions, avec leurs destinataires communs.</p>
+            <p>Configure le seuil de sévérité et les produits surveillés pour les CVE, ainsi que les alertes de nouvelles versions et les alertes système, chacune avec ses destinataires.</p>
           </div>
         </div>
 
@@ -364,12 +364,23 @@
                 </div>
                 <p class="field-help">Releases actuellement prises en charge : FortiGate / FortiOS, FortiManager et FortiAnalyzer.</p>
               </section>
+              <section class="form-section" aria-labelledby="system-alerts-heading">
+                <div class="result-heading">
+                  <h3 id="system-alerts-heading">Alertes système</h3>
+                  <label class="switch-control"><input id="system-notifications-enabled" type="checkbox" aria-labelledby="system-alerts-heading"><span>ON</span></label>
+                </div>
+                <p class="panel-copy">Recevoir les alertes d’exploitation : fin de support, échecs répétés de collecte et retours à la normale.</p>
+                <h4 class="subheading" id="system-recipients-heading">Destinataires système</h4>
+                <div id="system-recipient-list"></div>
+                <button class="btn" id="add-system-recipient-button" type="button">+ Ajouter un destinataire</button>
+                <p class="field-help">Liste dédiée obligatoire à l’activation, sans partage avec les destinataires CVE. Un email séparé est envoyé même si les adresses sont identiques.</p>
+              </section>
               <section class="form-section recipient-block" aria-labelledby="recipients-heading">
                 <div class="recipient-heading">
                   <h3 id="recipients-heading">Destinataires CVE</h3>
                   <button class="btn" id="add-recipient-button" type="button">+ Ajouter un destinataire</button>
                 </div>
-                <p class="field-help">Utilisés par les alertes CVE et les notifications système (fin de support, échecs de collecte).</p>
+                <p class="field-help">Utilisés par les alertes CVE.</p>
                 <div id="recipient-list"></div>
               </section>
               <button class="btn primary" id="save-notifications-button" type="submit">Enregistrer les alertes</button>

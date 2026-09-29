@@ -9,10 +9,11 @@ FortiUpgrade uses the existing notification collector, checkpoint, and durable o
 Microsoft Graph v1.0 `users/{mailboxIdentity}/sendMail`. Both transports share the
 same business data and the single authoritative renderer
 `scripts/fortios_email_render.py`, which produces clean UTF-8 `(subject, text/plain, HTML)`.
-The renderer exposes two composers of the same SNS identity: the CVE email
-(`compose_email`) and the release email (`compose_release_email`), which reuses the SNS
-shell (hero, logo, panther, palette, CTA, Support footer) without the CVE business
-components (severity badge, Critical/High counters, per-CVE detail).
+The renderer exposes specialized composers of the same SNS identity: CVE (`compose_email`),
+release (`compose_release_email`), system (`compose_system_email`) and container image security.
+System emails reuse the shell (hero, logo, panther, palette, CTA, Support footer), with their
+own subject/text/HTML and automatic introduction, without CVE/release business components or
+the historical raw `<pre>` summary. Display name and signature remain shared.
 Each transport then adapts that output to its own wire format:
 
 - **SMTP** builds a `multipart/alternative` → `text/plain` + `multipart/related` →
@@ -131,7 +132,8 @@ for SMTP administration.
 `FORTIOS_SMTP_STARTTLS` remains accepted only as a compatibility input for older local configurations. New deployments should set `FORTIOS_SMTP_SECURITY` and, for clear SMTP, explicitly set `FORTIOS_SMTP_ALLOW_INSECURE=true`.
 
 Functional notification preferences and recipients remain in `data/notification-settings.json`
-(`enabled`, `releaseNotificationsEnabled`, `minimumSeverity`, `products`, `recipients`). A newly saved SMTP document has this non-secret shape:
+(`enabled`, `releaseNotificationsEnabled`, `releaseRecipientsShared`, `releaseRecipients`,
+`systemNotificationsEnabled`, `systemRecipients`, `minimumSeverity`, `products`, `recipients`). A newly saved SMTP document has this non-secret shape:
 
 ```json
 {
@@ -210,7 +212,8 @@ reconcile the shown settings. Neither write advances the notification checkpoint
 
 The compatibility-only recovery path passes the same configured appearance to
 `compose_email()` as the main collector, including when retrying an existing
-outbox. Display name, introduction and signature are preserved; an absent
+outbox. Display name and signature are preserved; the system introduction is automatic, not
+the CVE introduction. An absent
 appearance keeps the existing default rendering. No separate recovery template
 or SMTP engine is used.
 
@@ -241,11 +244,13 @@ This document below therefore describes the Fortinet/CVE and system categories o
 
 ### Categories and switches
 
-`data/notification-settings.json` carries two independent functional switches:
+`data/notification-settings.json` carries three independent functional switches:
 
 | Key | Scope |
 | --- | --- |
-| `enabled` | Historical scope: CVEs at or above `minimumSeverity` **and** the system categories (end of support, repeated collection failures, recoveries, compatibility recovery). Not a CVE-only alias. |
+| `enabled` | CVEs at or above `minimumSeverity` only. |
+| `systemNotificationsEnabled` | System events: end of support, repeated collection failures, recoveries, compatibility recovery and other existing technical events outside CVE/release/Trivy. |
+| `systemRecipients` | Dedicated system list only, with no sharing/fallback to `recipients`. Required when system alerts are ON. |
 | `minimumSeverity` | Minimum CVE severity that may produce an event: `critical`, `high`, `medium` or `low`, most severe first. `high` is the default and the value every pre-existing configuration carries. |
 | `releaseNotificationsEnabled` | New Fortinet releases only. |
 | `releaseRecipientsShared` | `true` (default, and what a file without the key resolves to): releases deliver to `recipients`. |
@@ -266,9 +271,9 @@ genuine severity escalation observed afterwards notifies when it reaches the con
 
 `releaseNotificationsEnabled`, `releaseRecipientsShared` and `releaseRecipients` are all
 **optional when loading**: a file written before them inherits `enabled` / `true` / `[]`, so an
-upgrade never changes what an existing installation sends, never triggers the
+upgrade preserves release routing, never triggers the
 corrupt-configuration fallback and never loses recipients. An unknown key stays rejected.
-`releaseNotificationsEnabled` only gates `derive_version_events()`; `versionsByProduct` still
+`releaseNotificationsEnabled` gates `derive_version_events()` and pending release claims; `versionsByProduct` still
 advances while it is off, so re-enabling it never replays history.
 
 Disabling the share with an empty dedicated list is **refused** (`400` from the API, explicit
@@ -277,16 +282,29 @@ email without recipients.
 
 ### Delivery routing
 
-Events are grouped into one email per **effective recipient list**:
+`systemNotificationsEnabled` and `systemRecipients` are **optional when loading**, defaulting
+to `false` / `[]`. Valid historical files remain byte-identical on reads; unknown keys are
+still rejected. Every save writes both keys. Enabling system alerts without a dedicated recipient
+is refused explicitly (API 400 and UI message). OFF continues to advance EOL/health baselines
+silently, including compatibility recovery and backfill, so activation never replays transitions
+observed while OFF. Existing system outbox entries are retained with their retry/claim metadata,
+not claimed or sent while OFF/invalid; after valid activation they resume to `systemRecipients`.
+When system alerts are enabled, a CVE backfill does not consume an EOL crossing: the crossing is
+preserved and delivered by the next normal collection instead of being lost silently.
+
+Events use the existing outbox with separate system and Trivy partitions:
 
 | Situation | Result |
 | --- | --- |
-| CVEs/system + releases, same effective recipients | one grouped email (historical behaviour) |
-| CVEs/system + releases, different recipients | two emails: the CVE email to `recipients`, the release email to `releaseRecipients` |
+| CVEs + releases, same effective recipients | one grouped email (historical behaviour) |
+| CVEs + releases, different recipients | two emails: the CVE email to `recipients`, the release email to `releaseRecipients` |
 | Releases only | one email to the effective release list |
-| CVEs/system only | one email to `recipients` |
+| CVEs only | one email to `recipients` |
+| System events | one dedicated email to `systemRecipients`, never merged, even with identical addresses |
 
-Each batch is composed, delivered, finalized or released on its own. A failed batch stays in the
+Collection and compatibility recovery share `deliver_notification_batches()`. Each batch is
+composed, delivered, finalized or released on its own; releasing a failed batch never releases
+the next batch's live claims. A failed batch stays in the
 outbox with its retry metadata while the successful one is removed and recorded in `sentKeys`, so
 a partial failure neither blocks nor duplicates the other category, and no event can be sent
 twice. Dedup keys, the checkpoint, claims and concurrency guarantees are untouched.
@@ -372,7 +390,7 @@ image and SMTP environment available; see [delivery.md](delivery.md).
 ### Notification preferences and image downgrade
 
 The new→old direction is the only hazardous one. An image older than the
-separated CVE/release switches validates `data/notification-settings.json`
+system keys (including the immediately previous image) validates `data/notification-settings.json`
 strictly and rejects the newer keys, so it can report a configuration problem
 instead of the intended preferences. Before reverting to such an image:
 
@@ -384,7 +402,7 @@ instead of the intended preferences. Before reverting to such an image:
 - never roll back the image alone when the switch schema changed in between.
 
 The reverse direction is safe by design: a document written before the new keys
-keeps loading unchanged, because those keys are optional at load time.
+keeps loading unchanged, because those keys are optional at load time; system defaults OFF/empty.
 
 ## Local verification
 

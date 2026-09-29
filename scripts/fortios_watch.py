@@ -34,7 +34,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -3147,18 +3147,24 @@ def main(argv: list[str]) -> int:
             settings=notification_settings,
             settings_path=args.notification_settings_output,
         )
-        # Two independent category gates. `enabled` keeps its historical meaning -- CVEs AND the
-        # system categories (EOL, repeated collection failures, recoveries) -- so it is named
-        # after that scope, never reduced to a CVE alias. releaseNotificationsEnabled only
-        # adds/removes the "nouvelle version" category, which is why its derivation is gated
-        # on its own flag.
-        master_notifications = email_config.enabled
+        # Three independent category gates. `enabled` is the CVE switch alone;
+        # releaseNotificationsEnabled adds/removes the "nouvelle version" category; system
+        # alerts (EOL, repeated collection failures, recoveries, technical events) have their
+        # own switch and their own recipient list, with no sharing or fallback in either
+        # direction. Every category keeps its own derivation gate below.
+        cve_notifications = email_config.enabled
         release_notifications = email_config.release_notifications_enabled
+        system_notifications = bool(
+            notification_settings is not None
+            and notification_settings.system_notifications_enabled
+            and notification_settings.system_recipients
+        )
         if (
             notification_settings is not None
             and notify_checkpoint is not None
-            and not master_notifications
+            and not cve_notifications
             and not release_notifications
+            and not system_notifications
         ):
             health_after = read_health_state(args.health_output).get("sources", {})
             cves_after_by_id = {
@@ -3187,7 +3193,11 @@ def main(argv: list[str]) -> int:
         if (
             notification_settings is not None
             and notify_checkpoint is not None
-            and (master_notifications or release_notifications)
+            and (
+                cve_notifications
+                or release_notifications
+                or system_notifications
+            )
         ):
             health_after = read_health_state(args.health_output).get("sources", {})
             notify_state = fortios_notify.load_notify_state(args.notify_history_output)
@@ -3221,7 +3231,7 @@ def main(argv: list[str]) -> int:
                         detected_at=final_state["generatedAt"],
                         release_links=release_notes_by_product(final_state),
                     )
-                if master_notifications:
+                if cve_notifications:
                     newly_added_cves = [
                         item
                         for item in final_state.get("cves", [])
@@ -3236,24 +3246,27 @@ def main(argv: list[str]) -> int:
                         notification_settings,
                     )
 
+            # A CVE backfill must not consume a real EOL crossing while system alerts are on:
+            # the next normal collection must still be able to notify it. While the category is
+            # off, however, its baseline keeps advancing silently even during a backfill so a
+            # later activation cannot replay historical transitions.
+            if not args.cve_backfill or not system_notifications:
                 eol_events, eol_state_after = fortios_notify.derive_eol_events(
                     final_state.get("fortiosLifecycle", {}),
                     notify_state.get("eolState", {}),
                     now=final_state["generatedAt"],
                 )
-                # Committed immediately (state + outbox entries in one write), not folded into
-                # the `events` list below -- see commit_eol_transition()'s docstring for why the
-                # two must never be persisted as separate writes. EOL belongs to `enabled`'s
-                # historical scope, so with that switch off the transition is still recorded
-                # silently (re-enabling must not replay it) but produces no event.
                 fortios_notify.commit_eol_transition(
                     args.notify_history_output,
                     eol_state_after,
-                    eol_events if master_notifications else [],
+                    eol_events if system_notifications else [],
                     now=final_state["generatedAt"],
                 )
 
-            if master_notifications:
+            # System alerts (EOL above, collection health here) follow their own switch: while
+            # it is off, the health baseline still advances through the checkpoint committed
+            # below, so re-enabling never replays an older failure or recovery.
+            if system_notifications:
                 events += fortios_notify.derive_source_health_events(
                     checkpoint_health, health_after, HEALTH_SOURCE_LABELS
                 )
@@ -3263,7 +3276,7 @@ def main(argv: list[str]) -> int:
             # atomically (baseline + outbox in one write, see
             # commit_container_security_transition) and therefore runs here, before the claim
             # below, so a fresh finding is delivered in this same pass. Deliberately NOT gated by
-            # `master_notifications`: the scan state is recorded either way (disabling is a pause,
+            # `cve_notifications`: the scan state is recorded either way (disabling is a pause,
             # not a buffer) and the administration displays it regardless of the switch.
             container_settings_path = (
                 args.notification_settings_output.parent
@@ -3314,41 +3327,17 @@ def main(argv: list[str]) -> int:
                 events,
                 claimant=claimant,
                 transport=email_config.transport,
+                settings=notification_settings,
             )
-            if pending:
-                # One delivery per effective recipient list. Releases with a dedicated list are
-                # delivered separately (and finalized/released separately), so a failure on one
-                # category neither blocks nor duplicates the other: each event belongs to exactly
-                # one batch and is removed from the outbox only when its own email was accepted.
-                for batch in fortios_notify.notification_batches(
-                    pending, notification_settings, container_security=container_settings
-                ):
-                    composed = fortios_notify.compose_email(
-                        list(batch.events),
-                        app_url=email_config.app_url,
-                        run_timestamp=final_state["generatedAt"],
-                        appearance=email_config.email_appearance,
-                    )
-                    if not composed:
-                        continue
-                    subject, text_body, html_body = composed
-                    result = fortios_notify.deliver_email_result(
-                        replace(email_config, smtp_to=batch.recipients),
-                        subject,
-                        text_body,
-                        html_body,
-                    )
-                    if result.sent:
-                        fortios_notify.finalize_sent_events(
-                            args.notify_history_output, list(batch.events)
-                        )
-                    else:
-                        fortios_notify.release_claim(
-                            args.notify_history_output,
-                            claimant,
-                            outcome=result,
-                            transport=email_config.transport,
-                        )
+            fortios_notify.deliver_notification_batches(
+                args.notify_history_output,
+                pending,
+                claimant=claimant,
+                settings=notification_settings,
+                config=email_config,
+                run_timestamp=final_state["generatedAt"],
+                container_security=container_settings,
+            )
     except Exception as error:  # noqa: BLE001 - a broken notification path must never fail the run.
         sys.stderr.write(f"Avertissement : notification email non envoyée ({error}).\n")
 

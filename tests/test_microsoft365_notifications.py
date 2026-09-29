@@ -38,6 +38,11 @@ def notification_settings(*, enabled: bool = True) -> notify.NotificationSetting
                 "forticlient": {"windows": True, "macos": True, "linux": True},
             },
             "recipients": ["alerts@example.test"],
+            "releaseNotificationsEnabled": enabled,
+            "releaseRecipientsShared": True,
+            "releaseRecipients": [],
+            "systemNotificationsEnabled": False,
+            "systemRecipients": [],
         }
     )
 
@@ -939,6 +944,9 @@ class Microsoft365ConsumerRetryTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            payload = notification_settings().to_payload()
+            payload.update(systemNotificationsEnabled=True, systemRecipients=["operations@example.invalid"])
+            notify.save_notification_settings(root / refresh.DEFAULT_NOTIFICATION_SETTINGS_PATH, payload)
             config = self._graph_config(root)
             if incomplete:
                 config = replace(config, graph_client_secret="")
@@ -1026,6 +1034,9 @@ class Microsoft365ConsumerRetryTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            payload = notification_settings().to_payload()
+            payload.update(systemNotificationsEnabled=True, systemRecipients=["operations@example.invalid"])
+            notify.save_notification_settings(root / refresh.DEFAULT_NOTIFICATION_SETTINGS_PATH, payload)
             config = self._graph_config(root)
             effects = [
                 FakeResponse(200, b'{"access_token":"access-token"}'),

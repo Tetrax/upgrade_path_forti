@@ -46,6 +46,7 @@ from tests.test_release_notifications import (
 
 CVE_RECIPIENTS = ("support@sns-security.fr", "v.hebert@sns-security.fr")
 RELEASE_RECIPIENTS = ("firmware@sns-security.fr",)
+SYSTEM_RECIPIENTS = ("operations@example.invalid",)
 RELEASE_KEY = "new-version|fortios|fortios|8.0.1"
 CVE_KEY = "new-cve|psirt|CVE-2026-99999|critical"
 
@@ -70,6 +71,8 @@ def settings_payload(
     recipients: tuple[str, ...] = CVE_RECIPIENTS,
     release_recipients_shared: bool | None = None,
     release_recipients: tuple[str, ...] = (),
+    system: bool = False,
+    system_recipients: tuple[str, ...] = (),
     include_new_keys: bool = True,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -90,6 +93,8 @@ def settings_payload(
             True if release_recipients_shared is None else release_recipients_shared
         )
         payload["releaseRecipients"] = list(release_recipients)
+        payload["systemNotificationsEnabled"] = system
+        payload["systemRecipients"] = list(system_recipients)
     return payload
 
 
@@ -281,7 +286,8 @@ class BatchRoutingTests(unittest.TestCase):
         self.assertEqual([(batch.recipients, len(batch.events)) for batch in cve_only],
                          [(CVE_RECIPIENTS, 1)])
 
-    def test_system_events_travel_with_the_cve_email(self) -> None:
+    def test_system_events_never_travel_with_the_cve_email(self) -> None:
+        """System alerts are their own category now: suspended when off, own email when on."""
         settings = notify.validate_notification_settings(
             settings_payload(
                 release_recipients_shared=False, release_recipients=RELEASE_RECIPIENTS
@@ -292,10 +298,30 @@ class BatchRoutingTests(unittest.TestCase):
             category="OPERATIONS", dedup_key="eol|7.0|branch", summary="Branche 7.0 en fin de support"
         )
 
-        batches = notify.notification_batches([eol, *releases], settings)
+        # System off (the payload's default): the EOL event joins no batch at all -- it waits in
+        # the outbox instead of being folded into the CVE email.
+        suspended = notify.notification_batches([eol, *releases], settings)
+        self.assertEqual([batch.recipients for batch in suspended], [RELEASE_RECIPIENTS])
+        self.assertEqual(
+            [event.dedup_key for event in suspended[0].events], [RELEASE_KEY]
+        )
 
-        self.assertEqual([batch.recipients for batch in batches], [CVE_RECIPIENTS, RELEASE_RECIPIENTS])
-        self.assertEqual([event.dedup_key for event in batches[0].events], ["eol|7.0|branch"])
+        # System on: its own email, on the dedicated system list, still separate from the
+        # release one even though both are detached from the CVE list.
+        active = notify.validate_notification_settings(
+            settings_payload(
+                release_recipients_shared=False,
+                release_recipients=RELEASE_RECIPIENTS,
+                system=True,
+                system_recipients=SYSTEM_RECIPIENTS,
+            )
+        )
+        batches = notify.notification_batches([eol, *releases], active)
+        self.assertEqual(
+            [batch.recipients for batch in batches],
+            [RELEASE_RECIPIENTS, SYSTEM_RECIPIENTS],
+        )
+        self.assertEqual([event.dedup_key for event in batches[1].events], ["eol|7.0|branch"])
 
 
 class _DeliveryRun(OneCollectorRun):
@@ -307,7 +333,7 @@ class _DeliveryRun(OneCollectorRun):
         self.sent: list[tuple[str, ...]] = []
         self.failed: list[tuple[str, ...]] = []
 
-    def run(self) -> int:
+    def run(self, *extra_arguments: str) -> int:
         client = MagicMock()
         client.__enter__ = MagicMock(return_value=client)
         client.__exit__ = MagicMock(return_value=False)
@@ -336,6 +362,7 @@ class _DeliveryRun(OneCollectorRun):
             "--official-paths-csv", str(self.root / "no-official-paths.csv"),
             "--advisories-csv", str(self.root / "no-advisories.csv"),
             "--upgrade-exports", str(self.root / "no-upgrade-exports"),
+            *extra_arguments,
         ]
         with patch.dict(os.environ, SMTP_ENV, clear=False), patch(
             "smtplib.SMTP", return_value=client
