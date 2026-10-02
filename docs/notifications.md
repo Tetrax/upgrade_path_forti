@@ -309,6 +309,18 @@ outbox with its retry metadata while the successful one is removed and recorded 
 a partial failure neither blocks nor duplicates the other category, and no event can be sent
 twice. Dedup keys, the checkpoint, claims and concurrency guarantees are untouched.
 
+A batch the SMTP server accepts for only **part** of its recipients is not a success: the
+refused-recipient mapping is kept as `remainingRecipients` on the outbox entry, the diagnostic
+reports a partial acceptance instead of claiming every destination was accepted, `sentKeys` is not
+written and the entry stays in the outbox, so a later collection retries the refused destinations
+only -- a recipient already accepted is never sent the same event again. Retries use
+`remainingRecipients` intersected with the current configuration: a destination the operator
+removed stops being retried, a newly added one is never notified retroactively, and when every
+remaining destination was removed the event is resolved without any send (explicit diagnostic)
+instead of being retried forever or silently re-sent to the full list. A transport change keeps the
+same remaining set: the retry goes to the destinations still owed, never back to a recipient the
+previous transport already accepted.
+
 Appearance is shared except for the introduction: `introduction` feeds CVE emails and
 `releaseIntroduction` feeds new-version emails. Both may be empty, which is when the renderer
 writes its own text. An empty `releaseIntroduction` keeps the renderer's automatic release
@@ -348,11 +360,13 @@ states without a checkpoint remain supported; no data-schema migration is requir
 
 ## Failures, durable retries and rollback
 
-The outbox accepts optional `nextAttemptAt`, `lastTransport`, `lastErrorCode`
-fields. Old entries without them remain readable. On failure the claimed events
+The outbox accepts optional `nextAttemptAt`, `lastTransport`, `lastErrorCode` fields.
+Old entries without them remain readable. On failure the claimed events
 are released, not removed; both the main collector and compatibility recovery
 use this same retry mechanism. Claims held by a live worker remain exclusive;
 a crashed worker's claim becomes reclaimable after the existing 600-second TTL.
+A partially accepted send adds the optional `remainingRecipients` field: the
+destinations still owed after the server accepted the rest of the batch.
 
 - Microsoft 365 invalid credentials, permission/consent failures and invalid configuration:
   300-second cooldown; an operator must fix the cause.
@@ -362,10 +376,16 @@ a crashed worker's claim becomes reclaimable after the existing 600-second TTL.
   or an HTTP date and preserved, including delays longer than a day. A value
   beyond the representable timestamp range defers to the latest supported date,
   rather than overflowing the outbox or silently retrying after an hour.
-- SMTP collector delivery retains the existing boolean send contract and
-  next-run retry eligibility. Structured SMTP test results distinguish permanent
-  authentication/sender/recipient refusals, but do not change the historical
-  collector retry policy. There is no in-process infinite retry loop.
+- SMTP collector delivery keeps a next-run retry for transient failures. A **partial** acceptance
+  (the server accepted at least one recipient and refused others) records the refused destinations
+  in the outbox `remainingRecipients` field and retries only them; the accepted destinations are
+  never resent. A refusal subset that is entirely permanent (5xx) keeps the existing bounded
+  cooldown (`nextAttemptAt`, 300 seconds) with `lastErrorCode=smtp_partial_delivery`, so a
+  permanently refused destination is diagnosed and never abandoned silently nor retried in a tight
+  loop. A total refusal (every recipient refused) keeps the historical all-or-nothing failure
+  handling. Structured SMTP test results distinguish permanent authentication/sender/recipient
+  refusals, but do not change the historical collector retry policy. There is no in-process
+  infinite retry loop.
 - Switching transports makes entries deferred by the previous provider eligible
   for the next run, without stealing live claims or changing deduplication keys.
 
@@ -386,6 +406,14 @@ it may resume pending delivery through SMTP using its deployment environment.
 Disable sending before rollback if that is not intended. Do not restore an older
 checkpoint/history over events accepted since the upgrade. Keep the previous
 image and SMTP environment available; see [delivery.md](delivery.md).
+
+The older image also ignores `remainingRecipients`: a still-pending partial
+entry is retried as a **full-list** send, so it can resend to recipients the new
+image had already delivered to. Before rolling back to an image that predates
+this field, either let the current image finish its pending partial retries (a
+partial entry normally resolves on the next collection once the SMTP server
+accepts the destination), or keep delivery disabled in the restored deployment
+until re-upgrading.
 
 ### Notification preferences and image downgrade
 
@@ -416,7 +444,8 @@ Use the repository test interpreter and the focused notification suite:
   tests/test_email_preview.py \
   tests/test_smtp_admin.py \
   tests/test_microsoft365_notifications.py \
-  tests/test_microsoft365_config_safety.py
+  tests/test_microsoft365_config_safety.py \
+  tests/test_partial_delivery.py
 ```
 
 The delivery tests use an isolated local SMTP sink and parse the resulting MIME message to compare its subject, text part, and HTML part with the production-rendered preview. They do not connect to a real SMTP service or use production data.
