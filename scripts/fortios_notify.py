@@ -35,7 +35,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from email import policy as email_policy
 from email.message import EmailMessage
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -666,6 +666,10 @@ class NotificationEvent:
     summary: str
     severity: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    # Set on events claimed from a partially delivered outbox entry: the destinations still owed
+    # the message after a partial SMTP acceptance. None means "no partial progress yet" and the
+    # event uses its category's full configured list.
+    remaining_recipients: tuple[str, ...] | None = None
 
 
 def _env_bool(env: dict[str, str], key: str, default: bool) -> bool:
@@ -2038,6 +2042,31 @@ def _is_valid_outbox_entry(entry: Any) -> bool:
         or len(last_error_code) > 100
     ):
         return False
+    # Partial-delivery progress (optional, absent on legacy entries): the destinations still
+    # owed a retry after a partially accepted send. The field's *absence* is the legacy shape
+    # (a full-list pending event); a present value must be a non-empty list of valid configured
+    # destinations -- the same address rule as the settings lists (trimmed, no duplicate) --
+    # because those strings are persisted across restarts, re-sent as-is and intersected with
+    # the current configuration on resume. null, empty, padded, malformed or duplicated values
+    # are rejected so a corrupted progress can never be read back as a full-list retry (which
+    # would resend to recipients already accepted) or silently resolved without a send: the
+    # state file is kept byte-identical and notifications suspend instead.
+    if "remainingRecipients" in entry:
+        remaining_recipients = entry["remainingRecipients"]
+        if not isinstance(remaining_recipients, list) or not remaining_recipients:
+            return False
+        seen_remaining: set[str] = set()
+        for address in remaining_recipients:
+            if (
+                not isinstance(address, str)
+                or address != address.strip()
+                or not _EMAIL_ADDRESS_RE.fullmatch(address)
+            ):
+                return False
+            folded_address = address.casefold()
+            if folded_address in seen_remaining:
+                return False
+            seen_remaining.add(folded_address)
     # must be both-null (unclaimed) or both-set (claimed) -- never just one
     return (claimed_by is None) == (claimed_at is None)
 
@@ -2258,12 +2287,16 @@ def _claim_outstanding(
     """
     claimed: list[NotificationEvent] = []
     for entry in outbox:
+        remaining_recipients = entry.get("remainingRecipients")
         event = NotificationEvent(
             category=entry["category"],
             dedup_key=entry["dedupKey"],
             summary=entry["summary"],
             severity=entry.get("severity"),
             details=dict(entry.get("details") or {}),
+            remaining_recipients=(
+                tuple(remaining_recipients) if remaining_recipients else None
+            ),
         )
         # The collector supplies its validated settings snapshot. Suspended entries keep
         # their claim/retry metadata untouched, including any other process's live claim.
@@ -2516,6 +2549,158 @@ def release_claim(
             changed = True
         if changed:
             write_json(path, state)
+
+
+def record_partial_delivery(
+    path: Path,
+    claimant: str,
+    *,
+    events: list[NotificationEvent],
+    recipients: tuple[str, ...],
+    refused_recipients: tuple[str, ...],
+    permanent_refusals: tuple[str, ...] = (),
+    transport: str | None = None,
+    now: str | None = None,
+) -> None:
+    """Persist per-recipient progress after a partially accepted SMTP send, atomically.
+
+    Only entries this claimant still owns are updated, so a stale worker can never overwrite a
+    newer attempt's progress. Each updated entry keeps the refused destinations in
+    ``remainingRecipients``, so the next claim (this run or after a restart) delivers to that
+    subset only; the event is NOT removed from the outbox and its dedup key is NOT recorded in
+    ``sentKeys``, so it stays owed without ever being reported as fully delivered.
+
+    Retry policy mirrors the existing outbox semantics: a transient refusal (4xx) makes the
+    entry eligible again on the next pass, while a subset that is entirely permanent (5xx)
+    keeps a bounded ``PERMANENT_RETRY_COOLDOWN_SECONDS`` cooldown -- diagnosed in
+    ``lastErrorCode``/``lastTransport``, never silently abandoned and never spun.
+    """
+    if not events or not refused_recipients:
+        return
+    now = now or utc_now()
+    now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+    event_keys = {event.dedup_key for event in events}
+    refused_folded = {address.casefold() for address in refused_recipients}
+    permanent_folded = {address.casefold() for address in permanent_refusals}
+    transient = refused_folded - permanent_folded
+    batch_folded = {address.casefold() for address in recipients}
+    unattributed = refused_folded - batch_folded
+    failed_transport = transport if transport in {
+        EMAIL_TRANSPORT_SMTP,
+        EMAIL_TRANSPORT_MICROSOFT365,
+    } else None
+    with cross_process_lock(path):
+        state = load_notify_state(path)
+        changed = False
+        delivered_keys: list[str] = []
+        for entry in state["outbox"]:
+            if entry["dedupKey"] not in event_keys:
+                continue
+            if entry.get("claimedBy") != claimant:
+                continue  # another (newer) attempt owns this entry now
+            if unattributed:
+                # A refusal matching none of the destinations this batch actually attempted
+                # cannot be attributed to a destination: the entry must never be recorded as
+                # fully delivered. It stays owed untouched, diagnosed with a bounded cooldown,
+                # instead of being silently dropped as if everyone had accepted. (Capture-side
+                # attribution makes this unreachable through a real SMTP dialogue; the guard is
+                # deliberate defense so an unmatched refusal can never mean complete success.)
+                entry["claimedBy"] = None
+                entry["claimedAt"] = None
+                entry["lastTransport"] = failed_transport
+                entry["lastErrorCode"] = "smtp_partial_unattributed"
+                next_attempt = now_dt + dt.timedelta(
+                    seconds=PERMANENT_RETRY_COOLDOWN_SECONDS
+                )
+                entry["nextAttemptAt"] = (
+                    next_attempt.isoformat().replace("+00:00", "Z")
+                )
+                changed = True
+                continue
+            current = entry.get("remainingRecipients")
+            target = tuple(current) if current else tuple(recipients)
+            # What stays owed is exactly what the server refused on this attempt; the destinations
+            # that were accepted this time are done and must never be retried.
+            remaining = [
+                address
+                for address in target
+                if address.casefold() in refused_folded
+            ]
+            if not remaining:
+                # None of this entry's destinations was refused: everything it still owed was
+                # accepted, so it is finalized like a complete send.
+                delivered_keys.append(entry["dedupKey"])
+                continue
+            entry["remainingRecipients"] = remaining
+            entry["claimedBy"] = None
+            entry["claimedAt"] = None
+            entry["lastTransport"] = failed_transport
+            entry["lastErrorCode"] = "smtp_partial_delivery"
+            if transient:
+                entry["nextAttemptAt"] = None
+            else:
+                next_attempt = now_dt + dt.timedelta(
+                    seconds=PERMANENT_RETRY_COOLDOWN_SECONDS
+                )
+                entry["nextAttemptAt"] = (
+                    next_attempt.isoformat().replace("+00:00", "Z")
+                )
+            changed = True
+        if delivered_keys:
+            delivered_set = set(delivered_keys)
+            state["outbox"] = [
+                entry
+                for entry in state["outbox"]
+                if entry["dedupKey"] not in delivered_set
+            ]
+            for key in delivered_keys:
+                state["sentKeys"][key] = now
+            state["sentKeys"] = prune_notify_history(state["sentKeys"], now=now)
+            changed = True
+        if changed:
+            write_json(path, state)
+
+
+def resolve_undeliverable_events(
+    path: Path,
+    claimant: str,
+    *,
+    events: list[NotificationEvent],
+    now: str | None = None,
+) -> list[str]:
+    """Resolve claimed partial events whose remaining recipients are no longer configured.
+
+    These are partial deliveries the operator de-scoped by removing every remaining destination
+    from the recipient list: there is nowhere safe left to send them. They are removed from the
+    outbox and recorded in ``sentKeys`` (so the same transition is never resurrected later)
+    instead of being retried forever or silently re-sent to the full new list. The caller
+    reports the count; only entries this claimant owns are touched.
+    """
+    if not events:
+        return []
+    now = now or utc_now()
+    event_keys = {event.dedup_key for event in events}
+    with cross_process_lock(path):
+        state = load_notify_state(path)
+        resolved = [
+            entry["dedupKey"]
+            for entry in state["outbox"]
+            if entry["dedupKey"] in event_keys
+            and entry.get("claimedBy") == claimant
+        ]
+        if not resolved:
+            return []
+        resolved_set = set(resolved)
+        state["outbox"] = [
+            entry
+            for entry in state["outbox"]
+            if entry["dedupKey"] not in resolved_set
+        ]
+        for key in resolved:
+            state["sentKeys"][key] = now
+        state["sentKeys"] = prune_notify_history(state["sentKeys"], now=now)
+        write_json(path, state)
+    return resolved
 
 
 def prepare_retry_for_transport(path: Path, transport: str) -> None:
@@ -3539,6 +3724,38 @@ class NotificationBatch:
     events: tuple[NotificationEvent, ...]
 
 
+def _configured_event_recipients(
+    event: NotificationEvent,
+    settings: NotificationSettings,
+    *,
+    container_security: ContainerSecuritySettings | None = None,
+) -> tuple[str, ...]:
+    """The category list an event is allowed to use, before any partial-delivery progress."""
+    if _is_container_security_event(event):
+        return container_security.recipients if container_security is not None else ()
+    if _is_system_event(event):
+        return settings.system_recipients
+    if _is_release_event(event):
+        return settings.release_recipients_effective()
+    return settings.recipients
+
+
+def _remaining_recipients(
+    remaining: tuple[str, ...] | None, configured: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Intersect a partially delivered event's remaining destinations with the configured list.
+
+    A recipient the operator removed stops being retried; a recipient added afterwards is never
+    retroactively notified for an event that predates it.
+    """
+    if remaining is None:
+        return tuple(configured)
+    configured_folded = {address.casefold() for address in configured}
+    return tuple(
+        address for address in remaining if address.casefold() in configured_folded
+    )
+
+
 def notification_batches(
     events: list[NotificationEvent],
     settings: NotificationSettings,
@@ -3562,6 +3779,12 @@ def notification_batches(
     produces one grouped email for CVEs + releases; with no system event and no container
     security the batches, their event order and their emails are exactly the historical ones.
 
+    A partially delivered event (``remaining_recipients``) is only ever sent to its remaining
+    destinations intersected with the current configuration: events with different remaining
+    sets are split into separate emails, so a recipient who already accepted the event can never
+    receive it a second time through a merged batch. Events whose every remaining recipient was
+    removed are not batched at all -- the caller resolves them explicitly.
+
     Every event belongs to exactly one batch -- or to none at all while its category is
     suspended. The caller finalizes or releases each batch on its own, which is what lets one
     category fail without blocking or duplicating the others while leaving the dedup key, outbox,
@@ -3573,33 +3796,44 @@ def notification_batches(
     system = [event for event in rest if _is_system_event(event)]
     rest = [event for event in rest if not _is_system_event(event)]
 
-    release = [event for event in rest if _is_release_event(event)]
-    other = [event for event in rest if not _is_release_event(event)]
+    def effective(event: NotificationEvent) -> tuple[str, ...]:
+        configured = _configured_event_recipients(
+            event, settings, container_security=container_security
+        )
+        return _remaining_recipients(event.remaining_recipients, configured)
 
     batches: list[NotificationBatch] = []
-    if not release:
-        if other:
-            batches.append(NotificationBatch(settings.recipients, tuple(other)))
-    elif not other:
-        batches.append(
-            NotificationBatch(settings.release_recipients_effective(), tuple(release))
-        )
-    elif settings.release_recipients_effective() == settings.recipients:
-        batches.append(NotificationBatch(settings.recipients, tuple(rest)))
-    else:
-        # CVEs first, then releases: a deterministic order, and the security email is delivered
-        # before the informational one.
-        batches.append(NotificationBatch(settings.recipients, tuple(other)))
-        batches.append(
-            NotificationBatch(settings.release_recipients_effective(), tuple(release))
-        )
+    groups: dict[tuple[str, ...], list[NotificationEvent]] = {}
+    first_seen: dict[tuple[str, ...], int] = {}
+    has_other: dict[tuple[str, ...], bool] = {}
+    for index, event in enumerate(rest):
+        recipients = effective(event)
+        if not recipients:
+            continue  # no configured destination left: resolved by the caller, never sent
+        groups.setdefault(recipients, []).append(event)
+        first_seen.setdefault(recipients, index)
+        if not _is_release_event(event):
+            has_other[recipients] = True
+    # CVEs before release-only batches (deterministic historical order), each effective
+    # recipient set keeping the queue order of its own events.
+    for recipients in sorted(
+        groups, key=lambda key: (0 if has_other.get(key) else 1, first_seen[key])
+    ):
+        batches.append(NotificationBatch(recipients, tuple(groups[recipients])))
 
     if system and settings.system_notifications_enabled and settings.system_recipients:
         # Its own batch even when the addresses are identical to the CVE list; no batch at all
         # otherwise, so a suspended system event waits in the outbox instead of being delivered
         # to an audience it does not belong to. No silent fallback, and no email without
         # recipient: the dedicated list is the only one this category ever uses.
-        batches.append(NotificationBatch(settings.system_recipients, tuple(system)))
+        system_groups: dict[tuple[str, ...], list[NotificationEvent]] = {}
+        for event in system:
+            recipients = effective(event)
+            if not recipients:
+                continue
+            system_groups.setdefault(recipients, []).append(event)
+        for recipients, group_events in system_groups.items():
+            batches.append(NotificationBatch(recipients, tuple(group_events)))
 
     recipients = container_security.recipients if container_security is not None else ()
     if container and not recipients:
@@ -3608,8 +3842,14 @@ def notification_batches(
         raise ValueError(
             "Destinataires de sécurité conteneur absents : aucun email ne peut être construit."
         )
-    if container:
-        batches.append(NotificationBatch(recipients, tuple(container)))
+    container_groups: dict[tuple[str, ...], list[NotificationEvent]] = {}
+    for event in container:
+        event_recipients = effective(event)
+        if not event_recipients:
+            continue
+        container_groups.setdefault(event_recipients, []).append(event)
+    for recipients, group_events in container_groups.items():
+        batches.append(NotificationBatch(recipients, tuple(group_events)))
     return batches
 
 
@@ -3627,8 +3867,36 @@ def deliver_notification_batches(
 
     A failure releases only its own batch, never another batch's live claim. Persistence
     failures deliberately propagate: never relabel an accepted send as a transport failure.
+
+    A batch accepted for part of its recipients is settled as a partial delivery: the refused
+    destinations stay owed in the outbox (``remainingRecipients``) so a later collection retries
+    them only, while the accepted ones are never resent. A partial event whose remaining
+    recipients were all removed from the configuration is resolved with an explicit diagnostic
+    instead of being retried forever or silently sent to the full new list.
     """
-    for batch in notification_batches(pending, settings, container_security=container_security):
+    batches = notification_batches(pending, settings, container_security=container_security)
+    covered = {event.dedup_key for batch in batches for event in batch.events}
+    undeliverable = [
+        event
+        for event in pending
+        if event.dedup_key not in covered
+        and event.remaining_recipients is not None
+        and not _remaining_recipients(
+            event.remaining_recipients,
+            _configured_event_recipients(
+                event, settings, container_security=container_security
+            ),
+        )
+    ]
+    if undeliverable:
+        resolved = resolve_undeliverable_events(path, claimant, events=undeliverable)
+        if resolved:
+            sys.stderr.write(
+                "Notification email : "
+                f"{len(resolved)} événement(s) en reprise résolu(s) sans envoi "
+                "(destinataires restants absents de la configuration).\n"
+            )
+    for batch in batches:
         events = list(batch.events)
         try:
             composed = compose_email(
@@ -3642,7 +3910,17 @@ def deliver_notification_batches(
             sys.stderr.write("Avertissement : échec de composition/envoi d'un lot email.\n")
             release_claim(path, claimant, events=events)
             continue
-        if result.sent:
+        if result.sent and result.refused_recipients:
+            record_partial_delivery(
+                path,
+                claimant,
+                events=events,
+                recipients=batch.recipients,
+                refused_recipients=result.refused_recipients,
+                permanent_refusals=result.permanent_refusals,
+                transport=config.transport,
+            )
+        elif result.sent:
             finalize_sent_events(path, events)
         else:
             release_claim(path, claimant, outcome=result, transport=config.transport, events=events)
@@ -4042,6 +4320,14 @@ class SmtpResult:
     # HTTP 202 means Microsoft Graph accepted the request; it does not confirm final mailbox
     # delivery. SMTP's successful hand-off is also represented here as best-effort acceptance.
     delivery_confirmed: bool = False
+    # Partial SMTP acceptance: smtplib returns the mapping of refused recipients when at least
+    # one OTHER recipient was accepted. The refused destinations are the ones still owed the
+    # message (`refused_recipients`); `permanent_refusals` is the subset rejected with a 5xx
+    # code. Both stay empty on a complete success and on a total failure (all-refused raises
+    # SMTPRecipientsRefused). These private fields let the outbox persist per-recipient progress;
+    # they are never part of the public diagnostics.
+    refused_recipients: tuple[str, ...] = ()
+    permanent_refusals: tuple[str, ...] = ()
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -4434,6 +4720,58 @@ def _build_smtp_message(
     return message
 
 
+def _smtp_envelope_destinations(message: Any) -> tuple[str, ...]:
+    """The recipient list ``smtplib.SMTP.send_message()`` derives for this message.
+
+    ``send_message`` extracts the SMTP envelope from the To/Cc/Bcc headers through
+    ``email.utils.getaddresses()``, which rewrites some header-level address forms: a quoted local
+    part (``"bob"@example.invalid``) loses its quotes and an angle address
+    (``<bob@example.invalid>``) loses its brackets -- both become ``bob@example.invalid``. Both
+    forms are accepted by the settings validation, so reproducing this exact extraction is what
+    lets an SMTP refusal key be attributed back to the destination actually configured.
+    """
+    fields = [
+        field
+        for field in (message.get(header) for header in ("To", "Cc", "Bcc"))
+        if field is not None
+    ]
+    return tuple(address for _, address in getaddresses([str(field) for field in fields]))
+
+
+def _smtp_refused_recipient_identities(
+    config: EmailConfig, message: Any, refused_addresses: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Rewrite SMTP-envelope refusals as the configured destinations they belong to.
+
+    The refused mapping is keyed by the envelope identity (see ``_smtp_envelope_destinations``),
+    never by the raw configured string, so comparing the two textually is not enough. Each
+    refusal is paired back to its configured destination through the message's own extraction.
+    A refusal that cannot be attributed is kept in its envelope form: it must never be silently
+    reinterpreted as an accepted recipient.
+    """
+    mapping: dict[str, str] = {}
+    envelope = _smtp_envelope_destinations(message)
+    if envelope and len(envelope) == len(config.smtp_to):
+        for configured, envelope_address in zip(config.smtp_to, envelope):
+            if envelope_address:
+                mapping.setdefault(envelope_address.casefold(), configured)
+    else:
+        # Defensive fallback for a message whose extraction cannot be paired positionally with
+        # the configured list (a configured string the header parser splits or drops): parse
+        # each configured address on its own, and keep the two raw strings matchable too.
+        for configured in config.smtp_to:
+            mapping.setdefault(str(configured).casefold(), configured)
+            parsed = [address for _, address in getaddresses([configured])]
+            if len(parsed) == 1 and parsed[0]:
+                mapping.setdefault(parsed[0].casefold(), configured)
+    identities: list[str] = []
+    for address in refused_addresses:
+        identity = mapping.get(str(address).casefold(), str(address))
+        if identity not in identities:
+            identities.append(identity)
+    return tuple(identities)
+
+
 def send_email_result(
     config: EmailConfig,
     subject: str,
@@ -4530,7 +4868,74 @@ def send_email_result(
             else:
                 checks.append("Authentification non requise")
             stage = "delivery"
-            client.send_message(message)
+            refused = client.send_message(message)
+            if isinstance(refused, dict) and refused:
+                # smtplib returns the refused recipients whenever at least one OTHER recipient
+                # was accepted; an all-refused message raises SMTPRecipientsRefused instead and
+                # keeps the historical total-failure handling above. The mapping is keyed by the
+                # envelope address smtplib derived from the headers (some configured forms are
+                # normalized there), so every refusal is first attributed back to the configured
+                # destination it belongs to -- the identity persisted and re-matched on resume.
+                # An unattributable refusal is kept verbatim, never folded into a success. The
+                # refused destinations are private retry state: they never appear in the public
+                # message or checks.
+                refused_addresses = _smtp_refused_recipient_identities(
+                    config, message, tuple(str(address) for address in refused)
+                )
+                permanent_addresses = _smtp_refused_recipient_identities(
+                    config,
+                    message,
+                    tuple(
+                        str(address)
+                        for address, disposition in refused.items()
+                        if isinstance(disposition, tuple)
+                        and disposition
+                        and isinstance(disposition[0], int)
+                        and disposition[0] >= 500
+                    ),
+                )
+                permanent_folded = {
+                    address.casefold() for address in permanent_addresses
+                }
+                refused_folded = {
+                    str(address).casefold() for address in refused
+                }
+                envelope = _smtp_envelope_destinations(message)
+                if envelope:
+                    accepted_count = sum(
+                        1
+                        for address in envelope
+                        if address.casefold() not in refused_folded
+                    )
+                else:
+                    accepted_count = max(0, len(config.smtp_to) - len(refused_addresses))
+                checks.extend(
+                    (
+                        (
+                            f"Message accepté par le serveur SMTP pour {accepted_count} "
+                            "destinataire(s)"
+                        ),
+                        (
+                            f"{len(refused_addresses)} destinataire(s) refusé(s) : "
+                            "reprise programmée sans renvoi aux acceptés"
+                        ),
+                    )
+                )
+                return SmtpResult(
+                    True,
+                    "Email partiellement accepté par le serveur SMTP "
+                    "(destinataires refusés en reprise).",
+                    tuple(checks),
+                    error_code="smtp_partial_delivery",
+                    retryable=any(
+                        address.casefold() not in permanent_folded
+                        for address in refused_addresses
+                    ),
+                    transport=EMAIL_TRANSPORT_SMTP,
+                    delivery_confirmed=False,
+                    refused_recipients=refused_addresses,
+                    permanent_refusals=permanent_addresses,
+                )
             checks.extend(
                 (
                     "Expéditeur et destinataire acceptés",
@@ -4611,6 +5016,13 @@ def send_email(
     return send_email_result(config, subject, text_body, html_body).sent
 
 
+# The boolean seam below stays available for tests/embedders that replace send_email() with a
+# local relay or dry run; this module-level reference recognizes the real implementation so the
+# production SMTP path can keep the structured result instead of flattening it back to a bool
+# (a partially accepted send must not be reported as a complete success).
+_SEND_EMAIL_ORIGINAL = send_email
+
+
 def deliver_email_result(
     config: EmailConfig,
     subject: str,
@@ -4619,9 +5031,11 @@ def deliver_email_result(
 ) -> SmtpResult:
     """Deliver from collectors while retaining the legacy SMTP seam used by integrations.
 
-    Microsoft 365 uses the structured result directly so retry metadata is durable. SMTP keeps
-    the historical ``send_email`` boolean seam, which preserves existing tests and embedders that
-    replace that function for a local relay or dry run.
+    Microsoft 365 uses the structured result directly so retry metadata is durable. SMTP uses the
+    structured result too -- partial refusals, their per-recipient retry progress and the retry
+    metadata must survive -- and only falls back to the historical ``send_email`` boolean seam
+    when it has been replaced (existing tests and embedders that swap it for a local relay or a
+    dry run keep working unchanged).
     """
     transport = config.transport
     if isinstance(transport, str) and transport not in {
@@ -4630,6 +5044,8 @@ def deliver_email_result(
     }:
         return send_email_result(config, subject, text_body, html_body)
     if transport == EMAIL_TRANSPORT_MICROSOFT365:
+        return send_email_result(config, subject, text_body, html_body)
+    if send_email is _SEND_EMAIL_ORIGINAL:
         return send_email_result(config, subject, text_body, html_body)
     sent = send_email(config, subject, text_body, html_body)
     return SmtpResult(
@@ -4736,6 +5152,30 @@ def send_test_email_result(
         "".join(html_parts),
         force=True,
     )
+    if result.sent and result.refused_recipients:
+        # A partially accepted test email stays partial: this stateless path (--test-email and the
+        # admin test endpoint) creates no outbox entry, so it must neither claim a full success
+        # nor promise a retry that will never run. Refused destinations stay in the private
+        # fields; the diagnostics only carry counts and never an address or provider text.
+        checks = tuple(
+            check for check in result.checks if "reprise programmée" not in check
+        )
+        checks += (
+            f"{len(result.refused_recipients)} destinataire(s) refusé(s) par le serveur SMTP.",
+            "Parcours de test : aucune reprise n'est programmée pour les destinataires refusés.",
+        )
+        return SmtpResult(
+            True,
+            "Email de test partiellement accepté : certains destinataires ont été refusés.",
+            checks,
+            error_code=result.error_code,
+            retryable=result.retryable,
+            transport=result.transport,
+            provider_status=result.provider_status,
+            delivery_confirmed=False,
+            refused_recipients=result.refused_recipients,
+            permanent_refusals=result.permanent_refusals,
+        )
     if result.sent:
         return SmtpResult(
             True,
@@ -4752,6 +5192,11 @@ def send_test_email_result(
 
 def send_test_email(config: EmailConfig) -> bool:
     result = send_test_email_result(config)
+    if result.sent and result.refused_recipients:
+        # Partial acceptance is not a success for a test whose whole point is validating the
+        # configured delivery path; the message is the neutral, address-free diagnostic.
+        print(result.message, file=sys.stderr)
+        return False
     if result.sent:
         print(f"Email de test envoyé à {', '.join(config.smtp_to)}.")
     else:

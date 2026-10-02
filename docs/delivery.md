@@ -312,6 +312,38 @@ not reuse operational recipients or credentials for a live test. Unit/mock
 OAuth/Graph success and Docker health do not prove tenant permission or mail
 delivery; real-tenant acceptance is a separate activation gate.
 
+### Partial SMTP delivery — rollback
+
+The F1 fix adds one optional field to outbox entries in `runtime/data/fortios-notify-history.json`:
+`remainingRecipients`, the destinations still owed after the SMTP server accepted only part of a
+batch. No migration is required in either direction:
+
+| Direction | Behaviour |
+| --- | --- |
+| New image reads an old history | Accepted as-is, never rewritten on read. An entry without `remainingRecipients` is a full-list pending event, exactly as before. |
+| Old image reads a history written by the new image | The extra field is ignored, but a pending **partial** entry is retried as a full-list send: it can resend to recipients the new image had already delivered to. |
+
+`remainingRecipients` stores destinations in their **configured** form: an SMTP refusal is keyed by
+the envelope identity (`smtplib` normalizes a quoted local part or an angle form) and is attributed
+back to the configured destination before the progress is written. When the field is present it
+must be a non-empty list of valid destinations (trimmed, no duplicates, same address rule as the
+settings lists). A present-but-invalid value (`null`, empty, malformed, padded, duplicated) does
+not become a full-list retry and is not resolved silently: like any other malformed notification
+history it is kept byte-identical and notifications fail closed until the operator reconciles it.
+
+Before rolling back to an image that predates the field:
+
+- preferred: let the current image finish the pending partial retries -- a partial entry normally
+  resolves on the next collection once the SMTP server accepts the destination -- then switch back;
+- otherwise keep delivery disabled in the restored deployment until it is re-upgraded, or accept
+  that pending partial entries may resend to already-accepted recipients;
+- never restore an older history file over an installation whose `sentKeys` already records
+  accepted sends: rewinding that file re-opens events that were delivered (the existing rule
+  "retain the current notification history rather than restoring an old checkpoint" applies to
+  this field too);
+- keep each version's history copy with its timestamped rollback directory, like
+  `notification-settings.json`, so a later re-upgrade can restore progress instead of replaying it.
+
 ### Container image security (Trivy) — rollback
 
 Rolling back an image that carries the container-security ingestion must restore, together with the
