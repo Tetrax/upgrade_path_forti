@@ -323,6 +323,14 @@ batch. No migration is required in either direction:
 | New image reads an old history | Accepted as-is, never rewritten on read. An entry without `remainingRecipients` is a full-list pending event, exactly as before. |
 | Old image reads a history written by the new image | The extra field is ignored, but a pending **partial** entry is retried as a full-list send: it can resend to recipients the new image had already delivered to. |
 
+`remainingRecipients` stores destinations in their **configured** form: an SMTP refusal is keyed by
+the envelope identity (`smtplib` normalizes a quoted local part or an angle form) and is attributed
+back to the configured destination before the progress is written. When the field is present it
+must be a non-empty list of valid destinations (trimmed, no duplicates, same address rule as the
+settings lists). A present-but-invalid value (`null`, empty, malformed, padded, duplicated) does
+not become a full-list retry and is not resolved silently: like any other malformed notification
+history it is kept byte-identical and notifications fail closed until the operator reconciles it.
+
 Before rolling back to an image that predates the field:
 
 - preferred: let the current image finish the pending partial retries -- a partial entry normally

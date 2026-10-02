@@ -313,7 +313,14 @@ A batch the SMTP server accepts for only **part** of its recipients is not a suc
 refused-recipient mapping is kept as `remainingRecipients` on the outbox entry, the diagnostic
 reports a partial acceptance instead of claiming every destination was accepted, `sentKeys` is not
 written and the entry stays in the outbox, so a later collection retries the refused destinations
-only -- a recipient already accepted is never sent the same event again. Retries use
+only -- a recipient already accepted is never sent the same event again. The SMTP refusal mapping
+is keyed by the envelope identity `smtplib` derives from the message (it normalizes an accepted
+configured form such as `"bob"@example.invalid` or `<bob@example.invalid>` to
+`bob@example.invalid`), so each refusal is attributed back to the configured destination it belongs
+to before any progress is written: `remainingRecipients` stores that configured string and a
+refusal that cannot be attributed to any destination of the batch is never recorded as a complete
+acceptance -- the event stays owed with an explicit diagnostic
+(`lastErrorCode=smtp_partial_unattributed`) and a bounded cooldown. Retries use
 `remainingRecipients` intersected with the current configuration: a destination the operator
 removed stops being retried, a newly added one is never notified retroactively, and when every
 remaining destination was removed the event is resolved without any send (explicit diagnostic)
@@ -366,7 +373,14 @@ are released, not removed; both the main collector and compatibility recovery
 use this same retry mechanism. Claims held by a live worker remain exclusive;
 a crashed worker's claim becomes reclaimable after the existing 600-second TTL.
 A partially accepted send adds the optional `remainingRecipients` field: the
-destinations still owed after the server accepted the rest of the batch.
+destinations still owed after the server accepted the rest of the batch. Its
+**absence** is the legacy shape (a full-list pending event); when the field is
+present it must be a non-empty list of valid destinations -- the same address
+rule as the settings lists (trimmed, no duplicate). A present value that is
+`null`, malformed, padded or duplicated is an invalid state, kept byte-identical
+with notifications failing closed exactly like any other malformed history: it
+is never read back as a full-list retry (which could resend to recipients already
+accepted) and never silently resolved without a send.
 
 - Microsoft 365 invalid credentials, permission/consent failures and invalid configuration:
   300-second cooldown; an operator must fix the cause.
@@ -378,14 +392,19 @@ destinations still owed after the server accepted the rest of the batch.
   rather than overflowing the outbox or silently retrying after an hour.
 - SMTP collector delivery keeps a next-run retry for transient failures. A **partial** acceptance
   (the server accepted at least one recipient and refused others) records the refused destinations
-  in the outbox `remainingRecipients` field and retries only them; the accepted destinations are
-  never resent. A refusal subset that is entirely permanent (5xx) keeps the existing bounded
-  cooldown (`nextAttemptAt`, 300 seconds) with `lastErrorCode=smtp_partial_delivery`, so a
-  permanently refused destination is diagnosed and never abandoned silently nor retried in a tight
-  loop. A total refusal (every recipient refused) keeps the historical all-or-nothing failure
-  handling. Structured SMTP test results distinguish permanent authentication/sender/recipient
-  refusals, but do not change the historical collector retry policy. There is no in-process
-  infinite retry loop.
+  -- attributed back to their configured form -- in the outbox `remainingRecipients` field and
+  retries only them; the accepted destinations are never resent. A refusal subset that is entirely
+  permanent (5xx) keeps the existing bounded cooldown (`nextAttemptAt`, 300 seconds) with
+  `lastErrorCode=smtp_partial_delivery`, so a permanently refused destination is diagnosed and
+  never abandoned silently nor retried in a tight loop. An unattributable refusal keeps the entry
+  owed with `lastErrorCode=smtp_partial_unattributed` and the same bounded cooldown instead of
+  being folded into a success. A total refusal (every recipient refused) keeps the historical
+  all-or-nothing failure handling. Structured SMTP test results distinguish permanent
+  authentication/sender/recipient refusals, but do not change the historical collector retry
+  policy. The stateless test paths (`--test-email`, admin test email) create no outbox entry: a
+  partially accepted test email keeps its partial outcome, reports a neutral diagnostic (counts
+  only, no address) without promising a retry that would not run, and the CLI reports it as a
+  non-success. There is no in-process infinite retry loop.
 - Switching transports makes entries deferred by the previous provider eligible
   for the next run, without stealing live claims or changing deduplication keys.
 

@@ -35,7 +35,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from email import policy as email_policy
 from email.message import EmailMessage
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -2043,19 +2043,30 @@ def _is_valid_outbox_entry(entry: Any) -> bool:
     ):
         return False
     # Partial-delivery progress (optional, absent on legacy entries): the destinations still
-    # owed a retry after a partially accepted send. A present value must be a non-empty list of
-    # non-empty strings -- an empty list would describe a delivery with nowhere left to go, which
-    # the engine resolves explicitly instead of persisting.
-    remaining_recipients = entry.get("remainingRecipients")
-    if remaining_recipients is not None and (
-        not isinstance(remaining_recipients, list)
-        or not remaining_recipients
-        or not all(
-            isinstance(address, str) and address.strip()
-            for address in remaining_recipients
-        )
-    ):
-        return False
+    # owed a retry after a partially accepted send. The field's *absence* is the legacy shape
+    # (a full-list pending event); a present value must be a non-empty list of valid configured
+    # destinations -- the same address rule as the settings lists (trimmed, no duplicate) --
+    # because those strings are persisted across restarts, re-sent as-is and intersected with
+    # the current configuration on resume. null, empty, padded, malformed or duplicated values
+    # are rejected so a corrupted progress can never be read back as a full-list retry (which
+    # would resend to recipients already accepted) or silently resolved without a send: the
+    # state file is kept byte-identical and notifications suspend instead.
+    if "remainingRecipients" in entry:
+        remaining_recipients = entry["remainingRecipients"]
+        if not isinstance(remaining_recipients, list) or not remaining_recipients:
+            return False
+        seen_remaining: set[str] = set()
+        for address in remaining_recipients:
+            if (
+                not isinstance(address, str)
+                or address != address.strip()
+                or not _EMAIL_ADDRESS_RE.fullmatch(address)
+            ):
+                return False
+            folded_address = address.casefold()
+            if folded_address in seen_remaining:
+                return False
+            seen_remaining.add(folded_address)
     # must be both-null (unclaimed) or both-set (claimed) -- never just one
     return (claimed_by is None) == (claimed_at is None)
 
@@ -2572,6 +2583,8 @@ def record_partial_delivery(
     refused_folded = {address.casefold() for address in refused_recipients}
     permanent_folded = {address.casefold() for address in permanent_refusals}
     transient = refused_folded - permanent_folded
+    batch_folded = {address.casefold() for address in recipients}
+    unattributed = refused_folded - batch_folded
     failed_transport = transport if transport in {
         EMAIL_TRANSPORT_SMTP,
         EMAIL_TRANSPORT_MICROSOFT365,
@@ -2585,6 +2598,25 @@ def record_partial_delivery(
                 continue
             if entry.get("claimedBy") != claimant:
                 continue  # another (newer) attempt owns this entry now
+            if unattributed:
+                # A refusal matching none of the destinations this batch actually attempted
+                # cannot be attributed to a destination: the entry must never be recorded as
+                # fully delivered. It stays owed untouched, diagnosed with a bounded cooldown,
+                # instead of being silently dropped as if everyone had accepted. (Capture-side
+                # attribution makes this unreachable through a real SMTP dialogue; the guard is
+                # deliberate defense so an unmatched refusal can never mean complete success.)
+                entry["claimedBy"] = None
+                entry["claimedAt"] = None
+                entry["lastTransport"] = failed_transport
+                entry["lastErrorCode"] = "smtp_partial_unattributed"
+                next_attempt = now_dt + dt.timedelta(
+                    seconds=PERMANENT_RETRY_COOLDOWN_SECONDS
+                )
+                entry["nextAttemptAt"] = (
+                    next_attempt.isoformat().replace("+00:00", "Z")
+                )
+                changed = True
+                continue
             current = entry.get("remainingRecipients")
             target = tuple(current) if current else tuple(recipients)
             # What stays owed is exactly what the server refused on this attempt; the destinations
@@ -4688,6 +4720,58 @@ def _build_smtp_message(
     return message
 
 
+def _smtp_envelope_destinations(message: Any) -> tuple[str, ...]:
+    """The recipient list ``smtplib.SMTP.send_message()`` derives for this message.
+
+    ``send_message`` extracts the SMTP envelope from the To/Cc/Bcc headers through
+    ``email.utils.getaddresses()``, which rewrites some header-level address forms: a quoted local
+    part (``"bob"@example.invalid``) loses its quotes and an angle address
+    (``<bob@example.invalid>``) loses its brackets -- both become ``bob@example.invalid``. Both
+    forms are accepted by the settings validation, so reproducing this exact extraction is what
+    lets an SMTP refusal key be attributed back to the destination actually configured.
+    """
+    fields = [
+        field
+        for field in (message.get(header) for header in ("To", "Cc", "Bcc"))
+        if field is not None
+    ]
+    return tuple(address for _, address in getaddresses([str(field) for field in fields]))
+
+
+def _smtp_refused_recipient_identities(
+    config: EmailConfig, message: Any, refused_addresses: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Rewrite SMTP-envelope refusals as the configured destinations they belong to.
+
+    The refused mapping is keyed by the envelope identity (see ``_smtp_envelope_destinations``),
+    never by the raw configured string, so comparing the two textually is not enough. Each
+    refusal is paired back to its configured destination through the message's own extraction.
+    A refusal that cannot be attributed is kept in its envelope form: it must never be silently
+    reinterpreted as an accepted recipient.
+    """
+    mapping: dict[str, str] = {}
+    envelope = _smtp_envelope_destinations(message)
+    if envelope and len(envelope) == len(config.smtp_to):
+        for configured, envelope_address in zip(config.smtp_to, envelope):
+            if envelope_address:
+                mapping.setdefault(envelope_address.casefold(), configured)
+    else:
+        # Defensive fallback for a message whose extraction cannot be paired positionally with
+        # the configured list (a configured string the header parser splits or drops): parse
+        # each configured address on its own, and keep the two raw strings matchable too.
+        for configured in config.smtp_to:
+            mapping.setdefault(str(configured).casefold(), configured)
+            parsed = [address for _, address in getaddresses([configured])]
+            if len(parsed) == 1 and parsed[0]:
+                mapping.setdefault(parsed[0].casefold(), configured)
+    identities: list[str] = []
+    for address in refused_addresses:
+        identity = mapping.get(str(address).casefold(), str(address))
+        if identity not in identities:
+            identities.append(identity)
+    return tuple(identities)
+
+
 def send_email_result(
     config: EmailConfig,
     subject: str,
@@ -4788,26 +4872,43 @@ def send_email_result(
             if isinstance(refused, dict) and refused:
                 # smtplib returns the refused recipients whenever at least one OTHER recipient
                 # was accepted; an all-refused message raises SMTPRecipientsRefused instead and
-                # keeps the historical total-failure handling above. The refused destinations are
-                # private retry state: they never appear in the public message or checks.
-                refused_addresses = tuple(str(address) for address in refused)
-                permanent_addresses = tuple(
-                    str(address)
-                    for address, disposition in refused.items()
-                    if isinstance(disposition, tuple)
-                    and disposition
-                    and isinstance(disposition[0], int)
-                    and disposition[0] >= 500
+                # keeps the historical total-failure handling above. The mapping is keyed by the
+                # envelope address smtplib derived from the headers (some configured forms are
+                # normalized there), so every refusal is first attributed back to the configured
+                # destination it belongs to -- the identity persisted and re-matched on resume.
+                # An unattributable refusal is kept verbatim, never folded into a success. The
+                # refused destinations are private retry state: they never appear in the public
+                # message or checks.
+                refused_addresses = _smtp_refused_recipient_identities(
+                    config, message, tuple(str(address) for address in refused)
+                )
+                permanent_addresses = _smtp_refused_recipient_identities(
+                    config,
+                    message,
+                    tuple(
+                        str(address)
+                        for address, disposition in refused.items()
+                        if isinstance(disposition, tuple)
+                        and disposition
+                        and isinstance(disposition[0], int)
+                        and disposition[0] >= 500
+                    ),
                 )
                 permanent_folded = {
                     address.casefold() for address in permanent_addresses
                 }
-                accepted_count = sum(
-                    1
-                    for address in config.smtp_to
-                    if address.casefold()
-                    not in {item.casefold() for item in refused_addresses}
-                )
+                refused_folded = {
+                    str(address).casefold() for address in refused
+                }
+                envelope = _smtp_envelope_destinations(message)
+                if envelope:
+                    accepted_count = sum(
+                        1
+                        for address in envelope
+                        if address.casefold() not in refused_folded
+                    )
+                else:
+                    accepted_count = max(0, len(config.smtp_to) - len(refused_addresses))
                 checks.extend(
                     (
                         (
@@ -5051,6 +5152,30 @@ def send_test_email_result(
         "".join(html_parts),
         force=True,
     )
+    if result.sent and result.refused_recipients:
+        # A partially accepted test email stays partial: this stateless path (--test-email and the
+        # admin test endpoint) creates no outbox entry, so it must neither claim a full success
+        # nor promise a retry that will never run. Refused destinations stay in the private
+        # fields; the diagnostics only carry counts and never an address or provider text.
+        checks = tuple(
+            check for check in result.checks if "reprise programmée" not in check
+        )
+        checks += (
+            f"{len(result.refused_recipients)} destinataire(s) refusé(s) par le serveur SMTP.",
+            "Parcours de test : aucune reprise n'est programmée pour les destinataires refusés.",
+        )
+        return SmtpResult(
+            True,
+            "Email de test partiellement accepté : certains destinataires ont été refusés.",
+            checks,
+            error_code=result.error_code,
+            retryable=result.retryable,
+            transport=result.transport,
+            provider_status=result.provider_status,
+            delivery_confirmed=False,
+            refused_recipients=result.refused_recipients,
+            permanent_refusals=result.permanent_refusals,
+        )
     if result.sent:
         return SmtpResult(
             True,
@@ -5067,6 +5192,11 @@ def send_test_email_result(
 
 def send_test_email(config: EmailConfig) -> bool:
     result = send_test_email_result(config)
+    if result.sent and result.refused_recipients:
+        # Partial acceptance is not a success for a test whose whole point is validating the
+        # configured delivery path; the message is the neutral, address-free diagnostic.
+        print(result.message, file=sys.stderr)
+        return False
     if result.sent:
         print(f"Email de test envoyé à {', '.join(config.smtp_to)}.")
     else:

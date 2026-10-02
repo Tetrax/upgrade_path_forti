@@ -21,7 +21,7 @@ import tempfile
 import threading
 import unittest
 from collections.abc import Iterator
-from contextlib import contextmanager, redirect_stderr
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from email import policy
 from email.parser import BytesParser
 from io import StringIO
@@ -235,6 +235,92 @@ class LoopbackPartialSmtpTests(unittest.TestCase):
         self.assertEqual(_PartialSmtpHandler.messages[0][0], (A, B))
 
 
+class RefusalIdentityTests(unittest.TestCase):
+    """A refusal is keyed by the SMTP envelope identity, not the configured string.
+
+    ``smtplib.send_message`` derives the envelope from the To header through
+    ``email.utils.getaddresses``, which normalizes ``"bob"@example.invalid`` and
+    ``<bob@example.invalid>`` to ``bob@example.invalid``. Matching the refusal against the raw
+    configured string used to fail for those (accepted by the settings validation) forms, and the
+    unmatched refusal was then silently finalized: outbox cleared, sentKeys written, Bob lost.
+    """
+
+    def test_quoted_and_angle_envelope_forms_map_back_to_the_configured_address(self) -> None:
+        for weird in ('"bob"@example.invalid', '<bob@example.invalid>'):
+            with self.subTest(address=weird), partial_smtp_server({B: 450}) as port:
+                result = notify.send_email_result(
+                    smtp_config(port, (A, weird)), "Sujet", "Corps", None
+                )
+
+                self.assertTrue(result.sent)
+                self.assertEqual(
+                    result.refused_recipients,
+                    (weird,),
+                    "the refusal must be attributed to the configured destination",
+                )
+                self.assertEqual(result.permanent_refusals, ())
+                self.assertNotIn(weird, result.message)
+                self.assertNotIn(weird, " ".join(result.checks))
+
+    def test_refused_quoted_recipient_survives_restart_and_resumes_alone(self) -> None:
+        for weird in ('"bob"@example.invalid', '<bob@example.invalid>'):
+            with self.subTest(recipient=weird), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "history.json"
+                settings = test_settings(recipients=(A, weird))
+                claimed = notify.enqueue_and_claim(
+                    path, [cve_event()], claimant="run-1", settings=settings
+                )
+
+                with partial_smtp_server({B: 450}) as port:
+                    config = smtp_config(port, (A, weird))
+                    notify.deliver_notification_batches(
+                        path,
+                        claimed,
+                        claimant="run-1",
+                        settings=settings,
+                        config=config,
+                        run_timestamp=RUN_TS,
+                    )
+                    self.assertEqual(
+                        _PartialSmtpHandler.messages[0][0],
+                        (A,),
+                        "only Alice accepted the first pass",
+                    )
+
+                state = notify.load_notify_state(path)
+                self.assertEqual(len(state["outbox"]), 1, "the refused event stays owed")
+                entry = state["outbox"][0]
+                self.assertEqual(entry["remainingRecipients"], [weird])
+                self.assertIsNone(entry["claimedBy"])
+                self.assertNotIn(CVE_KEY, state["sentKeys"])
+
+                reclaimed = notify.enqueue_and_claim(
+                    path, [], claimant="run-2", settings=settings
+                )
+                self.assertEqual([event.dedup_key for event in reclaimed], [CVE_KEY])
+                self.assertEqual(reclaimed[0].remaining_recipients, (weird,))
+
+                with partial_smtp_server({}) as port:
+                    config = smtp_config(port, (A, weird))
+                    notify.deliver_notification_batches(
+                        path,
+                        reclaimed,
+                        claimant="run-2",
+                        settings=settings,
+                        config=config,
+                        run_timestamp=RUN_TS,
+                    )
+                    self.assertEqual(
+                        _PartialSmtpHandler.messages[0][0],
+                        (B,),
+                        "the resumed send reaches Bob's mailbox only",
+                    )
+
+                final = notify.load_notify_state(path)
+                self.assertEqual(final["outbox"], [])
+                self.assertIn(CVE_KEY, final["sentKeys"])
+
+
 class PartialOutboxLifecycleTests(unittest.TestCase):
     def _seed_partial(
         self, path: Path, *, refused: tuple[str, ...] = (B,)
@@ -407,6 +493,70 @@ class PartialOutboxLifecycleTests(unittest.TestCase):
             entry = notify.load_notify_state(path)["outbox"][0]
             self.assertIsNotNone(entry["nextAttemptAt"])
             self.assertNotIn("remainingRecipients", entry)
+
+    def test_unattributed_refusal_is_never_recorded_as_complete_success(self) -> None:
+        """A refusal matching none of the batch's destinations must never finalize the event.
+
+        After capture-side attribution this cannot happen through a real SMTP dialogue; the
+        contract is nonetheless fail-closed: the entry stays owed (diagnosed) instead of being
+        silently dropped as if everyone had accepted.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "history.json"
+            settings = test_settings()
+            event = cve_event()
+            claimed = notify.enqueue_and_claim(
+                path, [event], claimant="run-1", settings=settings,
+                now="2026-07-17T07:00:00Z",
+            )
+
+            notify.record_partial_delivery(
+                path,
+                "run-1",
+                events=claimed,
+                recipients=(A, B),
+                refused_recipients=("ghost@example.invalid",),
+                permanent_refusals=(),
+                transport="smtp",
+                now="2026-07-17T07:00:00Z",
+            )
+
+            state = notify.load_notify_state(path)
+            self.assertEqual(len(state["outbox"]), 1)
+            entry = state["outbox"][0]
+            self.assertNotIn(CVE_KEY, state["sentKeys"])
+            self.assertEqual(entry["lastErrorCode"], "smtp_partial_unattributed")
+            self.assertNotIn("remainingRecipients", entry)
+            self.assertIsNotNone(entry["nextAttemptAt"])
+
+    def test_a_refusal_outside_an_entry_target_still_finalizes_that_entry(self) -> None:
+        """One event's owed set is a subset: a refusal for another destination does not keep it back."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "history.json"
+            settings = test_settings(recipients=(A, B, C))
+            event = cve_event()
+            claimed = notify.enqueue_and_claim(
+                path, [event], claimant="seed", settings=settings,
+                now="2026-07-17T07:00:00Z",
+            )
+            state = notify.load_notify_state(path)
+            state["outbox"][0]["remainingRecipients"] = [B]
+            fw.write_json(path, state)
+
+            notify.record_partial_delivery(
+                path,
+                "seed",
+                events=claimed,
+                recipients=(A, B, C),
+                refused_recipients=(C,),
+                permanent_refusals=(),
+                transport="smtp",
+                now="2026-07-17T07:01:00Z",
+            )
+
+            state = notify.load_notify_state(path)
+            self.assertEqual(state["outbox"], [], "Bob's retry was accepted: the event is done")
+            self.assertIn(CVE_KEY, state["sentKeys"])
 
 
 class PartialBatchPartitionTests(unittest.TestCase):
@@ -768,6 +918,35 @@ class CollectorPartialDeliveryTests(unittest.TestCase):
             self.assertEqual(len(run.messages), 1)
             self.assertEqual(run.outbox_keys(), [CVE_KEY])
 
+    def test_quoted_configured_address_resumes_alone_through_the_collector(self) -> None:
+        """The envelope identity is normalized by the header: the retry must still be Bob-only."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run = _DeliveryRun(Path(tmp), refuse_to=((B, 450),))
+            run.write_settings(
+                settings_payload(releases=False, recipients=(A, '"bob"@example.invalid'))
+            )
+            run.seed(catalog(fortios=("8.0.0",)))
+            self.assertEqual(run.run(), 0)
+            run.seed(catalog(fortios=("8.0.0", "8.0.1"), cves=(cve_payload(),)))
+
+            self.assertEqual(run.run(), 0)
+            self.assertEqual(run.sent, [(A,)], "only Alice accepted")
+            state = run.state()
+            self.assertEqual(
+                [entry["dedupKey"] for entry in state["outbox"]], [CVE_KEY]
+            )
+            entry = state["outbox"][0]
+            self.assertEqual(entry["remainingRecipients"], ['"bob"@example.invalid'])
+            self.assertNotIn(CVE_KEY, state["sentKeys"])
+
+            run.refuse_to = {}
+            self.assertEqual(run.run(), 0)
+            self.assertEqual(run.sent[-1], (B,), "only Bob's mailbox is retried")
+            self.assertEqual(len(run.messages), 2)
+            final = run.state()
+            self.assertEqual(final["outbox"], [])
+            self.assertIn(CVE_KEY, final["sentKeys"])
+
 
 class TransportChangeTests(unittest.TestCase):
     def test_switching_to_graph_retries_only_the_pending_recipients(self) -> None:
@@ -897,7 +1076,20 @@ class LegacyAndCorruptionTests(unittest.TestCase):
             )
 
     def test_malformed_remaining_recipients_are_rejected_without_mutation(self) -> None:
-        for bad_value in ([], "bob@example.invalid", [1], [""], [None], [A, 2], {}):
+        for bad_value in (
+            [],
+            "bob@example.invalid",
+            [1],
+            [""],
+            [None],
+            [A, 2],
+            {},
+            None,
+            ["not-an-address"],
+            [" bob@example.invalid "],
+            [B, B],
+            ["BOB@example.invalid", B],
+        ):
             with self.subTest(value=bad_value), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / "history.json"
                 entry = {
@@ -922,6 +1114,84 @@ class LegacyAndCorruptionTests(unittest.TestCase):
                 self.assertEqual(
                     list(path.parent.glob(f"{path.name}.corrupt-*")), []
                 )
+
+    def test_valid_additional_address_forms_still_load_and_are_claimed(self) -> None:
+        """Quoted/angle forms are valid configured destinations: persisted progress keeps them."""
+        for value in (['"bob"@example.invalid'], ["<bob@example.invalid>"], [B]):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "history.json"
+                entry = {
+                    "category": "CRITICAL",
+                    "dedupKey": LEGACY_KEY,
+                    "summary": "x",
+                    "queuedAt": "2026-07-17T07:00:00Z",
+                    "claimedBy": None,
+                    "claimedAt": None,
+                    "remainingRecipients": value,
+                }
+                path.write_text(
+                    json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}),
+                    encoding="utf-8",
+                )
+
+                state = notify.load_notify_state(path)
+                self.assertEqual(state["outbox"][0]["remainingRecipients"], value)
+                claimed = notify.enqueue_and_claim(
+                    path, [], claimant="run-1", settings=test_settings()
+                )
+                self.assertEqual(
+                    claimed[0].remaining_recipients, tuple(value)
+                )
+
+    def test_main_suspends_notifications_on_invalid_partial_progress_preserving_bytes(
+        self,
+    ) -> None:
+        """An otherwise-valid entry with only `remainingRecipients` malformed: fail-closed."""
+        for bad_value in (None, ["not-an-address"], [B, B]):
+            with self.subTest(value=bad_value), tempfile.TemporaryDirectory() as tmp:
+                base_path = Path(tmp) / "state.json"
+                fw.write_json(base_path, fw.normalize_state({}))
+                history_path = Path(tmp) / "notify-history.json"
+                entry = {
+                    "category": "CRITICAL",
+                    "dedupKey": LEGACY_KEY,
+                    "summary": "x",
+                    "queuedAt": "2026-07-17T07:00:00Z",
+                    "claimedBy": None,
+                    "claimedAt": None,
+                    "remainingRecipients": bad_value,
+                }
+                history_path.write_text(
+                    json.dumps({"sentKeys": {}, "outbox": [entry], "eolState": {}}),
+                    encoding="utf-8",
+                )
+                raw = history_path.read_bytes()
+
+                environment = {
+                    "FORTIOS_EMAIL_ENABLED": "true",
+                    "FORTIOS_SMTP_HOST": "smtp.example.com",
+                    "FORTIOS_SMTP_FROM": "fortios@example.com",
+                    "FORTIOS_SMTP_TO": "alice@example.com",
+                }
+                stderr = StringIO()
+                with patch.dict(os.environ, environment, clear=False), patch(
+                    "smtplib.SMTP", side_effect=ConnectionRefusedError("refused")
+                ), redirect_stderr(stderr):
+                    exit_code = fw.main(
+                        [
+                            "--skip-network",
+                            "--base", str(base_path), "--output", str(base_path),
+                            "--report", str(Path(tmp) / "report.md"),
+                            "--health-output", str(Path(tmp) / "health.json"),
+                            "--notify-history-output", str(history_path),
+                        ]
+                    )
+                self.assertEqual(exit_code, 0, "collection still succeeds")
+                self.assertEqual(history_path.read_bytes(), raw)
+                self.assertEqual(
+                    list(Path(tmp).glob("notify-history.json.corrupt-*")), []
+                )
+                self.assertIn("notification", stderr.getvalue().lower())
 
     def test_main_completes_and_preserves_a_malformed_partial_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -966,6 +1236,63 @@ class LegacyAndCorruptionTests(unittest.TestCase):
             self.assertEqual(
                 list(Path(tmp).glob("notify-history.json.corrupt-*")), []
             )
+
+
+class TestEmailPartialOutcomeTests(unittest.TestCase):
+    """The admin test email and `--test-email` must keep a partial outcome truthful.
+
+    This path is deliberately stateless (no outbox entry is ever created), so it must report the
+    partial acceptance, never claim a full success, and never promise a retry that will not run.
+    """
+
+    def test_partial_test_email_keeps_the_refusal_without_a_retry_promise(self) -> None:
+        with partial_smtp_server({B: 450}) as port:
+            result = notify.send_test_email_result(smtp_config(port))
+            stdout, stderr = StringIO(), StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                boolean_result = notify.send_test_email(smtp_config(port))
+
+        self.assertTrue(result.sent, "at least one recipient accepted the test email")
+        self.assertEqual(result.refused_recipients, (B,))
+        self.assertEqual(result.permanent_refusals, ())
+        self.assertEqual(result.error_code, "smtp_partial_delivery")
+        self.assertIn("partiel", result.message.lower())
+        diagnostics = " ".join(result.checks)
+        for leak in (A, B):
+            self.assertNotIn(leak, result.message)
+            self.assertNotIn(leak, diagnostics)
+        self.assertNotIn("reprise programmée", diagnostics)
+        self.assertIn("aucune reprise", diagnostics)
+
+        self.assertFalse(boolean_result, "a partially accepted test email is not a success")
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("partiel", stderr.getvalue().lower())
+        for leak in (A, B):
+            self.assertNotIn(leak, stderr.getvalue())
+
+    def test_complete_and_single_recipient_test_emails_stay_unchanged(self) -> None:
+        with partial_smtp_server({}) as port:
+            result = notify.send_test_email_result(smtp_config(port))
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                boolean_result = notify.send_test_email(smtp_config(port))
+
+        self.assertTrue(result.sent)
+        self.assertEqual(result.message, "Email de test envoyé.")
+        self.assertEqual(result.refused_recipients, ())
+        self.assertTrue(boolean_result)
+        self.assertIn(
+            f"Email de test envoyé à {A}, {B}.", stdout.getvalue()
+        )
+
+        with partial_smtp_server({}) as port:
+            single = notify.send_test_email_result(
+                smtp_config(port), recipient="test-recipient@example.invalid"
+            )
+
+        self.assertTrue(single.sent)
+        self.assertEqual(single.message, "Email de test envoyé.")
+        self.assertEqual(single.refused_recipients, ())
 
 
 if __name__ == "__main__":
