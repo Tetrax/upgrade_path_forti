@@ -464,13 +464,15 @@ function advisoryMatchesVersionSimple(advisory, version) {
   return advisoryVersions(advisory).includes(version);
 }
 
-// Same range shape as scripts/fortios_watch.py's CVE collector: a branch with no from/to means
-// the whole train is affected (Fortinet's CVRF expresses that with a two-component ProductID).
+// Same range shape as scripts/fortios_watch.py's CVE collector (Fortinet CSAF): per-branch
+// bounds plus optional exact versions in `excluded`; a branch with no from/to means the whole
+// train is affected, minus anything in `excluded`.
 function cveMatchesVersion(cve, product, model, version) {
   return (cve.affected || []).some(range => {
     if (range.product !== product) return false;
     if (Array.isArray(range.models) && range.models.length && !range.models.includes(model)) return false;
     if (branchOf(version) !== range.branch) return false;
+    if (Array.isArray(range.excluded) && range.excluded.includes(version)) return false;
     if (!range.from && !range.to) return true;
     if (range.from && compareVersions(version, range.from) < 0) return false;
     if (range.to && compareVersions(version, range.to) > 0) return false;
