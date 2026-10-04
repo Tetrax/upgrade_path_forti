@@ -257,9 +257,9 @@ This document below therefore describes the Fortinet/CVE and system categories o
 | `releaseRecipients` | Dedicated release list, used only when `releaseRecipientsShared` is `false`; then it must not be empty. |
 
 `minimumSeverity` is a genuine threshold, applied before composition. The four accepted
-values are the severity levels Fortinet genuinely publishes, derived from the CVRF CVSS base
-score by `fortios_watch.cvss_severity()`; `unknown` (our own fallback for a CVE whose CVRF
-carries no base score) is deliberately **not** selectable and never reaches any threshold, so an
+values are the severity levels Fortinet genuinely publishes, derived from the CSAF CVSS base
+score by `fortios_watch.cvss_severity()`; `unknown` (our own fallback for a CVE whose CSAF
+export carries no base score) is deliberately **not** selectable and never reaches any threshold, so an
 unscored CVE is never presented as "at least Low". Comparison goes through an explicit hierarchy
 (`critical` 4 … `unknown` 0), never through string ordering. An unknown value is refused by the
 API (`400`) instead of falling back to `high`.
