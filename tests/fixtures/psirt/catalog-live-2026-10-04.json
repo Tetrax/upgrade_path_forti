@@ -1,658 +1,5 @@
 {
  "generatedAt": "2026-10-04T20:28:28Z",
- "products": [
-  {
-   "id": "fortigate-fortios",
-   "label": "FortiGate / FortiOS",
-   "models": [
-    {
-     "id": "FGT30D",
-     "label": "FortiGate-30D",
-     "firmwares": [
-      {
-       "version": "6.0.4",
-       "build": "-",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortigate/6.0.4/fortios-release-notes"
-       }
-      },
-      {
-       "version": "6.0.5",
-       "build": "-",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortigate/6.0.5/fortios-release-notes"
-       }
-      },
-      {
-       "version": "6.0.6",
-       "build": "-",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortigate/6.0.6/fortios-release-notes"
-       },
-       "maturity": "None"
-      }
-     ]
-    },
-    {
-     "id": "FGT30DPOE",
-     "label": "FortiGate-30DPOE",
-     "firmwares": [
-      {
-       "version": "6.0.4",
-       "build": "-",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortigate/6.0.4/fortios-release-notes"
-       }
-      },
-      {
-       "version": "6.0.5",
-       "build": "-",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortigate/6.0.5/fortios-release-notes"
-       }
-      },
-      {
-       "version": "6.0.6",
-       "build": "-",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortigate/6.0.6/fortios-release-notes"
-       },
-       "maturity": "None"
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "id": "fortianalyzer",
-   "label": "FortiAnalyzer",
-   "models": [
-    {
-     "id": "FAZALI",
-     "label": "FAZ_VM64_ALI",
-     "firmwares": [
-      {
-       "version": "6.4.0",
-       "build": "2002",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.0/release-notes"
-       }
-      },
-      {
-       "version": "6.4.1",
-       "build": "2072",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.1/release-notes"
-       }
-      },
-      {
-       "version": "6.4.2",
-       "build": "2122",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.2/release-notes"
-       }
-      }
-     ]
-    },
-    {
-     "id": "FAZAWS",
-     "label": "FAZ_VM64_AWSOnDemand",
-     "firmwares": [
-      {
-       "version": "6.4.0",
-       "build": "2002",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.0/release-notes"
-       }
-      },
-      {
-       "version": "6.4.1",
-       "build": "2072",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.1/release-notes"
-       }
-      },
-      {
-       "version": "6.4.2",
-       "build": "2122",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.2/release-notes"
-       }
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "id": "fortimanager",
-   "label": "FortiManager",
-   "models": [
-    {
-     "id": "FMGALI",
-     "label": "FMG_VM64_ALI",
-     "firmwares": [
-      {
-       "version": "6.4.0",
-       "build": "2002",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.0/release-notes"
-       }
-      },
-      {
-       "version": "6.4.1",
-       "build": "2072",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.1/release-notes"
-       }
-      },
-      {
-       "version": "6.4.2",
-       "build": "2122",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.2/release-notes"
-       }
-      }
-     ]
-    },
-    {
-     "id": "FMGGCP",
-     "label": "FMG_VM64_GCP",
-     "firmwares": [
-      {
-       "version": "6.4.0",
-       "build": "2002",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.0/release-notes"
-       }
-      },
-      {
-       "version": "6.4.1",
-       "build": "2072",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.1/release-notes"
-       }
-      },
-      {
-       "version": "6.4.2",
-       "build": "2122",
-       "notes": [],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.2/release-notes"
-       }
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "id": "forticlient",
-   "label": "FortiClient (Windows/macOS/Linux)",
-   "models": [
-    {
-     "id": "linux",
-     "label": "FortiClient (Linux)",
-     "firmwares": [
-      {
-       "version": "6.0.0",
-       "build": "0029",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.0/linux-release-notes"
-       }
-      },
-      {
-       "version": "6.0.1",
-       "build": "0048",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/linux-release-notes"
-       }
-      },
-      {
-       "version": "6.0.5",
-       "build": "0106",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.5/linux-release-notes"
-       }
-      }
-     ]
-    },
-    {
-     "id": "macos",
-     "label": "FortiClient (macOS)",
-     "firmwares": [
-      {
-       "version": "6.0.1",
-       "build": "0028",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/macos-release-notes"
-       }
-      },
-      {
-       "version": "6.0.4",
-       "build": "0079",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.4/macos-release-notes"
-       }
-      },
-      {
-       "version": "6.0.5",
-       "build": "0104",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.5/macos-release-notes"
-       }
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "id": "forticlient-ems",
-   "label": "FortiClient EMS",
-   "models": [
-    {
-     "id": "ems",
-     "label": "FortiClient EMS",
-     "firmwares": [
-      {
-       "version": "6.0.0",
-       "build": "0052",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.0/ems-release-notes"
-       }
-      },
-      {
-       "version": "6.0.1",
-       "build": "0077",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/ems-release-notes"
-       }
-      },
-      {
-       "version": "6.0.2",
-       "build": "0106",
-       "notes": [
-        "release-notes"
-       ],
-       "links": {
-        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.2/ems-release-notes"
-       }
-      }
-     ]
-    }
-   ]
-  }
- ],
- "paths": [
-  {
-   "id": "path-FGT90G-7.2.10-7.4.11",
-   "product": "fortigate-fortios",
-   "model": "FGT90G",
-   "from": "7.2.10",
-   "to": "7.4.11",
-   "hops": [
-    "7.2.10",
-    "7.4.8",
-    "7.4.11"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-09-09T08:34:54Z"
-  },
-  {
-   "id": "path-FGT40F-7.0.15-7.4.11",
-   "product": "fortigate-fortios",
-   "model": "FGT40F",
-   "from": "7.0.15",
-   "to": "7.4.11",
-   "hops": [
-    "7.0.15",
-    "7.2.10",
-    "7.4.8",
-    "7.4.11"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-10-04T13:30:42Z"
-  },
-  {
-   "id": "path-FGT60F-6.2.4-7.4.11",
-   "product": "fortigate-fortios",
-   "model": "FGT60F",
-   "from": "6.2.4",
-   "to": "7.4.11",
-   "hops": [
-    "6.2.4",
-    "6.2.6",
-    "6.2.9",
-    "6.2.11",
-    "6.4.11",
-    "7.0.12",
-    "7.0.14",
-    "7.2.10",
-    "7.4.8",
-    "7.4.11"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-07-09T14:52:15Z"
-  },
-  {
-   "id": "path-FGT60F-7.0.15-7.4.11",
-   "product": "fortigate-fortios",
-   "model": "FGT60F",
-   "from": "7.0.15",
-   "to": "7.4.11",
-   "hops": [
-    "7.0.15",
-    "7.2.10",
-    "7.4.8",
-    "7.4.11"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-09-28T17:24:14Z"
-  },
-  {
-   "id": "path-FGT80F-7.0.19-7.4.12",
-   "product": "fortigate-fortios",
-   "model": "FGT80F",
-   "from": "7.0.19",
-   "to": "7.4.12",
-   "hops": [
-    "7.0.19",
-    "7.2.13",
-    "7.4.12"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-07-09T14:59:29Z"
-  },
-  {
-   "id": "path-FGT80F-7.0.19-7.4.11",
-   "product": "fortigate-fortios",
-   "model": "FGT80F",
-   "from": "7.0.19",
-   "to": "7.4.11",
-   "hops": [
-    "7.0.19",
-    "7.2.13",
-    "7.4.11"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-07-09T15:15:13Z"
-  },
-  {
-   "id": "path-FGT70F-7.0.19-7.4.12",
-   "product": "fortigate-fortios",
-   "model": "FGT70F",
-   "from": "7.0.19",
-   "to": "7.4.12",
-   "hops": [
-    "7.0.19",
-    "7.2.13",
-    "7.4.12"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-07-09T15:44:24Z"
-  },
-  {
-   "id": "path-FGT71F-7.0.19-7.4.12",
-   "product": "fortigate-fortios",
-   "model": "FGT71F",
-   "from": "7.0.19",
-   "to": "7.4.12",
-   "hops": [
-    "7.0.19",
-    "7.2.13",
-    "7.4.12"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-07-09T15:49:06Z"
-  },
-  {
-   "id": "path-FGT71F-7.0.9-8.0.0",
-   "product": "fortigate-fortios",
-   "model": "FGT71F",
-   "from": "7.0.9",
-   "to": "8.0.0",
-   "hops": [
-    "7.0.9",
-    "7.0.11",
-    "7.2.6",
-    "7.2.8",
-    "7.2.10",
-    "7.4.8",
-    "7.6.6",
-    "8.0.0"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-07-09T15:56:12Z"
-  },
-  {
-   "id": "path-FGT90G-7.2.9-7.4.12",
-   "product": "fortigate-fortios",
-   "model": "FGT90G",
-   "from": "7.2.9",
-   "to": "7.4.12",
-   "hops": [
-    "7.2.9",
-    "7.2.11",
-    "7.4.11",
-    "7.4.12"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-07-09T16:16:12Z"
-  },
-  {
-   "id": "path-FGT90G-7.2.9-7.4.5",
-   "product": "fortigate-fortios",
-   "model": "FGT90G",
-   "from": "7.2.9",
-   "to": "7.4.5",
-   "hops": [
-    "7.2.9",
-    "7.4.5"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-07-09T16:17:25Z"
-  },
-  {
-   "id": "path-FLG-VM-7.2.9-7.2.12",
-   "product": "fortianalyzer",
-   "model": "FLG-VM",
-   "from": "7.2.9",
-   "to": "7.2.12",
-   "hops": [
-    "7.2.9",
-    "7.2.12"
-   ],
-   "source": "Fortinet Upgrade Path Tool public service",
-   "fetchedAt": "2026-07-09T20:07:31Z"
-  }
- ],
- "advisories": [
-  {
-   "id": "adv-option-allow-traffic-redirect-v-rifier-0a110869",
-   "createdAt": "2026-07-09T15:43:54Z",
-   "updatedAt": "2026-08-04T07:55:02Z",
-   "product": "fortigate-fortios",
-   "severity": "warning",
-   "title": "Option allow-traffic-redirect à vérifier",
-   "description": "Le paramètre par défaut de allow-traffic-redirect et ipv6-allow-traffic-redirect a été modifié : il passe de enable à disable.\n\nLa désactivation de ce paramètre garantit que le trafic arrivant sur une interface et redirigé en sortie sur cette même interface nécessite une règle firewall l’autorisant explicitement.",
-   "source": "Ingénieur SNS",
-   "minVersions": [
-    "8.0.0",
-    "7.6.5",
-    "7.4.10"
-   ],
-   "command": "config system global\n    set allow-traffic-redirect enable\n    set ipv6-allow-traffic-redirect enable\nend",
-   "behaviorChange": true,
-   "bugId": "1004258",
-   "bugVersion": "7.4.10, 7.6.5, 8.0.0"
-  },
-  {
-   "id": "adv-ssl-connection-is-blocked-cert-probe-failure-0ce06c86",
-   "createdAt": "2026-07-09T16:14:25Z",
-   "updatedAt": "2026-07-09T21:04:17Z",
-   "product": "fortigate-fortios",
-   "severity": "warning",
-   "title": "SSL connection is blocked (cert-probe-failure)",
-   "description": "Changement dans le fonctionnement de l'inspection SSL sur les profils par défaut. \n\n- Créer un nouveau profil ssl en clonant le profil par défaut utilisé et modifier en cli",
-   "source": "Ingénieur SNS",
-   "minVersions": [
-    "7.6.1",
-    "7.4.5",
-    "7.2.11"
-   ],
-   "command": "config firewall ssl-ssh-profile\nedit <name>\nconfig https\nset cert-probe-failure allow\nend\nend\nend",
-   "behaviorChange": true
-  },
-  {
-   "id": "adv-log-non-visible-en-gui-fortigate-59e91bd9",
-   "createdAt": "2026-07-09T19:55:05Z",
-   "updatedAt": "2026-07-09T20:30:15Z",
-   "product": "fortigate-fortios",
-   "severity": "info",
-   "title": "Log non visible en GUI Fortigate",
-   "description": "Avec un FAZ en 7.4.11 il n'est pas possible de voir les logs en GUI dans log & report",
-   "source": "Ingénieur SNS",
-   "versions": [
-    "7.4.12"
-   ],
-   "bugId": "1282986",
-   "bugVersion": "7.4.12"
-  }
- ],
- "compatibilities": [
-  {
-   "id": "compat-official-7.2.0",
-   "emsVersion": "7.2.0",
-   "clientVersions": [
-    "7.0.0",
-    "7.0.1",
-    "7.0.2",
-    "7.0.3",
-    "7.0.4",
-    "7.0.5",
-    "7.0.6",
-    "7.0.7",
-    "7.0.8",
-    "7.0.9",
-    "7.0.10",
-    "7.0.11",
-    "7.0.12",
-    "7.0.13",
-    "7.0.14",
-    "7.2.0"
-   ],
-   "note": "",
-   "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
-   "createdAt": "2026-07-09T21:38:51Z",
-   "updatedAt": "2026-08-18T05:00:02Z"
-  },
-  {
-   "id": "compat-official-7.2.1",
-   "emsVersion": "7.2.1",
-   "clientVersions": [
-    "7.0.0",
-    "7.0.1",
-    "7.0.2",
-    "7.0.3",
-    "7.0.4",
-    "7.0.5",
-    "7.0.6",
-    "7.0.7",
-    "7.0.8",
-    "7.0.9",
-    "7.0.10",
-    "7.0.11",
-    "7.0.12",
-    "7.0.13",
-    "7.0.14",
-    "7.2.0",
-    "7.2.1"
-   ],
-   "note": "",
-   "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
-   "createdAt": "2026-07-09T21:38:51Z",
-   "updatedAt": "2026-08-18T05:00:02Z"
-  },
-  {
-   "id": "compat-official-7.2.2",
-   "emsVersion": "7.2.2",
-   "clientVersions": [
-    "7.0.0",
-    "7.0.1",
-    "7.0.2",
-    "7.0.3",
-    "7.0.4",
-    "7.0.5",
-    "7.0.6",
-    "7.0.7",
-    "7.0.8",
-    "7.0.9",
-    "7.0.10",
-    "7.0.11",
-    "7.0.12",
-    "7.0.13",
-    "7.0.14",
-    "7.2.0",
-    "7.2.1",
-    "7.2.2"
-   ],
-   "note": "",
-   "source": "FortiClient EMS Compatibility Matrix (Fortinet, officielle)",
-   "createdAt": "2026-07-09T21:38:51Z",
-   "updatedAt": "2026-08-18T05:00:02Z"
-  }
- ],
  "cves": [
   {
    "id": "CVE-2026-59837",
@@ -5982,8 +5329,283 @@
    "eol": "2028-11-11"
   }
  },
- "searchHistory": [
+ "products": [
   {
+   "id": "fortigate-fortios",
+   "label": "FortiGate / FortiOS",
+   "models": [
+    {
+     "id": "FGT90G",
+     "label": "FortiGate-90G",
+     "firmwares": [
+      {
+       "version": "7.2.10",
+       "build": "1706",
+       "current": true,
+       "notes": [
+        "behavior",
+        "known",
+        "release-notes",
+        "resolved",
+        "special",
+        "upgrade"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes",
+        "known": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/236526/known-issues",
+        "resolved": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/289806/resolved-issues",
+        "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/832438/upgrade-information",
+        "behavior": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/230510/changes-in-default-behavior",
+        "special": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/708555/special-notices"
+       },
+       "maturity": "Mature"
+      },
+      {
+       "version": "7.2.13",
+       "build": "1762",
+       "notes": [
+        "known",
+        "release-notes",
+        "resolved",
+        "special",
+        "upgrade"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes",
+        "known": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/236526/known-issues",
+        "resolved": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/289806/resolved-issues",
+        "special": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/708555/special-notices",
+        "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/832438/upgrade-information"
+       },
+       "maturity": "Mature"
+      },
+      {
+       "version": "7.4.12",
+       "build": "2902",
+       "notes": [
+        "behavior",
+        "known",
+        "release-notes",
+        "resolved",
+        "special",
+        "upgrade"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes",
+        "behavior": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/230510/changes-in-default-behavior",
+        "known": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/236526/known-issues",
+        "resolved": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/289806/resolved-issues",
+        "special": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/708555/special-notices",
+        "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/832438/upgrade-information"
+       },
+       "maturity": "Mature"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fortianalyzer",
+   "label": "FortiAnalyzer",
+   "models": [
+    {
+     "id": "FAZALI",
+     "label": "FAZ_VM64_ALI",
+     "firmwares": [
+      {
+       "version": "6.4.0",
+       "build": "2002",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.0/release-notes"
+       }
+      },
+      {
+       "version": "6.4.1",
+       "build": "2072",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.1/release-notes"
+       }
+      },
+      {
+       "version": "6.4.2",
+       "build": "2122",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.2/release-notes"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fortimanager",
+   "label": "FortiManager",
+   "models": [
+    {
+     "id": "FMGALI",
+     "label": "FMG_VM64_ALI",
+     "firmwares": [
+      {
+       "version": "6.4.0",
+       "build": "2002",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.0/release-notes"
+       }
+      },
+      {
+       "version": "6.4.1",
+       "build": "2072",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.1/release-notes"
+       }
+      },
+      {
+       "version": "6.4.2",
+       "build": "2122",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.2/release-notes"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "forticlient",
+   "label": "FortiClient (Windows/macOS/Linux)",
+   "models": [
+    {
+     "id": "linux",
+     "label": "FortiClient (Linux)",
+     "firmwares": [
+      {
+       "version": "6.0.0",
+       "build": "0029",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.0/linux-release-notes"
+       }
+      },
+      {
+       "version": "6.0.1",
+       "build": "0048",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/linux-release-notes"
+       }
+      },
+      {
+       "version": "6.0.5",
+       "build": "0106",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.5/linux-release-notes"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "forticlient-ems",
+   "label": "FortiClient EMS",
+   "models": [
+    {
+     "id": "ems",
+     "label": "FortiClient EMS",
+     "firmwares": [
+      {
+       "version": "6.0.0",
+       "build": "0052",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.0/ems-release-notes"
+       }
+      },
+      {
+       "version": "6.0.1",
+       "build": "0077",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/ems-release-notes"
+       }
+      },
+      {
+       "version": "6.0.2",
+       "build": "0106",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.2/ems-release-notes"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "paths": [
+  {
+   "id": "path-FGT90G-7.2.10-7.4.11",
+   "product": "fortigate-fortios",
+   "model": "FGT90G",
+   "from": "7.2.10",
+   "to": "7.4.11",
+   "hops": [
+    "7.2.10",
+    "7.4.8",
+    "7.4.11"
+   ],
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-09-09T08:34:54Z"
+  },
+  {
+   "id": "path-FGT90G-7.2.9-7.4.12",
+   "product": "fortigate-fortios",
+   "model": "FGT90G",
+   "from": "7.2.9",
+   "to": "7.4.12",
+   "hops": [
+    "7.2.9",
+    "7.2.11",
+    "7.4.11",
+    "7.4.12"
+   ],
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-07-09T16:16:12Z"
+  },
+  {
+   "id": "path-FGT90G-7.2.9-7.4.5",
+   "product": "fortigate-fortios",
+   "model": "FGT90G",
+   "from": "7.2.9",
+   "to": "7.4.5",
+   "hops": [
+    "7.2.9",
+    "7.4.5"
+   ],
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-07-09T16:17:25Z"
+  },
+  {
+   "id": "path-FGT90G-7.2.10-7.4.12",
    "product": "fortigate-fortios",
    "model": "FGT90G",
    "from": "7.2.10",
@@ -5993,19 +5615,51 @@
     "7.2.13",
     "7.4.12"
    ],
-   "requestedAt": "2026-10-04T20:28:28Z"
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-10-04T20:28:28Z"
   },
   {
+   "id": "path-FGT90G-7.4.11-7.4.12",
    "product": "fortigate-fortios",
-   "model": "FGT60E",
-   "from": "7.2.11",
+   "model": "FGT90G",
+   "from": "7.4.11",
    "to": "7.4.12",
    "hops": [
-    "7.2.11",
     "7.4.11",
     "7.4.12"
    ],
-   "requestedAt": "2026-09-29T09:55:11Z"
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-07-13T13:18:15Z"
   }
- ]
+ ],
+ "advisories": [
+  {
+   "id": "adv-fixture-synthetic-1",
+   "createdAt": "2026-01-05T00:00:00Z",
+   "updatedAt": "2026-01-05T00:00:00Z",
+   "product": "fortigate-fortios",
+   "severity": "info",
+   "title": "Fixture advisory (synthetic placeholder)",
+   "description": "Synthetic placeholder kept so catalogue-section preservation tests stay meaningful. Contains no production data.",
+   "source": "Test fixture",
+   "versions": [
+    "7.4.12"
+   ]
+  }
+ ],
+ "compatibilities": [
+  {
+   "id": "compat-fixture-7.2.0",
+   "emsVersion": "7.2.0",
+   "clientVersions": [
+    "7.0.0",
+    "7.2.0"
+   ],
+   "note": "",
+   "source": "Test fixture (synthetic)",
+   "createdAt": "2026-01-05T00:00:00Z",
+   "updatedAt": "2026-01-05T00:00:00Z"
+  }
+ ],
+ "searchHistory": []
 }

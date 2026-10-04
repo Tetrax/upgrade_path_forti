@@ -35,7 +35,29 @@ as a confirmed empty list. This is a bounded corpus, not an exhaustive audit.
 
 ## Live catalogue copy
 
-`catalog-live-2026-10-04.json` — trimmed copy of the real production catalogue
-(`generatedAt: 2026-10-04T20:28:28Z`, all 33 real CVE entries kept, products/paths/history
-reduced for repository size). It carries the pre-fix, coarse entry for CVE-2026-84393 and is
-used by the pipeline reconciliation tests.
+`catalog-live-2026-10-04.json` — minimized copy of the real production catalogue
+(`generatedAt: 2026-10-04T20:28:28Z`, captured from the live deployment that day).
+
+Kept real and public:
+
+- all 33 CVE entries as stored at capture time (public Fortinet PSIRT data), including the
+  pre-fix coarse entry for CVE-2026-84393 that the reconciliation tests repair;
+- the FortiOS EOL lifecycle extract;
+- the FortiGate 90G model entry (`FGT90G`) with the exact 7.2.10 / 7.2.13 / 7.4.12 firmwares,
+  and the FortiGate 90G cached upgrade paths — this is what keeps the 90G scenario
+  reproducible in the browser E2E (`tests/e2e/`);
+- one representative model for each of the four other watched products.
+
+Not published; replaced by synthetic placeholders (sections stay non-empty so the
+reconciliation tests' section-preservation assertions keep meaning):
+
+- `advisories` — the production entries are internal engineer notes (internal source, internal
+  bug ids, operational details); replaced by one clearly marked synthetic placeholder;
+- `compatibilities` — the production rows came from the internal EMS compatibility workflow;
+  replaced by one synthetic placeholder;
+- `searchHistory` — the production file held the team's real search history with real
+  timestamps; emptied (no test needs it).
+
+Every fixture in this directory comes from Fortinet's public PSIRT endpoints or from the
+public upgrade-path tool, except the three synthetic placeholders above, which are visibly
+marked "Fixture advisory"/"Test fixture (synthetic)" and contain no production data.
