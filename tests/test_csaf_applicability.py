@@ -14,10 +14,14 @@ documents in this file cover shapes and failure modes the corpus does not exhibi
 
 from __future__ import annotations
 
+import http.server
 import json
 import sys
+import threading
 import unittest
 import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -152,6 +156,29 @@ class CsafVersionClauseTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIsNone(fw.parse_csaf_version_clause(value))
 
+    def test_partially_recognized_clauses_are_refused(self) -> None:
+        """The whole clause must be one of the documented shapes: a bound embedded in unknown
+        or contradictory text must never be partially consumed — that used to turn
+        ">=7.6.1|<7.6.7" into a lower bound with NO upper bound (a weaker claim than the
+        document actually makes)."""
+        for value in (
+            ">=7.6.1|<7.6.7",
+            ">=7.6.1 extra",
+            "junk <=7.6.6",
+            "version >=7.6.1",
+            ">=7.6.1|<=7.6.6 (see note)",
+            "<7.6.7",
+            "<=7.6.6|>=7.6.1",
+        ):
+            with self.subTest(value=value):
+                self.assertIsNone(fw.parse_csaf_version_clause(value))
+
+    def test_whitespace_around_markers_is_still_accepted(self) -> None:
+        self.assertEqual(
+            fw.parse_csaf_version_clause(" >= 7.6.1 | <= 7.6.6 "),
+            {"branch": "7.6", "from": "7.6.1", "to": "7.6.6"},
+        )
+
 
 class CsafProductValueTests(unittest.TestCase):
     def test_tracked_products_are_split(self) -> None:
@@ -184,6 +211,23 @@ class CsafProductValueTests(unittest.TestCase):
             "FortiManager Cloud 7.2 all versions",
             "FortiManager Cloud-upcoming  7.4.11",
             "FortiManager Cloud-7.6.5",
+        ):
+            with self.subTest(value=value):
+                self.assertIsNone(fw.split_csaf_product_value(value))
+
+    def test_unresolved_or_null_values_are_refused(self) -> None:
+        """A value that names no recognizable Fortinet product is uninterpretable data, not an
+        untracked product: silently ignoring it is what let a partially-invalid export look
+        like a confirmed "no longer affected" and delete the stored entries."""
+        for value in (None, 7, ["FortiOS 7.6.1"], "", "   ", "CSAFPID-0001", "product-1"):
+            with self.subTest(value=value), self.assertRaises(fw.CsafResolutionError):
+                fw.split_csaf_product_value(value)
+
+    def test_recognizable_untracked_fortinet_lines_stay_out_of_scope(self) -> None:
+        for value in (
+            "FortiPAM 1.9.0",
+            "FortiProxy 7.0 all versions",
+            "FortiWeb some future syntax",
         ):
             with self.subTest(value=value):
                 self.assertIsNone(fw.split_csaf_product_value(value))
@@ -515,6 +559,30 @@ class CsafDocumentValidationTests(unittest.TestCase):
         with self.assertRaises(fw.CsafResolutionError):
             fw.validate_csaf_document("FG-IR-26-001", doc)
 
+    def test_partially_invalid_vulnerabilities_are_refused(self) -> None:
+        """Identity checks alone are not enough: a document whose vulnerability entries or
+        status lists are malformed must be refused before it can be read as "no CVEs"."""
+        element_not_object = make_csaf_document()
+        element_not_object["vulnerabilities"] = ["junk"]
+        without_cve = make_csaf_document(vulns=[make_vulnerability()])
+        without_cve["vulnerabilities"][0].pop("cve")
+        no_product_status = make_csaf_document(
+            vulns=[make_vulnerability(affected=("FortiOS 7.2 all versions",))]
+        )
+        no_product_status["vulnerabilities"][0]["product_status"] = None
+        empty_known_affected = make_csaf_document(vulns=[make_vulnerability()])
+        empty_known_affected["vulnerabilities"][0]["product_status"] = {
+            "known_affected": []
+        }
+        for label, doc in (
+            ("element not object", element_not_object),
+            ("no cve", without_cve),
+            ("no product_status", no_product_status),
+            ("empty known_affected", empty_known_affected),
+        ):
+            with self.subTest(case=label), self.assertRaises(fw.CsafResolutionError):
+                fw.validate_csaf_document("FG-IR-26-001", doc)
+
 
 class CsafUrlDiscoveryTests(unittest.TestCase):
     def test_relay_link_is_accepted_and_unwrapped(self) -> None:
@@ -585,7 +653,9 @@ class CollectCveEntriesForAdvisoryTests(unittest.TestCase):
     def _install_transport(self, responses: dict[str, str | Exception]) -> list[str]:
         calls: list[str] = []
 
-        def fetch_text(url: str, timeout: int) -> str:
+        def fetch_text(
+            url: str, timeout: int, redirect_validator=None
+        ) -> str:
             calls.append(url)
             response = responses.get(url)
             if response is None:
@@ -716,7 +786,9 @@ class BatchWrapperSkipTests(unittest.TestCase):
             ),
         }
 
-        def fetch_text(url: str, timeout: int) -> str:
+        def fetch_text(
+            url: str, timeout: int, redirect_validator=None
+        ) -> str:
             response = responses.get(url)
             if response is None:
                 raise AssertionError(f"unexpected fetch: {url}")
@@ -731,6 +803,300 @@ class BatchWrapperSkipTests(unittest.TestCase):
         self.assertEqual(skipped, ["FG-IR-26-001"])
         self.assertNotIn("FG-IR-26-001", results)
         self.assertEqual([entry["id"] for entry in results["FG-IR-26-002"]], ["CVE-2026-00001"])
+
+
+class CsafInvalidDataTests(unittest.TestCase):
+    """A partially invalid document must suspend the advisory (previous CVE data preserved)
+    instead of being read as a confirmed empty/partial result that deletes stored entries."""
+
+    def test_non_object_vulnerability_element_is_refused(self) -> None:
+        doc = make_csaf_document(
+            vulns=[make_vulnerability(affected=("FortiOS 7.2 all versions",))]
+        )
+        doc["vulnerabilities"].append("junk")
+        with self.assertRaises(fw.CsafResolutionError):
+            fw.parse_csaf_document("FG-IR-26-001", doc)
+
+    def test_missing_or_null_product_status_is_refused(self) -> None:
+        for label in ("missing", "null"):
+            vuln = make_vulnerability(affected=("FortiOS 7.2 all versions",))
+            if label == "missing":
+                vuln.pop("product_status")
+            else:
+                vuln["product_status"] = None
+            with self.subTest(case=label), self.assertRaises(fw.CsafResolutionError):
+                fw.parse_csaf_document("FG-IR-26-001", make_csaf_document(vulns=[vuln]))
+
+    def test_null_or_empty_known_affected_is_refused(self) -> None:
+        for status in ({"known_affected": None}, {"known_affected": []}, {}):
+            vuln = make_vulnerability(affected=("FortiOS 7.2 all versions",))
+            vuln["product_status"] = status
+            with self.subTest(status=status), self.assertRaises(fw.CsafResolutionError):
+                fw.parse_csaf_document("FG-IR-26-001", make_csaf_document(vulns=[vuln]))
+
+    def test_null_or_opaque_product_value_is_refused(self) -> None:
+        for value in (None, "CSAFPID-0001"):
+            vuln = make_vulnerability(affected=(value,))
+            with self.subTest(value=value), self.assertRaises(fw.CsafResolutionError):
+                fw.parse_csaf_document("FG-IR-26-001", make_csaf_document(vulns=[vuln]))
+
+    def test_vulnerability_without_cve_identifier_is_refused(self) -> None:
+        vuln = make_vulnerability(affected=("FortiOS 7.2 all versions",))
+        vuln.pop("cve")
+        with self.assertRaises(fw.CsafResolutionError):
+            fw.parse_csaf_document("FG-IR-26-001", make_csaf_document(vulns=[vuln]))
+
+    def test_untracked_products_only_still_is_a_definitive_empty_result(self) -> None:
+        """The legitimate retraction path is preserved: a fully-readable export that names
+        only untracked products really has nothing for us — empty, not suspended."""
+        doc = make_csaf_document(
+            vulns=[
+                make_vulnerability(
+                    affected=(
+                        "FortiWeb 7.4 all versions",
+                        "FortiPAM 1.9.0",
+                        "FortiProxy >=7.4.0|<=7.4.13",
+                    )
+                )
+            ]
+        )
+        self.assertEqual(fw.parse_csaf_document("FG-IR-26-001", doc), [])
+
+
+class FortiClientPlatformScopeTests(unittest.TestCase):
+    """Affected-ness and exclusions are scoped per product AND platform: Windows/macOS/Linux
+    share the `forticlient` product id, so a product+branch-only key would cross-contaminate."""
+
+    def test_mac_exclusion_does_not_leak_into_windows(self) -> None:
+        doc = make_csaf_document(
+            vulns=[
+                make_vulnerability(
+                    affected=(
+                        "FortiClientWindows 7.2 all versions",
+                        "FortiClientMac 7.2 all versions",
+                    ),
+                    fixed=("FortiClientMac-7.2.9",),
+                )
+            ]
+        )
+        entry = fw.parse_csaf_document("FG-IR-26-001", doc)[0]
+        by_model = {tuple(range_["models"]): range_ for range_ in entry["affected"]}
+        self.assertEqual(by_model[("windows",)].get("excluded"), None)
+        self.assertEqual(by_model[("macos",)]["excluded"], ["7.2.9"])
+        self.assertEqual(by_model[("macos",)]["product"], "forticlient")
+
+    def test_mac_whole_branch_not_affected_does_not_suspend_a_windows_bulletin(self) -> None:
+        doc = make_csaf_document(
+            vulns=[
+                make_vulnerability(
+                    affected=("FortiClientWindows 7.2 all versions",),
+                    not_affected=(
+                        "FortiClientMac/ 7.2 all versions",
+                        "FortiClientLinux/ 7.2 all versions",
+                    ),
+                )
+            ]
+        )
+        entry = fw.parse_csaf_document("FG-IR-26-001", doc)[0]
+        self.assertEqual(
+            entry["affected"],
+            [
+                {
+                    "product": "forticlient",
+                    "models": ["windows"],
+                    "branch": "7.2",
+                    "from": None,
+                    "to": None,
+                }
+            ],
+        )
+
+    def test_three_platforms_keep_separate_exclusions(self) -> None:
+        doc = make_csaf_document(
+            vulns=[
+                make_vulnerability(
+                    affected=(
+                        "FortiClientWindows 7.2 all versions",
+                        "FortiClientMac 7.2 all versions",
+                        "FortiClientLinux 7.2 all versions",
+                    ),
+                    fixed=("FortiClientWindows-7.2.9", "FortiClientLinux-7.2.9"),
+                )
+            ]
+        )
+        entry = fw.parse_csaf_document("FG-IR-26-001", doc)[0]
+        by_model = {tuple(range_["models"]): range_ for range_ in entry["affected"]}
+        self.assertEqual(by_model[("windows",)]["excluded"], ["7.2.9"])
+        self.assertEqual(by_model[("macos",)].get("excluded"), None)
+        self.assertEqual(by_model[("linux",)]["excluded"], ["7.2.9"])
+
+    def test_same_platform_whole_branch_contradiction_still_suspends(self) -> None:
+        doc = make_csaf_document(
+            vulns=[
+                make_vulnerability(
+                    affected=("FortiClientWindows 7.2 all versions",),
+                    not_affected=("FortiClientWindows/ 7.2 all versions",),
+                )
+            ]
+        )
+        with self.assertRaises(fw.CsafResolutionError):
+            fw.parse_csaf_document("FG-IR-26-001", doc)
+
+
+class RedirectValidationTests(unittest.TestCase):
+    """Redirect destinations are re-validated before any connection is opened — for the
+    advisory page fetch *and* the CSAF download. The validator functions are pure, and the
+    mechanism itself is exercised against inert local HTTP servers only."""
+
+    def test_psirt_page_redirect_rules(self) -> None:
+        allowed = fw._psirt_page_redirect_allowed
+        self.assertTrue(allowed("https://fortiguard.fortinet.com/psirt/FG-IR-26-174"))
+        for refused in (
+            "http://fortiguard.fortinet.com/psirt/FG-IR-26-174",
+            "https://evil.example.com/psirt/FG-IR-26-174",
+            "https://fortiguard.fortinet.com:8443/psirt/FG-IR-26-174",
+            "https://user:pass@fortiguard.fortinet.com/psirt/FG-IR-26-174",
+            "https://fortiguard.fortinet.com/other/FG-IR-26-174",
+            "https://127.0.0.1/psirt/FG-IR-26-174",
+        ):
+            with self.subTest(candidate=refused):
+                self.assertFalse(allowed(refused))
+
+    def test_csaf_redirect_rules(self) -> None:
+        allowed = fw._csaf_redirect_allowed
+        self.assertTrue(
+            allowed(
+                "https://filestore.fortinet.com/fortiguard/psirt/csaf_x_fg-ir-26-001.json"
+            )
+        )
+        for refused in (
+            "http://filestore.fortinet.com/fortiguard/psirt/csaf_x_fg-ir-26-001.json",
+            "https://evil.example.com/fortiguard/psirt/csaf_x_fg-ir-26-001.json",
+            "https://filestore.fortinet.com/other/csaf_x_fg-ir-26-001.json",
+            "https://filestore.fortinet.com/fortiguard/psirt/csaf_x_fg-ir-26-001.txt",
+            "https://127.0.0.1/fortiguard/psirt/csaf_x_fg-ir-26-001.json",
+        ):
+            with self.subTest(candidate=refused):
+                self.assertFalse(allowed(refused))
+
+    def _serve(self, handler_class) -> http.server.ThreadingHTTPServer:
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server
+
+    def test_redirect_is_refused_before_any_connection_to_the_target(self) -> None:
+        target_hits: list[str] = []
+        target_port_holder: list[int] = []
+
+        class TargetHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                target_hits.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"SECRET")
+
+            def log_message(self, format, *args):  # keep test output clean
+                pass
+
+        target_server = self._serve(TargetHandler)
+        target_port_holder.append(target_server.server_address[1])
+
+        class SourceHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header(
+                    "Location",
+                    f"http://127.0.0.1:{target_port_holder[0]}/secret",
+                )
+                self.end_headers()
+
+            def log_message(self, format, *args):  # keep test output clean
+                pass
+
+        source_server = self._serve(SourceHandler)
+        try:
+            source_port = source_server.server_address[1]
+            with self.assertRaises(fw.UnsafeRedirectError):
+                fw.read_url_with_retry(
+                    urllib.request.Request(f"http://127.0.0.1:{source_port}/redirect"),
+                    timeout=5,
+                    retries=1,
+                    redirect_validator=lambda candidate: candidate.startswith(
+                        f"http://127.0.0.1:{source_port}/"
+                    ),
+                )
+            self.assertEqual(
+                target_hits, [], "no request may ever reach the refused destination"
+            )
+        finally:
+            source_server.shutdown()
+            target_server.shutdown()
+            source_server.server_close()
+            target_server.server_close()
+
+    def test_allowed_redirect_is_followed(self) -> None:
+        port_holder: list[int] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == "/redirect":
+                    self.send_response(302)
+                    self.send_header(
+                        "Location",
+                        f"http://127.0.0.1:{port_holder[0]}/final",
+                    )
+                    self.end_headers()
+                else:
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"OK")
+
+            def log_message(self, format, *args):  # keep test output clean
+                pass
+
+        server = self._serve(Handler)
+        port_holder.append(server.server_address[1])
+        try:
+            port = port_holder[0]
+            body = fw.read_url_with_retry(
+                urllib.request.Request(f"http://127.0.0.1:{port}/redirect"),
+                timeout=5,
+                retries=1,
+                redirect_validator=lambda candidate: urllib.parse.urlsplit(
+                    candidate
+                ).port
+                == port,
+            )
+            self.assertEqual(body, b"OK")
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_collect_validates_redirects_on_page_and_csaf_fetches(self) -> None:
+        advisory_id = "FG-IR-26-174"
+        csaf_url = FIXTURE_CSAF_URLS[advisory_id]
+        calls: list[tuple[str, object]] = []
+        original = fw.read_url_with_retry
+
+        def fake_read(request, timeout, retries=3, redirect_validator=None):
+            calls.append((request.full_url, redirect_validator))
+            if request.full_url == f"https://fortiguard.fortinet.com/psirt/{advisory_id}":
+                return make_advisory_page(advisory_id, csaf_url).encode("utf-8")
+            if request.full_url == csaf_url:
+                return json.dumps(load_csaf(advisory_id)).encode("utf-8")
+            raise AssertionError(f"unexpected fetch: {request.full_url}")
+
+        fw.read_url_with_retry = fake_read
+        try:
+            entries = fw.collect_cve_entries_for_advisory(advisory_id, timeout=5)
+        finally:
+            fw.read_url_with_retry = original
+
+        self.assertEqual(entries[0]["id"], "CVE-2026-84393")
+        self.assertEqual(len(calls), 2)
+        self.assertIs(calls[0][1], fw._psirt_page_redirect_allowed)
+        self.assertIs(calls[1][1], fw._csaf_redirect_allowed)
 
 
 if __name__ == "__main__":

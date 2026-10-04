@@ -780,8 +780,43 @@ def normalize_doc_model(doc_model: str) -> str:
     return f"{prefix}{compact}"
 
 
+class UnsafeRedirectError(urllib.error.URLError):
+    """A redirect target was refused before any connection to it was opened."""
+
+
+class _RedirectValidatingHandler(urllib.request.HTTPRedirectHandler):
+    """Redirect handler that vets every Location before it is ever opened.
+
+    Validating only the initial URL would not actually constrain where a
+    request ends up: the stdlib's default handler happily follows a redirect
+    from an allowed host to any other host, and even downgrades https to
+    http/ftp. Every hop therefore goes through ``validator`` first, and a
+    refused hop raises UnsafeRedirectError before any connection to it.
+    """
+
+    def __init__(self, validator: Callable[[str], bool]) -> None:
+        super().__init__()
+        self._validator = validator
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        if not self._validator(newurl):
+            raise UnsafeRedirectError(f"redirection refusée : {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def read_url_with_retry(
-    request: urllib.request.Request, timeout: int, retries: int = 3
+    request: urllib.request.Request,
+    timeout: int,
+    retries: int = 3,
+    redirect_validator: Callable[[str], bool] | None = None,
 ) -> bytes:
     """Open and fully read one HTTP response, retrying transient failures at either stage.
 
@@ -790,12 +825,26 @@ def read_url_with_retry(
     scrape on 2026-07-30.  A partial response is never usable: close it and replay the complete
     request with bounded exponential backoff.  Retry only HTTP statuses commonly used for
     transient throttling or server/gateway failures; definitive responses such as 404 fail fast.
+
+    With ``redirect_validator``, every HTTP redirect target (Location) is checked against it
+    *before* it is opened: an admitted URL must not be able to turn into a request to an
+    unexpected host, port or scheme via a 30x response. A refused target raises
+    UnsafeRedirectError at once — never retried, and no connection is ever made to it.
     """
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            if redirect_validator is None:
+                response = urllib.request.urlopen(request, timeout=timeout)
+            else:
+                opener = urllib.request.build_opener(
+                    _RedirectValidatingHandler(redirect_validator)
+                )
+                response = opener.open(request, timeout=timeout)
+            with response:
                 return response.read()
+        except UnsafeRedirectError:
+            raise  # definitive refusal: retrying could only repeat the same refusal
         except urllib.error.HTTPError as error:
             if error.code not in {408, 429} and not 500 <= error.code < 600:
                 raise
@@ -819,12 +868,16 @@ def read_url_with_retry(
     raise last_error
 
 
-def fetch_text(url: str, timeout: int) -> str:
+def fetch_text(
+    url: str, timeout: int, redirect_validator: Callable[[str], bool] | None = None
+) -> str:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"},
     )
-    return read_url_with_retry(request, timeout).decode("utf-8", errors="ignore")
+    return read_url_with_retry(
+        request, timeout, redirect_validator=redirect_validator
+    ).decode("utf-8", errors="ignore")
 
 
 def html_to_text(raw_html: str) -> str:
@@ -1868,10 +1921,7 @@ ADVISORY_LINK_RE = re.compile(r"location\.href\s*=\s*'/psirt/(FG-IR-[\w-]+)'")
 CSAF_HOST = "filestore.fortinet.com"
 CSAF_PATH_PREFIX = "/fortiguard/psirt/"
 CSAF_HREF_RE = re.compile(r'href\s*=\s*"([^"]+)"', re.IGNORECASE)
-CSAF_RANGE_FROM_RE = re.compile(r">=\s*(\d+(?:\.\d+){1,3})")
-CSAF_RANGE_TO_RE = re.compile(r"<=\s*(\d+(?:\.\d+){1,3})")
-CSAF_ALL_VERSIONS_RE = re.compile(r"^(\d+\.\d+)\s+all versions$", re.IGNORECASE)
-CSAF_EXACT_VERSION_RE = re.compile(r"^(?:upcoming\s+)?(\d+(?:\.\d+){1,3})$", re.IGNORECASE)
+CSAF_VERSION_RE_TEXT = r"\d+(?:\.\d+){1,3}"
 
 # CSAF product name -> (our internal product id, model id or None when the product
 # has no FortiClient-style per-platform model).
@@ -1958,6 +2008,31 @@ def _validated_csaf_url(candidate: str) -> str | None:
     return urllib.parse.urlunsplit(("https", CSAF_HOST, parsed.path, parsed.query, ""))
 
 
+def _psirt_page_redirect_allowed(candidate: str) -> bool:
+    """Advisory pages may only ever redirect within the https PSIRT site.
+
+    Same rules as the initial advisory URL: no credential smuggling, no port
+    trickery, no downgrade to http/ftp, no departure from the PSIRT host.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == urllib.parse.urlsplit(PSIRT_BASE_URL).hostname
+        and parsed.port in (None, 443)
+        and not parsed.username
+        and not parsed.password
+        and parsed.path.startswith("/psirt/")
+    )
+
+
+def _csaf_redirect_allowed(candidate: str) -> bool:
+    """CSAF downloads may only redirect to another validated CSAF destination."""
+    return _validated_csaf_url(candidate) is not None
+
+
 def discover_csaf_url(advisory_id: str, raw_html: str) -> str | None:
     """Find and validate the CSAF export URL advertised by an advisory page.
 
@@ -1991,17 +2066,28 @@ def csaf_branch(version: str) -> str:
     return ".".join(version.split(".")[:2])
 
 
-def split_csaf_product_value(value: str) -> tuple[str, str] | None:
+def split_csaf_product_value(value: Any) -> tuple[str, str] | None:
     """Split one product_status value into (tracked product, version clause).
 
-    Returns None for products this tool doesn't track. That includes both
-    entirely different lines (FortiWeb, FortiMail, FortiADC...) and names that
-    merely *start with* a tracked one — "FortiManager Cloud 7.2 all versions"
-    is a distinct cloud product, not on-prem FortiManager, so it is ignored
-    like any other untracked product. Anything else (lowercase/version-shaped
-    remainder) is returned for the caller to parse and validate.
+    Returns None for values that are *definitively* statements about a product
+    this tool does not track. That includes entirely different Fortinet lines
+    (FortiWeb, FortiMail, FortiPAM, FortiProxy...) and names that merely
+    *start with* a tracked one — "FortiManager Cloud 7.2 all versions" is a
+    distinct cloud product, not on-prem FortiManager, so it is ignored like
+    any other untracked product.
+
+    Anything else is uninterpretable rather than "out of scope": a non-string
+    or null entry, an empty value, or an opaque identifier (CSAF product id,
+    stray token) that names no Fortinet product at all. Those raise — treating
+    them as an untracked product let a partially-invalid export look like a
+    confirmed "no longer affected" and delete the previously stored entries.
+    Raising suspends the advisory instead, preserving previous data.
     """
-    compact = " ".join(str(value).split())
+    if not isinstance(value, str):
+        raise CsafResolutionError(f"product_status value is not a string: {value!r}")
+    compact = " ".join(value.split())
+    if not compact:
+        raise CsafResolutionError("product_status value is empty")
     for product_name in CSAF_PRODUCT_NAMES:
         if not compact.startswith(product_name):
             continue
@@ -2010,7 +2096,13 @@ def split_csaf_product_value(value: str) -> tuple[str, str] | None:
         if stripped and stripped[0].isupper():
             return None  # a different product sharing the prefix ("FortiManager Cloud")
         return product_name, rest
-    return None
+    if compact.startswith("Forti"):
+        # A recognizable, untracked Fortinet product line (FortiWeb, FortiPAM,
+        # FortiProxy...): explicitly out of scope, whatever its version clause.
+        return None
+    raise CsafResolutionError(
+        f"unresolved product_status value (no recognizable product): {value!r}"
+    )
 
 
 def parse_csaf_version_clause(rest: str) -> dict[str, Any] | None:
@@ -2026,34 +2118,47 @@ def parse_csaf_version_clause(rest: str) -> dict[str, Any] | None:
     Returns {"branch", "from", "to"} — or None when the clause matches none
     of these; callers then suspend the advisory (for a tracked product)
     instead of guessing or silently dropping the claim.
+
+    The WHOLE normalized clause must match one of the shapes above. A bound
+    embedded in unknown or contradictory text (">=7.6.1|<7.6.7", "version
+    >=7.6.1", ">=7.6.1 or later") is deliberately NOT accepted: partially
+    consuming the clause used to reinterpret it as a smaller claim — e.g. a
+    malformed ">=7.6.1|<7.6.7" silently became a lower bound with no upper
+    bound — which is exactly how a non-probative value could weaken a stored
+    range instead of suspending the advisory.
     """
     rest = " ".join(rest.split()).lstrip("-/").strip()
     if not rest:
         return None
-    all_versions = CSAF_ALL_VERSIONS_RE.match(rest)
+    all_versions = re.fullmatch(r"(\d+\.\d+)\s+all versions", rest, re.IGNORECASE)
     if all_versions:
         return {"branch": all_versions.group(1), "from": None, "to": None}
-    from_match = CSAF_RANGE_FROM_RE.search(rest)
-    to_match = CSAF_RANGE_TO_RE.search(rest)
-    if from_match or to_match:
-        from_version = from_match.group(1) if from_match else None
-        to_version = to_match.group(1) if to_match else None
-        if from_version and to_version:
-            if csaf_branch(from_version) != csaf_branch(to_version):
-                return None  # a cross-train range cannot be represented per-branch
-            if version_key(from_version) > version_key(to_version):
-                return None
-        if from_version is None and to_version is None:
-            return None  # unreachable when a range marker matched; defensive
-        branch_version = from_version if from_version is not None else to_version
-        if branch_version is None:
+    bounded = re.fullmatch(
+        rf">=\s*({CSAF_VERSION_RE_TEXT})\s*\|\s*<=\s*({CSAF_VERSION_RE_TEXT})", rest
+    )
+    if bounded:
+        from_version = bounded.group(1)
+        to_version = bounded.group(2)
+        if csaf_branch(from_version) != csaf_branch(to_version):
+            return None  # a cross-train range cannot be represented per-branch
+        if version_key(from_version) > version_key(to_version):
             return None
         return {
-            "branch": csaf_branch(branch_version),
+            "branch": csaf_branch(from_version),
             "from": from_version,
             "to": to_version,
         }
-    exact = CSAF_EXACT_VERSION_RE.match(rest)
+    from_only = re.fullmatch(rf">=\s*({CSAF_VERSION_RE_TEXT})", rest)
+    if from_only:
+        version = from_only.group(1)
+        return {"branch": csaf_branch(version), "from": version, "to": None}
+    to_only = re.fullmatch(rf"<=\s*({CSAF_VERSION_RE_TEXT})", rest)
+    if to_only:
+        version = to_only.group(1)
+        return {"branch": csaf_branch(version), "from": None, "to": version}
+    exact = re.fullmatch(
+        rf"(?:upcoming\s+)?({CSAF_VERSION_RE_TEXT})", rest, re.IGNORECASE
+    )
     if exact:
         version = exact.group(1)
         return {"branch": csaf_branch(version), "from": version, "to": version}
@@ -2085,9 +2190,17 @@ def _csaf_range_sort_key(range_entry: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _csaf_status_list(advisory_id: str, status: dict[str, Any], key: str) -> list[Any]:
-    values = status.get(key)
-    if values is None:
+    """One product_status entry list, distinguishing "absent" from "invalid".
+
+    An absent optional key is simply no claim at all ([]). A key that exists
+    but is null or not a list is malformed data — never silently read as "no
+    claim", which would let an invalid export remove stored entries.
+    """
+    if key not in status:
         return []
+    values = status[key]
+    if values is None:
+        raise CsafResolutionError(f"{advisory_id}: CSAF product_status.{key} is null")
     if not isinstance(values, list):
         raise CsafResolutionError(
             f"{advisory_id}: CSAF product_status.{key} is not a list"
@@ -2120,6 +2233,28 @@ def validate_csaf_document(advisory_id: str, doc: Any) -> dict[str, Any]:
         raise CsafResolutionError(f"{advisory_id}: CSAF publisher is not Fortinet PSIRT")
     if not isinstance(doc.get("vulnerabilities"), list):
         raise CsafResolutionError(f"{advisory_id}: CSAF vulnerabilities is not a list")
+    for vulnerability in doc["vulnerabilities"]:
+        if not isinstance(vulnerability, dict):
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerabilities element is not an object"
+            )
+        if not isinstance(vulnerability.get("cve"), str) or not vulnerability["cve"]:
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerability has no cve identifier"
+            )
+        product_status = vulnerability.get("product_status")
+        if not isinstance(product_status, dict):
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerability has no product_status object"
+            )
+        # An absent/null/empty known_affected asserts nothing. Reading it as
+        # "no longer affected" is what would let a truncated or partial export
+        # delete every stored entry of the CVE; skip-with-diagnostic instead.
+        known_affected = product_status.get("known_affected")
+        if not isinstance(known_affected, list) or not known_affected:
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerability has no usable known_affected list"
+            )
     return doc
 
 
@@ -2150,10 +2285,14 @@ def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str,
     entries_by_cve: dict[str, dict[str, Any]] = {}
     for vulnerability in doc.get("vulnerabilities") or []:
         if not isinstance(vulnerability, dict):
-            continue
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerabilities element is not an object"
+            )
         cve_id = vulnerability.get("cve")
         if not isinstance(cve_id, str) or not cve_id:
-            continue
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerability has no usable cve identifier"
+            )
 
         cvss_score: float | None = None
         severity: str | None = None
@@ -2168,16 +2307,23 @@ def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str,
         severity = severity or cvss_severity(cvss_score)
 
         status = vulnerability.get("product_status")
-        if status is None:
-            status = {}
         if not isinstance(status, dict):
             raise CsafResolutionError(
-                f"{advisory_id}: CSAF product_status is not an object"
+                f"{advisory_id}: {cve_id} has no product_status object"
+            )
+        known_affected = _csaf_status_list(advisory_id, status, "known_affected")
+        if not known_affected:
+            raise CsafResolutionError(
+                f"{advisory_id}: {cve_id} has no known_affected status"
             )
 
         affected_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
-        exclusions: dict[tuple[str, str], set[str]] = {}
-        for value in _csaf_status_list(advisory_id, status, "known_affected"):
+        # Exclusions are scoped to product AND platform (model) AND branch:
+        # FortiClientWindows/Mac/Linux share the same tracked product id, so
+        # keying them by product+branch alone would let a Mac exclusion also
+        # exclude Windows (or even suspend a coherent Windows-only bulletin).
+        exclusions: dict[tuple[str, str | None, str], set[str]] = {}
+        for value in known_affected:
             split = split_csaf_product_value(value)
             if split is None:
                 continue  # not a tracked product — out of scope by design.
@@ -2209,8 +2355,10 @@ def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str,
                         f"{advisory_id}: {cve_id} has an unrecognized {status_key} "
                         f"value for {product_name}: {value!r}"
                     )
-                product_id, _model_id = CVE_PRODUCT_MAP[product_name]
-                bucket = exclusions.setdefault((product_id, clause["branch"]), set())
+                product_id, model_id = CVE_PRODUCT_MAP[product_name]
+                bucket = exclusions.setdefault(
+                    (product_id, model_id, clause["branch"]), set()
+                )
                 if clause["from"] is not None and clause["from"] == clause["to"]:
                     bucket.add(clause["from"])
                 elif clause["from"] is None and clause["to"] is None:
@@ -2221,10 +2369,11 @@ def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str,
                         f"for {product_name}: {value!r}"
                     )
 
-        for range_entry in affected_by_key.values():
+        for key, range_entry in affected_by_key.items():
+            product_id, model_id = key[0], key[1]
             excluded: set[str] = set()
             for version in exclusions.get(
-                (range_entry["product"], range_entry["branch"]), set()
+                (product_id, model_id, range_entry["branch"]), set()
             ):
                 if version == "*":
                     raise CsafResolutionError(
@@ -2284,13 +2433,19 @@ def collect_cve_entries_for_advisory(
     reserved for a genuinely confirmed case: a validated export that names no
     tracked product for this advisory.
     """
-    raw_html = fetch_text(f"{PSIRT_BASE_URL}/psirt/{advisory_id}", timeout)
+    raw_html = fetch_text(
+        f"{PSIRT_BASE_URL}/psirt/{advisory_id}",
+        timeout,
+        redirect_validator=_psirt_page_redirect_allowed,
+    )
     csaf_url = discover_csaf_url(advisory_id, raw_html)
     if csaf_url is None:
         raise CsafResolutionError(
             f"{advisory_id}: no validated CSAF link on the advisory page"
         )
-    doc = json.loads(fetch_text(csaf_url, timeout))
+    doc = json.loads(
+        fetch_text(csaf_url, timeout, redirect_validator=_csaf_redirect_allowed)
+    )
     validate_csaf_document(advisory_id, doc)
     return parse_csaf_document(advisory_id, doc)
 
@@ -2845,6 +3000,50 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def commit_collected_state(
+    output_path: Path,
+    state: dict[str, Any],
+    advisory_deltas: list[dict[str, Any]],
+    path_deltas: list[UpgradePath],
+    cve_results_by_advisory: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Merge this run's collected deltas into the catalogue under the process lock.
+
+    `state` is this run's own snapshot, read before potentially minutes of network collection —
+    another writer (fortios_server.py, import_forticlient_compat.py) or a concurrent maintenance
+    pass may have changed the file since. The lock serializes writes, not snapshot freshness, so
+    nothing stale may be written back wholesale:
+
+    - firmwares/lifecycle are this script's own exclusive domain: bulk-merged (incoming wins);
+    - advisories/paths are applied as precise upserts from the deltas tracked by the caller;
+    - compatibilities are never touched by this script and are left completely alone;
+    - CVEs are NEVER bulk-merged from the snapshot. Only this run's definitive per-advisory
+      results (cve_results_by_advisory) are applied with replace_cves_for_advisory(), so a run
+      that never re-fetched an advisory cannot resurrect the stale ranges it read at the top of
+      its own run over a concurrent --cve-reconcile-existing correction — and its own fresh,
+      probative results still win over the disk for the advisories it did fetch.
+    """
+    with cross_process_lock(output_path):
+        latest_from_disk = normalize_state(read_json(output_path, {}))
+        state_for_bulk_merge = {
+            **state,
+            "advisories": [],
+            "paths": [],
+            "compatibilities": [],
+            "cves": [],
+        }
+        final_state = merge_state(latest_from_disk, state_for_bulk_merge)
+        for advisory in advisory_deltas:
+            upsert_advisory(final_state, advisory)
+        for path in path_deltas:
+            upsert_path(final_state, path)
+        for advisory_id, entries in cve_results_by_advisory.items():
+            replace_cves_for_advisory(final_state, advisory_id, entries)
+        final_state["generatedAt"] = utc_now()
+        write_json(output_path, final_state)
+    return final_state
+
+
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
 
@@ -3285,39 +3484,40 @@ def main(argv: list[str]) -> int:
 
     # This run started from a read of args.output taken potentially minutes ago (network
     # scraping in between) — fortios_server.py or import_forticlient_compat.py may have written
-    # to that same file since. The lock below closes the race with those other writers; what it
-    # doesn't do on its own is stop THIS run's own stale copy from clobbering what they wrote:
-    # `state` still carries the advisories/paths/compatibilities exactly as they were at the top
-    # of this function; blindly merging that in would replace a concurrent edit with our stale
-    # pre-collection copy, or resurrect something a user deleted while we were scraping. So the
-    # bulk merge below only ever carries firmwares/lifecycle (this script's own exclusive domain
-    # — no other process writes those) onto a freshly re-read state, while advisories and paths
-    # are applied as precise upserts from the deltas tracked above, and compatibilities (never
-    # touched by this script at all) are left completely alone.
-    #
-    # CVEs need the same delta-reapplication treatment: merge_state()'s CVE merge is a keyed
-    # union that only ever adds/overwrites by id, never removes one absent from the incoming
-    # side — so a CVE reconciled away from `state` above would otherwise come right back the
-    # moment merge_state() re-merges it onto latest_from_disk's still-stale copy (which was
-    # never touched by the reconciliation loop above). Re-applying the same reconciliation on
-    # final_state, after the bulk merge, actually makes the removal stick.
-    with cross_process_lock(args.output):
-        latest_from_disk = normalize_state(read_json(args.output, {}))
-        state_for_bulk_merge = {
-            **state,
-            "advisories": [],
-            "paths": [],
-            "compatibilities": [],
-        }
-        final_state = merge_state(latest_from_disk, state_for_bulk_merge)
-        for advisory in advisory_deltas:
-            upsert_advisory(final_state, advisory)
-        for path in path_deltas:
-            upsert_path(final_state, path)
-        for advisory_id, entries in cve_results_by_advisory.items():
-            replace_cves_for_advisory(final_state, advisory_id, entries)
-        final_state["generatedAt"] = utc_now()
-        write_json(args.output, final_state)
+    # to that same file since, and the maintenance reconciliation (--cve-reconcile-existing) may
+    # even have repaired CVEs of advisories this run never fetched. commit_collected_state()
+    # applies this run's deltas onto a freshly re-read state under the lock (see its docstring:
+    # firmwares/lifecycle bulk-merged, advisories/paths as precise upserts, CVEs only per fetched
+    # advisory) so nothing stale is written back wholesale.
+    final_state = commit_collected_state(
+        args.output, state, advisory_deltas, path_deltas, cve_results_by_advisory
+    )
+
+    # Maintenance reconciliation and notifications: the corrected historical entries this pass
+    # just committed must be part of the notification baseline from this very commit on. If the
+    # process died between the catalogue commit above and the notification block below, a later
+    # run — possibly a normal one — would otherwise diff its old CVE baseline against the
+    # corrected catalogue and derive those historical CVEs as brand-new notifications. Advance
+    # only the CVE baseline, silently, right here: outbox, sentKeys, preferences and the
+    # version/health baselines (a combined run must still be able to notify them) are untouched.
+    # See fortios_notify.advance_cve_baseline_silently().
+    if args.cve_reconcile_existing and notify_checkpoint is not None:
+        try:
+            import fortios_notify
+
+            fortios_notify.advance_cve_baseline_silently(
+                args.notify_history_output,
+                {
+                    item["id"]: item
+                    for item in final_state.get("cves", [])
+                    if item.get("id")
+                },
+            )
+        except Exception as error:  # noqa: BLE001 - notification bookkeeping only.
+            sys.stderr.write(
+                "Avertissement : avancement silencieux de la base CVE impossible "
+                f"({error}).\n"
+            )
 
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(
@@ -3481,7 +3681,13 @@ def main(argv: list[str]) -> int:
                 for item in final_state.get("cves", [])
                 if item.get("id")
             }
-            if not args.cve_backfill:
+            # Historical ingestion (--cve-backfill) and the maintenance reconciliation
+            # (--cve-reconcile-existing) never derive notifications: the entries they import or
+            # correct are not news. The checkpoint below still advances to the final catalogue
+            # (and the early CVE-baseline advance right after the commit above already covered
+            # an interruption before this block), so a later normal run cannot replay any of it
+            # as new.
+            if not (args.cve_backfill or args.cve_reconcile_existing):
                 product_labels = {
                     p.get("id"): p.get("label", p.get("id"))
                     for p in final_state.get("products", [])

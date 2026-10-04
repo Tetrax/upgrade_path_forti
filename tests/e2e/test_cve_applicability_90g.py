@@ -44,7 +44,7 @@ APPLICABLE_FIX_HOP = "7.2.13"
 FIXED_CVE = "CVE-2026-84393"
 
 
-def _frozen_documents_transport(url: str, timeout: int) -> str:
+def _frozen_documents_transport(url: str, timeout: int, redirect_validator=None) -> str:
     """Inert PSIRT transport: the frozen FG-IR-26-174 documents, nothing else."""
     if url == ADVISORY_PAGE_URL:
         return (FIXTURES / "FG-IR-26-174.advisory.html").read_text(encoding="utf-8")

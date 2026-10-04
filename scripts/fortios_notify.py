@@ -2371,6 +2371,27 @@ def advance_checkpoint_silently(path: Path, checkpoint: dict[str, Any]) -> None:
         write_json(path, state)
 
 
+def advance_cve_baseline_silently(path: Path, cves_by_id: dict[str, Any]) -> None:
+    """Advance only the CVE baseline of the persisted checkpoint, silently.
+
+    Used by the --cve-reconcile-existing maintenance pass: the corrected historical entries it
+    just committed to the catalogue must be part of the notification baseline from that very
+    commit on, so an interruption between the catalogue commit and the notification block cannot
+    let a later run (possibly a normal one) derive them as brand-new notifications. Outbox,
+    sentKeys, preferences, EOL state and the version/health baselines are left untouched — a
+    combined run must still be able to notify a genuinely new version/health transition later.
+    """
+    with cross_process_lock(path):
+        state = load_notify_state(path)
+        checkpoint = state.get("checkpoint")
+        if checkpoint is None:
+            return  # nothing has been activated yet: the first checkpoint is bootstrapped later
+        checkpoint = dict(checkpoint)
+        checkpoint["cvesById"] = {**checkpoint.get("cvesById", {}), **cves_by_id}
+        state["checkpoint"] = checkpoint
+        write_json(path, state)
+
+
 def commit_disabled_notification_state(
     path: Path,
     eol_state: dict[str, bool],
