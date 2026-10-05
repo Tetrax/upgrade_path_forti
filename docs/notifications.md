@@ -332,7 +332,7 @@ never re-notified.
 - A CVE affecting several selected products is one event with one deduplication key and an aggregated affected-product section, not one email per product.
 - Initial checkpoint/bootstrap and catalog backfill are quiet. Incomplete or malformed snapshots do not invent a baseline event; a valid later snapshot can produce the real transition.
 - Disabling delivery continues to advance an existing notification reference without creating retroactive events, including legacy environment-only configuration (`FORTIOS_EMAIL_ENABLED=false` without `notification-settings.json`) and compatibility-only recovery. Pending outbox entries are retained, never sent while disabled, and remain eligible for retry after reactivation. Persisted functional settings, when present, remain authoritative and are not rewritten by this fallback.
-- A `--cve-reconcile-existing` maintenance pass is silent: the historical entries it corrects or imports never enter the outbox, and the checkpoint's CVE baseline is advanced right after the catalogue commit — before any notification work — so an interruption in between cannot replay history on a later normal run. Outbox, sent keys, preferences and the version/health baselines are left untouched (a pending legitimate event is still delivered, and a genuinely new event after the pass still notifies normally). A run that did not re-fetch an advisory never overwrites its stored CVEs with its own older snapshot, so a concurrent collector cannot undo a correction or a retraction.
+- A `--cve-reconcile-existing` maintenance pass is silent and crash-safe at every persistence boundary: its definitive results are first recorded as a **durable intent** (`pendingCveBaseline` in the notification history), *before* the catalogue commit; right after the commit the intent is consumed against the catalogue that was actually written, and confirmed entries join the checkpoint's CVE baseline silently. If the process dies in between — or at any point after the commit — any later run, a normal collection included, re-confirms the intent before deriving anything: corrected history can never replay as notifications, and an entry whose correction never actually reached the catalogue stays pending instead of being advanced to a state the catalogue does not back. An intent that cannot be written aborts the pass's corrections for that run (nothing is committed, `cve-psirt` health reports the error, stderr carries the diagnostic) rather than committing history nothing would keep silent. Outbox, sent keys, preferences and the version/health baselines are left untouched (a pending legitimate event is still delivered, and a genuinely new event after the pass still notifies normally). A run that did not re-fetch an advisory never overwrites its stored CVEs with its own older snapshot, so a concurrent collector cannot undo a correction or a retraction.
 - EOL transitions bootstrap silently on first sight and notify once on a later `False -> True` transition.
 - New releases notify once per version newly present in the catalog for FortiGate/FortiOS, FortiManager or FortiAnalyzer — FortiClient and FortiClient EMS deliberately stay out of release notifications — and only while `releaseNotificationsEnabled` is on.
 - A release email shows the product, the version, the detection date and the Fortinet release-notes link when the catalog publishes one; several releases from one collection become one card each in the same email.
@@ -387,6 +387,15 @@ it may resume pending delivery through SMTP using its deployment environment.
 Disable sending before rollback if that is not intended. Do not restore an older
 checkpoint/history over events accepted since the upgrade. Keep the previous
 image and SMTP environment available; see [delivery.md](delivery.md).
+
+An interrupted `--cve-reconcile-existing` pass leaves its durable intent
+(`pendingCveBaseline` in the notification history) until a run confirms it
+against the catalogue. Complete the pass — or let one normal collection run
+under the current image, which consumes it the same way — before rolling the
+image back: an image older than that key ignores it at load time but drops it on
+its next write, and cannot consume it either (the maintenance flag itself does
+not exist there). Outside maintenance passes the key is simply not written, and
+a state file without it loads unchanged in both directions.
 
 ### Notification preferences and image downgrade
 

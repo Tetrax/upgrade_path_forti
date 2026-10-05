@@ -3402,6 +3402,10 @@ def main(argv: list[str]) -> int:
     cve_stats = CveReconciliationStats()
     cve_results_by_advisory: dict[str, list[dict[str, Any]]] = {}
     skipped_cves: list[str] = []
+    # Set when the maintenance pass cannot make its silence intent durable (see the staging block
+    # below): the reconciled results are then withheld from the commit and the health record says
+    # so, instead of committing history corrections nothing would keep silent.
+    reconcile_aborted = False
     if (args.cve_catalog or args.cve_backfill or args.cve_reconcile_existing) and not args.skip_network:
         t0 = time.monotonic()
         started_at = health_mark_running(args.health_output, SOURCE_CVE_PSIRT)
@@ -3435,6 +3439,42 @@ def main(argv: list[str]) -> int:
                     skipped_cves, args.timeout
                 )
                 cve_results_by_advisory.update(retried_results)
+
+            # Durable silence intent, written BEFORE the catalogue commit further below: the
+            # corrected historical entries are declared "not news" on disk first, so even if this
+            # process dies between the catalogue commit and the notification work, every later run
+            # — a normal collection included — can still confirm and absorb them instead of
+            # deriving them as brand-new notifications (see
+            # fortios_notify.stage_pending_cve_baseline()). If this intent cannot be made durable,
+            # the reconciliation is abandoned for this run: committing corrections that nothing
+            # would keep silent is exactly the historical-replay window this pass exists to close.
+            # Skipped only when no notification state exists at all — nothing to protect, since a
+            # future first activation bootstraps its baseline silently from whatever the catalogue
+            # holds then.
+            if args.cve_reconcile_existing and cve_results_by_advisory and (
+                notify_checkpoint is not None
+                or os.path.lexists(args.notify_history_output)
+            ):
+                try:
+                    import fortios_notify
+
+                    fortios_notify.stage_pending_cve_baseline(
+                        args.notify_history_output,
+                        {
+                            entry["id"]: entry
+                            for entries in cve_results_by_advisory.values()
+                            for entry in entries
+                            if entry.get("id")
+                        },
+                    )
+                except Exception as error:  # noqa: BLE001 - recorded below, never fatal here.
+                    reconcile_aborted = True
+                    cve_results_by_advisory = {}
+                    sys.stderr.write(
+                        "Avertissement : réconciliation CVE abandonnée, intention durable de "
+                        f"silence non enregistrable ({error}) — les corrections historiques de "
+                        "ce run ne sont pas committées.\n"
+                    )
             # Each advisory here got a definitive CVRF result this run: replace (not just upsert)
             # whatever we had for it, so a CVE Fortinet has since removed/reattributed away from
             # our tracked products actually disappears instead of lingering forever. Advisories
@@ -3445,7 +3485,13 @@ def main(argv: list[str]) -> int:
                 cve_stats += replace_cves_for_advisory(state, advisory_id, entries)
 
             total_considered = len(cve_results_by_advisory) + len(skipped_cves)
-            if total_considered > 0 and not cve_results_by_advisory:
+            if reconcile_aborted:
+                cve_health_status = HEALTH_STATUS_ERROR
+                cve_health_error = (
+                    "Réconciliation CVE abandonnée : intention durable de silence "
+                    "non enregistrable"
+                )
+            elif total_considered > 0 and not cve_results_by_advisory:
                 cve_health_status = HEALTH_STATUS_ERROR
                 cve_health_error = (
                     f"{len(skipped_cves)} advisorie(s) PSIRT injoignable(s)"
@@ -3494,18 +3540,19 @@ def main(argv: list[str]) -> int:
     )
 
     # Maintenance reconciliation and notifications: the corrected historical entries this pass
-    # just committed must be part of the notification baseline from this very commit on. If the
-    # process died between the catalogue commit above and the notification block below, a later
-    # run — possibly a normal one — would otherwise diff its old CVE baseline against the
-    # corrected catalogue and derive those historical CVEs as brand-new notifications. Advance
-    # only the CVE baseline, silently, right here: outbox, sentKeys, preferences and the
-    # version/health baselines (a combined run must still be able to notify them) are untouched.
-    # See fortios_notify.advance_cve_baseline_silently().
+    # just committed must be part of the notification baseline from this very commit on. The
+    # durable intent was staged BEFORE the commit above (stage_pending_cve_baseline); this step
+    # confirms it against the just-committed catalogue right here, so even a crash that skips
+    # everything below leaves the corrections un-replayable: any later run — normal collection
+    # included — resolves the same staged intent before deriving anything (see
+    # consume_pending_cve_baseline() and the notification block below). Outbox, sentKeys,
+    # preferences and the version/health baselines (a combined run must still be able to notify
+    # them) are untouched.
     if args.cve_reconcile_existing and notify_checkpoint is not None:
         try:
             import fortios_notify
 
-            fortios_notify.advance_cve_baseline_silently(
+            fortios_notify.consume_pending_cve_baseline(
                 args.notify_history_output,
                 {
                     item["id"]: item
@@ -3515,8 +3562,8 @@ def main(argv: list[str]) -> int:
             )
         except Exception as error:  # noqa: BLE001 - notification bookkeeping only.
             sys.stderr.write(
-                "Avertissement : avancement silencieux de la base CVE impossible "
-                f"({error}).\n"
+                "Avertissement : consommation de l'intention de réconciliation CVE "
+                f"impossible ({error}).\n"
             )
 
     args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -3601,6 +3648,14 @@ def main(argv: list[str]) -> int:
     # "new" and re-derives the same event, which the existing outbox/sentKeys dedup (keyed by a
     # stable dedup_key, not by which run happened to derive it) makes safe to attempt again from
     # a different, later run.
+    #
+    # A crashed maintenance pass (--cve-reconcile-existing) is the exception that must NOT
+    # re-derive: its corrections are not news, they are the state the pass itself staged as
+    # baseline before committing the catalogue (see the staging block above and
+    # stage_pending_cve_baseline()). This block resolves any staged intent against the
+    # just-committed catalogue before deriving anything — applied entries are diffed against
+    # themselves, and only entries the catalogue has not actually reached yet stay pending for a
+    # later run — so a normal resume can never turn corrected history back into notifications.
     try:
         import uuid
 
@@ -3665,14 +3720,6 @@ def main(argv: list[str]) -> int:
             health_after = read_health_state(args.health_output).get("sources", {})
             notify_state = fortios_notify.load_notify_state(args.notify_history_output)
 
-            checkpoint_versions = {
-                product: set(versions)
-                for product, versions in notify_checkpoint["versionsByProduct"].items()
-            }
-            checkpoint_cves_by_id = notify_checkpoint["cvesById"]
-            checkpoint_health = notify_checkpoint["health"]
-
-            events: list[Any] = []
             # cves_after_by_id feeds the new checkpoint below regardless of --cve-backfill, so a
             # normal run right after a backfill still sees those CVEs as already-known rather
             # than spamming all of them as "new".
@@ -3681,12 +3728,34 @@ def main(argv: list[str]) -> int:
                 for item in final_state.get("cves", [])
                 if item.get("id")
             }
+
+            # A maintenance pass that crashed between its catalogue commit and its baseline
+            # advance leaves a durable intent on disk (stage_pending_cve_baseline). Confirm it
+            # against the catalogue this run just committed: entries the catalogue already
+            # carries with the same notification-relevant severity become part of the diff
+            # baseline, so no run can derive them as brand-new history; anything the catalogue
+            # has not actually reached yet stays staged (it must never be silently advanced to a
+            # state the catalogue does not back). The remaining intent is persisted by the final
+            # commit below, in the same atomic write that advances the checkpoint.
+            pending_applied, pending_remaining = fortios_notify.resolve_pending_cve_baseline(
+                notify_state.get(fortios_notify.PENDING_CVE_BASELINE_KEY),
+                cves_after_by_id,
+            )
+
+            checkpoint_versions = {
+                product: set(versions)
+                for product, versions in notify_checkpoint["versionsByProduct"].items()
+            }
+            checkpoint_cves_by_id = {**notify_checkpoint["cvesById"], **pending_applied}
+            checkpoint_health = notify_checkpoint["health"]
+
+            events: list[Any] = []
             # Historical ingestion (--cve-backfill) and the maintenance reconciliation
             # (--cve-reconcile-existing) never derive notifications: the entries they import or
             # correct are not news. The checkpoint below still advances to the final catalogue
-            # (and the early CVE-baseline advance right after the commit above already covered
-            # an interruption before this block), so a later normal run cannot replay any of it
-            # as new.
+            # (and the staged CVE-baseline intent — consumed right after the commit above, and
+            # re-confirmed by every later run — already covers an interruption before this
+            # block), so a later normal run cannot replay any of it as new.
             if not (args.cve_backfill or args.cve_reconcile_existing):
                 product_labels = {
                     p.get("id"): p.get("label", p.get("id"))
@@ -3797,6 +3866,7 @@ def main(argv: list[str]) -> int:
                 claimant=claimant,
                 transport=email_config.transport,
                 settings=notification_settings,
+                pending_cve_baseline=pending_remaining,
             )
             fortios_notify.deliver_notification_batches(
                 args.notify_history_output,
