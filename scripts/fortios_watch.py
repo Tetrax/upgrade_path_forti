@@ -3677,6 +3677,16 @@ def main(argv: list[str]) -> int:
             and notification_settings.system_notifications_enabled
             and notification_settings.system_recipients
         )
+        # The catalogue observation every baseline below is built from is re-read HERE, together
+        # with the notify state -- never taken from the `final_state` image this run committed
+        # earlier. A writer that completed while this run was suspended (a maintenance pass
+        # finishing right before this block, for instance) advances the catalogue and the durable
+        # checkpoint together; reusing this run's older in-flight image would propose a value
+        # that regresses that certified advance, and the next run would then replay the
+        # correction as a historical low->high notification (the B3 review's remaining window).
+        # An unreadable catalogue aborts this best-effort block (caught below) rather than
+        # deriving from a stale image: the next run re-observes the durable pair from scratch.
+        notify_catalog = read_json(args.output, final_state)
         if (
             notification_settings is not None
             and notify_checkpoint is not None
@@ -3687,12 +3697,12 @@ def main(argv: list[str]) -> int:
             health_after = read_health_state(args.health_output).get("sources", {})
             cves_after_by_id = {
                 item["id"]: item
-                for item in final_state.get("cves", [])
+                for item in notify_catalog.get("cves", [])
                 if item.get("id")
             }
             notify_state = fortios_notify.load_notify_state(args.notify_history_output)
             _, eol_state_after = fortios_notify.derive_eol_events(
-                final_state.get("fortiosLifecycle", {}),
+                notify_catalog.get("fortiosLifecycle", {}),
                 notify_state.get("eolState", {}),
                 now=final_state["generatedAt"],
             )
@@ -3702,7 +3712,7 @@ def main(argv: list[str]) -> int:
                 {
                     "versionsByProduct": {
                         product: sorted(versions)
-                        for product, versions in versions_by_product(final_state).items()
+                        for product, versions in versions_by_product(notify_catalog).items()
                     },
                     "cvesById": cves_after_by_id,
                     "health": health_after,
@@ -3729,7 +3739,11 @@ def main(argv: list[str]) -> int:
             # the durable state -- never an in-flight run's memory -- is the reference that stays
             # opposable to it. The same freshness contract is enforced again, under the write
             # lock, by commit_events_with_checkpoint(derivation_checkpoint=...): a correction
-            # certified by someone else is never overwritten by this run's older snapshot.
+            # certified by someone else is never overwritten by this run's older snapshot, and
+            # pre-derived events are revalidated against the fresh durable state before entering
+            # the outbox. The catalogue side of the observation is re-read at the same moment
+            # (notify_catalog above), so the proposed baseline and the catalogue it is diffed
+            # against always belong to one coordinated observation of the durable pair.
             checkpoint_state = notify_state.get("checkpoint") or notify_checkpoint
 
             # cves_after_by_id feeds the new checkpoint below regardless of --cve-backfill, so a
@@ -3737,7 +3751,7 @@ def main(argv: list[str]) -> int:
             # than spamming all of them as "new".
             cves_after_by_id = {
                 item["id"]: item
-                for item in final_state.get("cves", [])
+                for item in notify_catalog.get("cves", [])
                 if item.get("id")
             }
 
@@ -3772,20 +3786,20 @@ def main(argv: list[str]) -> int:
             if not (args.cve_backfill or args.cve_reconcile_existing):
                 product_labels = {
                     p.get("id"): p.get("label", p.get("id"))
-                    for p in final_state.get("products", [])
+                    for p in notify_catalog.get("products", [])
                 }
                 if release_notifications:
                     events += fortios_notify.derive_version_events(
                         checkpoint_versions,
-                        versions_by_product(final_state),
+                        versions_by_product(notify_catalog),
                         product_labels,
                         detected_at=final_state["generatedAt"],
-                        release_links=release_notes_by_product(final_state),
+                        release_links=release_notes_by_product(notify_catalog),
                     )
                 if cve_notifications:
                     newly_added_cves = [
                         item
-                        for item in final_state.get("cves", [])
+                        for item in notify_catalog.get("cves", [])
                         if item.get("id") and item["id"] not in checkpoint_cves_by_id
                     ]
                     events += fortios_notify.derive_new_cve_events(
@@ -3803,7 +3817,7 @@ def main(argv: list[str]) -> int:
             # later activation cannot replay historical transitions.
             if not args.cve_backfill or not system_notifications:
                 eol_events, eol_state_after = fortios_notify.derive_eol_events(
-                    final_state.get("fortiosLifecycle", {}),
+                    notify_catalog.get("fortiosLifecycle", {}),
                     notify_state.get("eolState", {}),
                     now=final_state["generatedAt"],
                 )
@@ -3886,7 +3900,7 @@ def main(argv: list[str]) -> int:
                 new_checkpoint = {
                     "versionsByProduct": {
                         product: sorted(versions)
-                        for product, versions in versions_by_product(final_state).items()
+                        for product, versions in versions_by_product(notify_catalog).items()
                     },
                     "cvesById": cves_after_by_id,
                     "health": health_after,

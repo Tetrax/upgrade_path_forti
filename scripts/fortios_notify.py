@@ -2525,9 +2525,9 @@ def commit_disabled_notification_state(
 
 
 _LEAVE_PENDING_CVE_BASELINE = object()
-# Sentinel for commit_events_with_checkpoint(derivation_checkpoint=...): no freshness guard is
-# applied and the proposed checkpoint is written verbatim (direct callers that never derived a
-# catalogue diff, and the mechanics tests).
+# Sentinel for commit_events_with_checkpoint(derivation_checkpoint=...): no freshness guard and
+# no event revalidation are applied and the proposed checkpoint is written verbatim (direct
+# callers that never derived a catalogue diff, and the mechanics tests).
 _NO_DERIVATION_CHECKPOINT = object()
 
 
@@ -2639,6 +2639,51 @@ def _guard_checkpoint_write(
     }
 
 
+def _revalidate_cve_events_against_checkpoint(
+    new_events: list[NotificationEvent],
+    current_checkpoint: dict[str, Any] | None,
+) -> list[NotificationEvent]:
+    """Drop CVE events whose premise the fresh durable checkpoint has already consumed.
+
+    _guard_checkpoint_write() conditions the VALUE being written on the durable state re-read
+    under the write lock; this revalidates the EVENTS derived from the same capture, so a run
+    whose derivation has become stale cannot enqueue a notification the durable state has since
+    absorbed (a completed maintenance pass consuming the same correction first, for instance).
+    Only the two families whose premise is a projection of checkpoint['cvesById'] are concerned:
+
+    - ``new-cve|psirt|<id>|<severity>``: valid while the durable baseline still does not carry
+      the id (the novelty is genuinely unabsorbed).
+    - ``cve-severity|psirt|<id>|<from>-to-<to>``: valid while the durable severity for the id is
+      still exactly ``from`` -- i.e. no other writer has certified a value for it since this
+      run's baseline, so the transition it announces has not been consumed or superseded.
+
+    Every other event family (versions, EOL, health, container security) diffs its own baseline
+    with its own commit mechanism and passes through untouched. A dropped event is either already
+    covered by the writer that moved the durable value (same dedup key) or re-derivable from the
+    durable diff by any later run, so no legitimate concurrent notification is lost and nothing
+    is filtered globally.
+    """
+    current_cves = (current_checkpoint or {}).get("cvesById") or {}
+    kept: list[NotificationEvent] = []
+    for event in new_events:
+        parts = event.dedup_key.split("|")
+        if len(parts) == 4 and parts[1] == "psirt" and parts[0] in {"new-cve", "cve-severity"}:
+            cve_id = parts[2]
+            durable = current_cves.get(cve_id)
+            if parts[0] == "new-cve":
+                if cve_id in current_cves:
+                    continue
+            else:
+                durable_severity = (
+                    _cve_severity_key(durable) if isinstance(durable, dict) else None
+                )
+                from_severity = parts[3].split("-to-", 1)[0]
+                if durable_severity != from_severity:
+                    continue
+        kept.append(event)
+    return kept
+
+
 def commit_events_with_checkpoint(
     path: Path,
     checkpoint: dict[str, Any],
@@ -2679,7 +2724,9 @@ def commit_events_with_checkpoint(
     the checkpoint being written is conditioned on the durable state re-read under this same lock:
     an entry whose durable value moved since that baseline is kept as-is instead of being
     overwritten by the older proposed value -- the fresh durable state stays opposable to a run
-    whose capture has become stale (see _guard_checkpoint_write()).
+    whose capture has become stale -- and the events derived alongside are revalidated against
+    that same fresh state before any of them can reach the outbox (see _guard_checkpoint_write()
+    and _revalidate_cve_events_against_checkpoint()).
     """
     now = now or utc_now()
     now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
@@ -2693,9 +2740,13 @@ def commit_events_with_checkpoint(
                     pending_cve_baseline,
                 ),
             )
+        current_checkpoint = state.get("checkpoint")
         if derivation_checkpoint is not _NO_DERIVATION_CHECKPOINT:
+            new_events = _revalidate_cve_events_against_checkpoint(
+                new_events, current_checkpoint
+            )
             checkpoint = _guard_checkpoint_write(
-                state.get("checkpoint"),
+                current_checkpoint,
                 checkpoint,
                 cast("dict[str, Any]", derivation_checkpoint),
             )
