@@ -3719,6 +3719,18 @@ def main(argv: list[str]) -> int:
         ):
             health_after = read_health_state(args.health_output).get("sources", {})
             notify_state = fortios_notify.load_notify_state(args.notify_history_output)
+            pending_observed = notify_state.get(fortios_notify.PENDING_CVE_BASELINE_KEY)
+
+            # The derivation baseline is the checkpoint as it stands RIGHT NOW -- freshly
+            # re-read -- not the one this run bootstrapped at start-up. A maintenance pass (or any
+            # other writer) that completed while this run was still collecting has already
+            # consumed its historical corrections into that fresher checkpoint; deriving against
+            # the stale start-up capture would replay them (the B3 "checkpoint périmé" case), so
+            # the durable state -- never an in-flight run's memory -- is the reference that stays
+            # opposable to it. The same freshness contract is enforced again, under the write
+            # lock, by commit_events_with_checkpoint(derivation_checkpoint=...): a correction
+            # certified by someone else is never overwritten by this run's older snapshot.
+            checkpoint_state = notify_state.get("checkpoint") or notify_checkpoint
 
             # cves_after_by_id feeds the new checkpoint below regardless of --cve-backfill, so a
             # normal run right after a backfill still sees those CVEs as already-known rather
@@ -3735,19 +3747,20 @@ def main(argv: list[str]) -> int:
             # carries with the same notification-relevant severity become part of the diff
             # baseline, so no run can derive them as brand-new history; anything the catalogue
             # has not actually reached yet stays staged (it must never be silently advanced to a
-            # state the catalogue does not back). The remaining intent is persisted by the final
-            # commit below, in the same atomic write that advances the checkpoint.
+            # state the catalogue does not back). The resolution is certified, not imposed: the
+            # final commit below only retires the ids this run actually observed and resolved, in
+            # the same atomic write that advances the checkpoint.
             pending_applied, pending_remaining = fortios_notify.resolve_pending_cve_baseline(
-                notify_state.get(fortios_notify.PENDING_CVE_BASELINE_KEY),
+                pending_observed,
                 cves_after_by_id,
             )
 
             checkpoint_versions = {
                 product: set(versions)
-                for product, versions in notify_checkpoint["versionsByProduct"].items()
+                for product, versions in checkpoint_state["versionsByProduct"].items()
             }
-            checkpoint_cves_by_id = {**notify_checkpoint["cvesById"], **pending_applied}
-            checkpoint_health = notify_checkpoint["health"]
+            checkpoint_cves_by_id = {**checkpoint_state["cvesById"], **pending_applied}
+            checkpoint_health = checkpoint_state["health"]
 
             events: list[Any] = []
             # Historical ingestion (--cve-backfill) and the maintenance reconciliation
@@ -3850,14 +3863,34 @@ def main(argv: list[str]) -> int:
                     flush=True,
                 )
 
-            new_checkpoint = {
-                "versionsByProduct": {
-                    product: sorted(versions)
-                    for product, versions in versions_by_product(final_state).items()
-                },
-                "cvesById": cves_after_by_id,
-                "health": health_after,
-            }
+            if args.cve_reconcile_existing:
+                # A maintenance pass may only absorb what it actually resolved: the corrections
+                # its own staged intent confirmed against the catalogue it just committed
+                # (checkpoint_cves_by_id = durable baseline + confirmed corrections), plus the
+                # version baseline unchanged. Advancing CVE/version baselines to the WHOLE merged
+                # catalogue would silently absorb a novelty this pass never derived an event for
+                # -- a concurrent collector's new CVE, a newly collected version -- and the next
+                # normal run would then find nothing left to report (the B3 "absorption globale"
+                # case). Anything beyond its own corrections stays diffable; the next normal run
+                # still derives and delivers it exactly once. Health is this run's own source
+                # observation, not catalogue-derived, and keeps advancing as before.
+                new_checkpoint = {
+                    "versionsByProduct": {
+                        product: sorted(versions)
+                        for product, versions in checkpoint_state["versionsByProduct"].items()
+                    },
+                    "cvesById": dict(checkpoint_cves_by_id),
+                    "health": health_after,
+                }
+            else:
+                new_checkpoint = {
+                    "versionsByProduct": {
+                        product: sorted(versions)
+                        for product, versions in versions_by_product(final_state).items()
+                    },
+                    "cvesById": cves_after_by_id,
+                    "health": health_after,
+                }
             claimant = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
             pending = fortios_notify.commit_events_with_checkpoint(
                 args.notify_history_output,
@@ -3866,7 +3899,11 @@ def main(argv: list[str]) -> int:
                 claimant=claimant,
                 transport=email_config.transport,
                 settings=notification_settings,
-                pending_cve_baseline=pending_remaining,
+                pending_cve_baseline=fortios_notify.PendingCveBaselineResolution(
+                    observed=pending_observed,
+                    remaining=pending_remaining,
+                ),
+                derivation_checkpoint=checkpoint_state,
             )
             fortios_notify.deliver_notification_batches(
                 args.notify_history_output,

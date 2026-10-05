@@ -37,7 +37,7 @@ from email import policy as email_policy
 from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fortios_email_render
@@ -2525,6 +2525,118 @@ def commit_disabled_notification_state(
 
 
 _LEAVE_PENDING_CVE_BASELINE = object()
+# Sentinel for commit_events_with_checkpoint(derivation_checkpoint=...): no freshness guard is
+# applied and the proposed checkpoint is written verbatim (direct callers that never derived a
+# catalogue diff, and the mechanics tests).
+_NO_DERIVATION_CHECKPOINT = object()
+
+
+@dataclass(frozen=True)
+class PendingCveBaselineResolution:
+    """Certified outcome of one run's reading and resolution of the staged CVE-baseline intent.
+
+    `observed` is the intent map exactly as the caller read it off disk before deriving (None when
+    there was none); `remaining` is whatever its resolution left unconfirmed (None once everything
+    it observed has been absorbed). A commit only ever retires the ids a caller actually observed
+    and resolved -- never entries another writer staged concurrently, and never a value re-staged
+    after the observation -- so a stale in-flight snapshot can no longer wipe an intent it never
+    saw. See commit_events_with_checkpoint() and _merge_certified_pending_cve_baseline().
+    """
+
+    observed: dict[str, Any] | None
+    remaining: dict[str, Any] | None
+
+
+def _merge_certified_pending_cve_baseline(
+    state: dict[str, Any],
+    resolution: PendingCveBaselineResolution | dict[str, Any] | None,
+) -> None:
+    """Apply one caller's certified resolution to the intent actually on disk, without ever
+    touching an entry the caller did not resolve.
+
+    Retirement is per id and conditional on the durable value still being the one that was
+    observed: an id another writer re-staged with a different value in the meantime survives, and
+    so does any entry the caller never saw. Remaining entries are re-asserted without displacing a
+    newer durable value; a remaining id no longer on disk is conservatively re-staged so durable
+    silence is never lost. A bare mapping is accepted for callers whose observation *is* their
+    remaining set (nothing resolved); None certifies no observation and resolves nothing -- it can
+    never wipe the key.
+    """
+    if isinstance(resolution, PendingCveBaselineResolution):
+        observed = resolution.observed or {}
+        remaining = resolution.remaining or {}
+    elif isinstance(resolution, dict):
+        observed = resolution
+        remaining = resolution
+    else:  # None: no observation, no resolution.
+        observed, remaining = {}, {}
+    current = dict(state.get(PENDING_CVE_BASELINE_KEY) or {})
+    for cve_id, entry in observed.items():
+        if cve_id in remaining:
+            continue
+        if cve_id in current and current[cve_id] == entry:
+            del current[cve_id]
+    for cve_id, entry in remaining.items():
+        current.setdefault(cve_id, entry)
+    if current:
+        state[PENDING_CVE_BASELINE_KEY] = current
+    else:
+        state.pop(PENDING_CVE_BASELINE_KEY, None)
+
+
+def _guarded_map(
+    current: dict[str, Any] | None,
+    proposed: dict[str, Any],
+    baseline: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Per-entry merge backing _guard_checkpoint_write(): an entry present on disk whose durable
+    value is no longer the one this run derived against is kept as-is (the durable certification
+    wins); everything else is written from `proposed`."""
+    current = current or {}
+    baseline = baseline or {}
+    guarded: dict[str, Any] = {}
+    for key in {**proposed, **current}:
+        if key in current and current[key] != baseline.get(key):
+            guarded[key] = current[key]
+        elif key in proposed:
+            guarded[key] = proposed[key]
+    return guarded
+
+
+def _guard_checkpoint_write(
+    current: dict[str, Any] | None,
+    proposed: dict[str, Any],
+    baseline: dict[str, Any],
+) -> dict[str, Any]:
+    """Condition a checkpoint write on the durable state re-read under the write lock.
+
+    The writer derived its events against `baseline` (its freshly read checkpoint) and now
+    proposes `proposed`; any entry whose durable value moved since that baseline -- another writer
+    certified it in the meantime -- is kept as-is instead of being overwritten by the older
+    proposed value. The fresh durable state therefore stays opposable to a run whose own capture
+    has become stale: a completed maintenance advance can never be regressed into a replay by a
+    late commit from a normal run (see the B3 concurrency tests). Entries the durable checkpoint
+    does not carry are written normally, and a legitimately newer proposed value -- the entries
+    the run itself absorbed -- still lands.
+    """
+    current = current or {}
+    return {
+        "versionsByProduct": _guarded_map(
+            current.get("versionsByProduct"),
+            proposed.get("versionsByProduct", {}),
+            baseline.get("versionsByProduct"),
+        ),
+        "cvesById": _guarded_map(
+            current.get("cvesById"),
+            proposed.get("cvesById", {}),
+            baseline.get("cvesById"),
+        ),
+        "health": _guarded_map(
+            current.get("health"),
+            proposed.get("health", {}),
+            baseline.get("health"),
+        ),
+    }
 
 
 def commit_events_with_checkpoint(
@@ -2536,7 +2648,10 @@ def commit_events_with_checkpoint(
     now: str | None = None,
     transport: str | None = None,
     settings: NotificationSettings | None = None,
-    pending_cve_baseline: dict[str, Any] | None | object = _LEAVE_PENDING_CVE_BASELINE,
+    pending_cve_baseline: (
+        PendingCveBaselineResolution | dict[str, Any] | None | object
+    ) = _LEAVE_PENDING_CVE_BASELINE,
+    derivation_checkpoint: dict[str, Any] | object = _NO_DERIVATION_CHECKPOINT,
 ) -> list[NotificationEvent]:
     """Atomically (a) advance the persisted notify checkpoint to `checkpoint`, (b) enqueue
     `new_events` into the outbox, and (c) claim every outstanding entry for `claimant` -- all
@@ -2551,20 +2666,39 @@ def commit_events_with_checkpoint(
     `pending_cve_baseline` controls the maintenance intent staged by stage_pending_cve_baseline().
     Left at its sentinel default, any outstanding intent on disk is preserved untouched -- callers
     that never derive CVE events (the compatibility-recovery pass, tests) must not clear another
-    run's staged intent by accident. The catalogue-derived caller in fortios_watch passes its
-    resolution's outcome instead: the remaining intent while some entries are still unconfirmed,
-    or None to retire the key once every staged entry has been absorbed. Outbox, sentKeys, eolState
-    and the rest of the state are always left as they were.
+    run's staged intent by accident. The catalogue-derived caller in fortios_watch passes a
+    PendingCveBaselineResolution describing what it OBSERVED on disk and what its resolution left
+    unconfirmed: the write then retires only the observed ids it actually resolved, never an
+    entry staged concurrently by another writer and never a value re-staged after the observation
+    (see _merge_certified_pending_cve_baseline()). Bare dict/None remain accepted as legacy
+    conveniences (a dict observes-and-keeps exactly its entries; None certifies no observation and
+    resolves nothing -- it cannot wipe the key). Outbox, sentKeys, eolState and the rest of the
+    state are always left as they were.
+
+    `derivation_checkpoint` is the checkpoint THIS run derived its events against. When supplied,
+    the checkpoint being written is conditioned on the durable state re-read under this same lock:
+    an entry whose durable value moved since that baseline is kept as-is instead of being
+    overwritten by the older proposed value -- the fresh durable state stays opposable to a run
+    whose capture has become stale (see _guard_checkpoint_write()).
     """
     now = now or utc_now()
     now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
     with cross_process_lock(path):
         state = load_notify_state(path)
         if pending_cve_baseline is not _LEAVE_PENDING_CVE_BASELINE:
-            if pending_cve_baseline:
-                state[PENDING_CVE_BASELINE_KEY] = pending_cve_baseline
-            else:
-                state.pop(PENDING_CVE_BASELINE_KEY, None)
+            _merge_certified_pending_cve_baseline(
+                state,
+                cast(
+                    "PendingCveBaselineResolution | dict[str, Any] | None",
+                    pending_cve_baseline,
+                ),
+            )
+        if derivation_checkpoint is not _NO_DERIVATION_CHECKPOINT:
+            checkpoint = _guard_checkpoint_write(
+                state.get("checkpoint"),
+                checkpoint,
+                cast("dict[str, Any]", derivation_checkpoint),
+            )
         state["checkpoint"] = checkpoint
         _enqueue_new_events(state["outbox"], state["sentKeys"], new_events, now)
         claimed = _claim_outstanding(
