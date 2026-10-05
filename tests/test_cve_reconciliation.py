@@ -498,11 +498,13 @@ class CveReconciliationPipelineTests(unittest.TestCase):
     Proves, in one place: the false-positive ranges are corrected; every other catalogue section
     is preserved; advisories skipped on failure keep their previous data; the pass is idempotent
     and restartable; and neither the reconciliation nor its re-run replays any notification
-    (sentKeys/outbox untouched, checkpoint advanced with the corrected entry). The four
+    (sentKeys/outbox untouched, checkpoint advanced with the corrected entry). The six
     concurrency tests at the end pin the cross-run coordination boundary: durable notify state
     always wins over an in-flight run's stale capture — an unobserved intent is never erased, a
     consumed baseline stays opposable to a collection already started, a completed advance is
-    never regressed, and the pass never absorbs a concurrent novelty it did not resolve."""
+    never regressed by an older catalogue image, the pass never absorbs a concurrent novelty it
+    did not resolve, and events pre-derived from a stale capture are revalidated against the
+    fresh durable state before any of them can enter the outbox."""
 
     def setUp(self) -> None:
         self._orig_fetch_text = fw.fetch_text
@@ -1605,6 +1607,179 @@ class CveReconciliationPipelineTests(unittest.TestCase):
             )
             resumed = fn.load_notify_state(history_path)
             self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, resumed["sentKeys"])
+            self.assertEqual(client.send_message.call_count, 0)
+
+    def test_completed_maintenance_between_catalog_and_fresh_checkpoint(self) -> None:
+        """B3 review, remaining window 1 — the catalogue result and the baseline are one
+        coordinated observation.
+
+        A (normal, no advisory result of its own) commits its old catalogue first; B then
+        completes a full maintenance pass — corrected catalogue, baseline advanced to `high`,
+        intent consumed, zero SMTP — BEFORE A's notification block reads the fresh checkpoint.
+        A must not write its stale `low` catalogue image back as the new baseline over B's
+        already certified advance: an older catalogue image can never regress a freshly consumed
+        correction, so both normal resumes stay silent with no historical replay.
+        """
+        fixture = self._catalog_with_low_severity_false_positive()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            state_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            fw.write_json(state_path, fixture)
+            self._enable_notifications(tmp)
+            fn.ensure_checkpoint(history_path, {
+                "versionsByProduct": {},
+                "cvesById": full_cve_baseline(fixture),
+                "health": {},
+            })
+            fw.fetch_text = self._make_transport()
+
+            real_config = fn.load_email_config
+            client = _mock_smtp_client()
+            interposed = []
+
+            def finish_b_before_a_reads_fresh_checkpoint(*args, **kwargs):
+                interposed.append(True)
+                # A has already committed its old catalogue, with no advisory result of its
+                # own; B now completes through the REAL pipeline before A's fresh state read.
+                with patch.object(fn, "load_email_config", real_config):
+                    self.assertEqual(
+                        self._run(tmp, state_path, health_path, history_path, reconcile=True), 0
+                    )
+                finished = fn.load_notify_state(history_path)
+                self.assertEqual(
+                    finished["checkpoint"]["cvesById"]["CVE-2026-84393"]["severity"],
+                    "high",
+                    "a complete maintenance pass absorbs its correction silently",
+                )
+                self.assertNotIn(fn.PENDING_CVE_BASELINE_KEY, finished)
+                self.assertEqual(client.send_message.call_count, 0)
+                return real_config(*args, **kwargs)
+
+            with patch.dict(os.environ, NOTIFY_ENV, clear=False), patch(
+                "smtplib.SMTP", return_value=client
+            ), patch(
+                "socket.socket.connect",
+                side_effect=AssertionError("external network forbidden"),
+            ), patch(
+                "socket.create_connection",
+                side_effect=AssertionError("external network forbidden"),
+            ):
+                with patch.object(
+                    fn,
+                    "load_email_config",
+                    side_effect=finish_b_before_a_reads_fresh_checkpoint,
+                ):
+                    self.assertEqual(
+                        self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                    )
+                after_a = fn.load_notify_state(history_path)
+                self.assertEqual(len(interposed), 1)
+                self.assertEqual(
+                    after_a["checkpoint"]["cvesById"]["CVE-2026-84393"]["severity"],
+                    "high",
+                    "an older catalogue image must never regress a freshly certified baseline",
+                )
+
+                # Both normal resumes stay silent: nothing was left to replay.
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                resumed = fn.load_notify_state(history_path)
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                repeated = fn.load_notify_state(history_path)
+
+            self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, resumed["sentKeys"])
+            self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, repeated["sentKeys"])
+            self.assertEqual(client.send_message.call_count, 0)
+
+    def test_events_derived_before_maintenance_are_revalidated_at_commit(self) -> None:
+        """B3 review, remaining window 2 — the fresh durable state governs event validity at
+        commit too.
+
+        A (normal) refetches the corrected advisory, commits the `high` catalogue and derives the
+        low->high transition from its baseline `low`. Just before A's commit actually runs, B
+        completes the full maintenance pass silently (correction consumed, baseline `high`,
+        nothing queued, zero SMTP). A's checkpoint write is already conditioned on the fresh
+        durable state; its pre-derived event must be revalidated the same way — enqueuing it
+        would email a correction that is already durably absorbed.
+        """
+        fixture = self._catalog_with_low_severity_false_positive()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            state_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            fw.write_json(state_path, fixture)
+            self._enable_notifications(tmp)
+            fn.ensure_checkpoint(history_path, {
+                "versionsByProduct": {},
+                "cvesById": full_cve_baseline(fixture),
+                "health": {},
+            })
+            fw.fetch_text = self._make_transport()
+
+            real_commit = fn.commit_events_with_checkpoint
+            client = _mock_smtp_client()
+            derived = []
+
+            def finish_b_before_a_commits(*args, **kwargs):
+                derived.extend(event.dedup_key for event in args[2])
+                self.assertIn(
+                    CVE_ESCALATION_REPLAY_KEY,
+                    derived,
+                    "canary: A has derived the historical correction before its commit",
+                )
+                # B completes entirely before A's commit actually runs.
+                with patch.object(fn, "commit_events_with_checkpoint", real_commit):
+                    self.assertEqual(
+                        self._run(tmp, state_path, health_path, history_path, reconcile=True), 0
+                    )
+                finished = fn.load_notify_state(history_path)
+                self.assertEqual(
+                    finished["checkpoint"]["cvesById"]["CVE-2026-84393"]["severity"], "high"
+                )
+                self.assertEqual(finished["outbox"], [])
+                self.assertNotIn(fn.PENDING_CVE_BASELINE_KEY, finished)
+                self.assertEqual(client.send_message.call_count, 0)
+                return real_commit(*args, **kwargs)
+
+            with patch.dict(os.environ, NOTIFY_ENV, clear=False), patch(
+                "smtplib.SMTP", return_value=client
+            ), patch(
+                "socket.socket.connect",
+                side_effect=AssertionError("external network forbidden"),
+            ), patch(
+                "socket.create_connection",
+                side_effect=AssertionError("external network forbidden"),
+            ):
+                with patch.object(
+                    fw, "discover_advisory_ids_from_rss", return_value=["FG-IR-26-174"]
+                ), patch.object(
+                    fn, "commit_events_with_checkpoint", side_effect=finish_b_before_a_commits
+                ):
+                    self.assertEqual(
+                        self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                    )
+                after_a = fn.load_notify_state(history_path)
+                self.assertEqual(client.send_message.call_count, 0)
+                self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, after_a["sentKeys"])
+
+                # Two normal resumes: neither replays nor duplicates the consumed correction.
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                resumed = fn.load_notify_state(history_path)
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                repeated = fn.load_notify_state(history_path)
+
+            self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, resumed["sentKeys"])
+            self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, repeated["sentKeys"])
             self.assertEqual(client.send_message.call_count, 0)
 
 
