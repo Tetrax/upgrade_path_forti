@@ -265,6 +265,68 @@ def cross_process_lock(target_path: Path):
 _COHERENT_OBSERVATION_UNAVAILABLE = object()
 
 
+def _notification_catalogue_invalid_reason(catalogue: dict[str, Any]) -> str | None:
+    """Why `catalogue` cannot feed the notification block -- None when it can.
+
+    The notification block derives every baseline (CVE ids/severities, versions, EOL, health)
+    from this catalogue BEFORE writing any of them, and each consumer treats a missing or
+    wrong-typed collection as an empty one ({} iterates as nothing, a missing key falls back
+    to []). That silent equivalence is the danger: an invalid catalogue would REPLACE healthy
+    baselines with nothing and the next runs would replay the whole history as new. Missing
+    data is not a valid empty list, so every field the block actually reads is checked against
+    its real contract here, and only for the shapes those paths use:
+
+    - ``cves``: list of entry dicts carrying a non-empty string ``id`` (the baseline is keyed
+      by it);
+    - ``products``: list of product dicts whose ``models``/``firmwares`` lists carry the
+      version strings the version baseline is built from;
+    - ``fortiosLifecycle``: branch -> dict map (derive_eol_events() iterates .items()).
+
+    A genuinely empty list (``cves: []``, no model/firmware) stays valid: this rejects
+    structures, never contents -- extra keys, absent optional fields and entries the consumers
+    already tolerate are left to the consumers.
+    """
+    cves = catalogue.get("cves")
+    if not isinstance(cves, list):
+        return "cves : liste attendue"
+    for entry in cves:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("id"), str)
+            or not entry["id"].strip()
+        ):
+            return "cves : entrées mal formées"
+    products = catalogue.get("products")
+    if not isinstance(products, list):
+        return "products : liste attendue"
+    for product in products:
+        if not isinstance(product, dict):
+            return "products : entrées mal formées"
+        models = product.get("models", [])
+        if not isinstance(models, list) or not all(
+            isinstance(model, dict) for model in models
+        ):
+            return "products : modèles mal formés"
+        for model in models:
+            firmwares = model.get("firmwares", [])
+            if not isinstance(firmwares, list) or not all(
+                isinstance(firmware, dict) for firmware in firmwares
+            ):
+                return "products : firmwares mal formés"
+            if any(
+                firmware.get("version") is not None
+                and not isinstance(firmware.get("version"), str)
+                for firmware in firmwares
+            ):
+                return "products : versions mal formées"
+    lifecycle = catalogue.get("fortiosLifecycle")
+    if not isinstance(lifecycle, dict) or not all(
+        isinstance(info, dict) for info in lifecycle.values()
+    ):
+        return "fortiosLifecycle : objet attendu"
+    return None
+
+
 def read_coherent_notification_observation(
     history_path: Path, catalogue_path: Path
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -289,7 +351,11 @@ def read_coherent_notification_observation(
     Never falls back silently: an absent, unreadable or structurally invalid catalogue raises
     (the caller isolates the failure by suspending the notification work -- state preserved,
     cleaned diagnostic, collection unaffected) instead of deriving from this run's own older
-    `final_state` image, which nothing durable backs anymore.
+    `final_state` image, which nothing durable backs anymore. Structural validity covers the
+    fields the notification block actually consumes -- checked BEFORE it can write any
+    baseline, see _notification_catalogue_invalid_reason() -- so a wrong-typed or missing
+    collection can never be iterated as if it were empty and silently replace a healthy
+    baseline with nothing.
     """
     import fortios_notify  # deferred: avoids a load-time circular import with this module
 
@@ -305,6 +371,12 @@ def read_coherent_notification_observation(
         ):
             raise RuntimeError(
                 "Catalogue durable absent ou invalide pour l'observation des notifications"
+            )
+        invalid_reason = _notification_catalogue_invalid_reason(catalogue)
+        if invalid_reason is not None:
+            raise RuntimeError(
+                "Catalogue durable structurellement invalide pour l'observation des "
+                f"notifications ({invalid_reason})."
             )
         notify_state = fortios_notify.load_notify_state(history_path)
     return catalogue, notify_state

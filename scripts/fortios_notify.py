@@ -2669,8 +2669,10 @@ def _guard_checkpoint_write(
 def _revalidate_cve_events_against_checkpoint(
     new_events: list[NotificationEvent],
     current_checkpoint: dict[str, Any] | None,
+    *,
+    confirmed_intent: dict[str, Any] | None = None,
 ) -> list[NotificationEvent]:
-    """Drop CVE events whose premise the fresh durable checkpoint has already consumed.
+    """Drop CVE events whose premise the fresh durable state has already consumed.
 
     _guard_checkpoint_write() conditions the VALUE being written on the durable state re-read
     under the write lock; this revalidates the EVENTS derived from the same capture, so a run
@@ -2684,6 +2686,16 @@ def _revalidate_cve_events_against_checkpoint(
       still exactly ``from`` -- i.e. no other writer has certified a value for it since this
       run's baseline, so the transition it announces has not been consumed or superseded.
 
+    `confirmed_intent` extends that same freshness to the staged maintenance intent as it stands
+    on disk under this very lock, resolved against the catalogue this commit is certifying (see
+    commit_events_with_checkpoint() and resolve_pending_cve_baseline()). A writer may stage an
+    intent AFTER this run's own observation, so the derivation never saw it; once the certified
+    catalogue carries the same id at the same severity, the event describing exactly that
+    correction -- same id AND same target severity -- is the historical replay the intent already
+    declares not-news, and is dropped. Only the correction actually described is affected: a
+    different target severity on the same id (a distinct escalation), an id the intent does not
+    carry, and an intent the certified catalogue does not confirm all pass through untouched.
+
     Every other event family (versions, EOL, health, container security) diffs its own baseline
     with its own commit mechanism and passes through untouched. A dropped event is either already
     covered by the writer that moved the durable value (same dedup key) or re-derivable from the
@@ -2691,21 +2703,27 @@ def _revalidate_cve_events_against_checkpoint(
     is filtered globally.
     """
     current_cves = (current_checkpoint or {}).get("cvesById") or {}
+    confirmed_cves = confirmed_intent or {}
     kept: list[NotificationEvent] = []
     for event in new_events:
         parts = event.dedup_key.split("|")
         if len(parts) == 4 and parts[1] == "psirt" and parts[0] in {"new-cve", "cve-severity"}:
             cve_id = parts[2]
             durable = current_cves.get(cve_id)
+            confirmed = confirmed_cves.get(cve_id)
             if parts[0] == "new-cve":
                 if cve_id in current_cves:
+                    continue
+                if isinstance(confirmed, dict) and _cve_severity_key(confirmed) == parts[3]:
                     continue
             else:
                 durable_severity = (
                     _cve_severity_key(durable) if isinstance(durable, dict) else None
                 )
-                from_severity = parts[3].split("-to-", 1)[0]
+                from_severity, _, to_severity = parts[3].partition("-to-")
                 if durable_severity != from_severity:
+                    continue
+                if isinstance(confirmed, dict) and _cve_severity_key(confirmed) == to_severity:
                     continue
         kept.append(event)
     return kept
@@ -2754,6 +2772,14 @@ def commit_events_with_checkpoint(
     whose capture has become stale -- and the events derived alongside are revalidated against
     that same fresh state before any of them can reach the outbox (see _guard_checkpoint_write()
     and _revalidate_cve_events_against_checkpoint()).
+
+    The fresh durable state consulted there also includes the staged maintenance intent
+    (PENDING_CVE_BASELINE_KEY), which another writer may have left on disk after this run's own
+    observation: resolved against the catalogue this very commit is certifying, a confirmed
+    intent declares its corrections not-news, so the event replaying exactly one of them is
+    dropped before the outbox even though this run's derivation never saw the intent. The intent
+    itself is left untouched -- it is only ever retired by a run that observed and resolved it
+    (see _merge_certified_pending_cve_baseline()).
     """
     now = now or utc_now()
     now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
@@ -2769,8 +2795,21 @@ def commit_events_with_checkpoint(
             )
         current_checkpoint = state.get("checkpoint")
         if derivation_checkpoint is not _NO_DERIVATION_CHECKPOINT:
+            # Read under this same lock, like the rest of the fresh durable state: a writer may
+            # have staged the maintenance intent AFTER this run's own observation (so this run's
+            # derivation never saw it), and an intent the catalogue being certified confirms must
+            # stay opposable to the events it describes. Resolved with the same authoritative
+            # helper every other consumer uses -- resolve_pending_cve_baseline() -- so only an
+            # exact id + severity match counts and an unconfirmed or concurrently re-staged
+            # intent never silences anything.
+            confirmed_intent, _ = resolve_pending_cve_baseline(
+                state.get(PENDING_CVE_BASELINE_KEY),
+                checkpoint.get("cvesById") or {},
+            )
             new_events = _revalidate_cve_events_against_checkpoint(
-                new_events, current_checkpoint
+                new_events,
+                current_checkpoint,
+                confirmed_intent=confirmed_intent,
             )
             checkpoint = _guard_checkpoint_write(
                 current_checkpoint,

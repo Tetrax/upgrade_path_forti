@@ -2405,14 +2405,15 @@ class CveReconciliationPipelineTests(unittest.TestCase):
             ), patch(
                 "socket.create_connection",
                 side_effect=AssertionError("external network forbidden"),
-            ), patch.object(
-                fw, "discover_advisory_ids_from_rss", return_value=["FG-IR-26-174"]
-            ), patch.object(
-                fn, "commit_events_with_checkpoint", side_effect=interposer_with_canary
             ):
-                self.assertEqual(
-                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
-                )
+                with patch.object(
+                    fw, "discover_advisory_ids_from_rss", return_value=["FG-IR-26-174"]
+                ), patch.object(
+                    fn, "commit_events_with_checkpoint", side_effect=interposer_with_canary
+                ):
+                    self.assertEqual(
+                        self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                    )
 
                 after_a = fn.load_notify_state(history_path)
                 self.assertEqual(len(interposed), 1)
@@ -2504,14 +2505,15 @@ class CveReconciliationPipelineTests(unittest.TestCase):
             ), patch(
                 "socket.create_connection",
                 side_effect=AssertionError("external network forbidden"),
-            ), patch.object(
-                fw, "discover_advisory_ids_from_rss", return_value=["FG-IR-26-174"]
-            ), patch.object(
-                fn, "commit_events_with_checkpoint", side_effect=interposer
             ):
-                self.assertEqual(
-                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
-                )
+                with patch.object(
+                    fw, "discover_advisory_ids_from_rss", return_value=["FG-IR-26-174"]
+                ), patch.object(
+                    fn, "commit_events_with_checkpoint", side_effect=interposer
+                ):
+                    self.assertEqual(
+                        self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                    )
 
                 after_a = fn.load_notify_state(history_path)
                 self.assertEqual(len(interposed), 1)
@@ -2581,14 +2583,15 @@ class CveReconciliationPipelineTests(unittest.TestCase):
             ), patch(
                 "socket.create_connection",
                 side_effect=AssertionError("external network forbidden"),
-            ), patch.object(
-                fw, "discover_advisory_ids_from_rss", return_value=["FG-IR-26-174"]
-            ), patch.object(
-                fn, "commit_events_with_checkpoint", side_effect=interposer
             ):
-                self.assertEqual(
-                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
-                )
+                with patch.object(
+                    fw, "discover_advisory_ids_from_rss", return_value=["FG-IR-26-174"]
+                ), patch.object(
+                    fn, "commit_events_with_checkpoint", side_effect=interposer
+                ):
+                    self.assertEqual(
+                        self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                    )
 
                 after_a = fn.load_notify_state(history_path)
                 self.assertEqual(len(interposed), 1)
