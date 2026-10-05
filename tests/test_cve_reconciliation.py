@@ -21,8 +21,10 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -199,6 +201,148 @@ def _pending_event() -> dict:
         "lastTransport": None,
         "lastErrorCode": None,
     }
+
+
+# --------------------------------------------------------------------------------------------
+# Interprocess coordination probes: a REAL maintenance pipeline run as its own OS process,
+# while this process holds the notification observation section of another real pipeline run.
+# --------------------------------------------------------------------------------------------
+
+# Bounded waits used by the interprocess tests. The "inside" delay gives the separate process a
+# real chance to finish its advance while the observation section is held: a correct
+# implementation keeps its checkpoint work blocked on the history lock for the whole window, so
+# nothing timing-sensitive is being asserted -- only that the writer did NOT get through.
+B_ATTEMPT_TIMEOUT_SECONDS = 15.0
+B_INSIDE_DELAY_SECONDS = 2.0
+B_PROCESS_TIMEOUT_SECONDS = 30.0
+
+
+def _wait_for_marker(path: Path, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+# The real `fortios_watch.main` maintenance pipeline (`--cve-catalog --cve-reconcile-existing`),
+# run as a genuinely separate OS process against the shared scratch directory. Started by the
+# parent test while that process holds the notification observation section; coordinates through
+# marker files, then reports its outcome as JSON. Frozen public fixtures only, inert PSIRT
+# transport, mocked SMTP, external network forbidden, no repository write. exec-based spawn
+# (subprocess), so no open lock descriptor is ever inherited: the child takes its own flock on
+# the notification history like any other writer.
+INTERPROCESS_MAINTENANCE_RUNNER = r'''"""Real maintenance pipeline, as its own OS process, for the interprocess coordination tests."""
+import json
+import os
+import sys
+import time
+import traceback
+import urllib.error
+from pathlib import Path
+from unittest.mock import patch
+
+repo_root = Path(sys.argv[1]).resolve()
+scratch = Path(sys.argv[2]).resolve()
+sys.path.insert(0, str(repo_root / "scripts"))
+sys.path.insert(0, str(repo_root / "tests"))
+
+import fortios_notify as fn  # noqa: E402
+import fortios_watch as fw  # noqa: E402
+import test_cve_reconciliation as fixture  # noqa: E402
+
+
+def wait_for_marker(path, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def main():
+    state_path = scratch / "state.json"
+    health_path = scratch / "health.json"
+    history_path = scratch / "notify-history.json"
+
+    if not wait_for_marker(scratch / "a-in-observation", 15.0):
+        return 2
+    (scratch / "b-attempting").write_text("1", encoding="utf-8")
+
+    transport = fixture.FakeTransport()
+    transport.add_advisory(
+        "FG-IR-26-174",
+        json.loads(
+            (fixture.FIXTURES / "FG-IR-26-174.csaf.json").read_text(encoding="utf-8")
+        ),
+        page=(fixture.FIXTURES / "FG-IR-26-174.advisory.html").read_text(
+            encoding="utf-8"
+        ),
+        csaf_url=fixture.FG_IR_26_174_CSAF_URL,
+    )
+    transport.default_error = urllib.error.URLError("not served in this test")
+    fw.fetch_text = transport
+    fw.fetch_psirt_versions = lambda timeout: set()
+    fw.fetch_fortios_lifecycle = lambda timeout: {}
+    fw.discover_advisory_ids_from_rss = lambda timeout: []
+    fw.time.sleep = lambda seconds: None
+
+    client = fixture._mock_smtp_client()
+    arguments = [
+        "--cve-catalog",
+        "--cve-reconcile-existing",
+        "--base", str(state_path),
+        "--output", str(state_path),
+        "--report", str(scratch / "report-maintenance.md"),
+        "--health-output", str(health_path),
+        "--official-paths-csv", str(scratch / "no-official-paths-b.csv"),
+        "--advisories-csv", str(scratch / "no-advisories-b.csv"),
+        "--upgrade-exports", str(scratch / "no-upgrade-exports-b"),
+        "--notify-history-output", str(history_path),
+        "--notification-settings-output", str(scratch / "notification-settings.json"),
+        "--cve-retry-delays-seconds", "",
+        "--timeout", "5",
+    ]
+    with patch.dict(os.environ, fixture.NOTIFY_ENV, clear=False), patch(
+        "smtplib.SMTP", return_value=client
+    ), patch(
+        "socket.socket.connect", side_effect=AssertionError("external network forbidden")
+    ), patch(
+        "socket.create_connection", side_effect=AssertionError("external network forbidden")
+    ):
+        exit_code = fw.main(arguments)
+
+    state = fn.load_notify_state(history_path)
+    checkpoint_cves = (state.get("checkpoint") or {}).get("cvesById") or {}
+    (scratch / "b-done.json").write_text(
+        json.dumps(
+            {
+                "exit": exit_code,
+                "smtp_calls": client.send_message.call_count,
+                "sent_keys": sorted(state["sentKeys"]),
+                "outbox": [entry["dedupKey"] for entry in state["outbox"]],
+                "pending": sorted(state.get(fn.PENDING_CVE_BASELINE_KEY) or {}),
+                "severity_84393": (
+                    checkpoint_cves.get("CVE-2026-84393") or {}
+                ).get("severity"),
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        runner_code = main()
+    except BaseException:
+        (scratch / "b-error").write_text(traceback.format_exc(), encoding="utf-8")
+        raise SystemExit(3)
+    raise SystemExit(runner_code)
+'''
 
 
 class CollectCveEntriesForAdvisoryTests(unittest.TestCase):
@@ -579,6 +723,102 @@ class CveReconciliationPipelineTests(unittest.TestCase):
         # skipped, preserved, never emptied.
         transport.default_error = urllib.error.URLError("not served in this test")
         return transport
+
+    def _spawn_interprocess_maintenance(self, tmp: Path) -> subprocess.Popen:
+        """Start the real maintenance pipeline as a genuinely separate OS process.
+
+        The runner is written to the test's own scratch directory and exec'd, so no open lock
+        descriptor is inherited from this process: the child has to take its own flock on the
+        notification history exactly like any other writer in production.
+        """
+        runner_path = tmp / "interprocess_maintenance_runner.py"
+        runner_path.write_text(INTERPROCESS_MAINTENANCE_RUNNER, encoding="utf-8")
+        repo_root = Path(fw.__file__).resolve().parents[1]
+        return subprocess.Popen(
+            [sys.executable, str(runner_path), str(repo_root), str(tmp)],
+            cwd=str(repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    def _join_interprocess_maintenance(
+        self, process: subprocess.Popen
+    ) -> tuple[int, str, str]:
+        """Wait for the separate maintenance runner, failing cleanly on hang or error."""
+        try:
+            stdout, stderr = process.communicate(timeout=B_PROCESS_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate()
+            self.fail(
+                "the maintenance process never completed (deadlock?)\n"
+                f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            )
+        if process.returncode != 0:
+            self.fail(
+                f"the maintenance process failed (rc={process.returncode})\n"
+                f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            )
+        return process.returncode, stdout, stderr
+
+    def _run_with_concurrent_maintenance_attempt(
+        self,
+        tmp: Path,
+        state_path: Path,
+        health_path: Path,
+        history_path: Path,
+    ) -> dict:
+        """Run a real pipeline here, with a REAL maintenance process attempting its whole pass
+        between the two reads of the notification observation.
+
+        `fw.read_json` is instrumented: the first catalogue read after the notification block
+        starts is the observation's catalogue read, so the moment it completes, a separate
+        maintenance pipeline process is started and given a bounded window to finish its
+        advance before this run reads the notify state. Under the lock-based observation the
+        catalogue read happens with the history lock held, so the writer cannot get through
+        during that window; before it, nothing stops it. Returns {process, completed_inside}.
+        """
+        real_config = fn.load_email_config
+        real_read = fw.read_json
+        armed = {"value": False}
+        observation: dict = {}
+
+        def arm_at_notification_block(*args, **kwargs):
+            result = real_config(*args, **kwargs)
+            armed["value"] = True
+            return result
+
+        def attempt_between_the_reads(path, default):
+            result = real_read(path, default)
+            if armed["value"] and path == state_path:
+                armed["value"] = False
+                (tmp / "a-in-observation").write_text("1", encoding="utf-8")
+                observation["process"] = self._spawn_interprocess_maintenance(tmp)
+                self.assertTrue(
+                    _wait_for_marker(
+                        tmp / "b-attempting", B_ATTEMPT_TIMEOUT_SECONDS
+                    ),
+                    "the maintenance process never signalled its attempt",
+                )
+                observation["completed_inside"] = _wait_for_marker(
+                    tmp / "b-done.json", B_INSIDE_DELAY_SECONDS
+                )
+            return result
+
+        with patch.object(
+            fn, "load_email_config", side_effect=arm_at_notification_block
+        ), patch.object(fw, "read_json", side_effect=attempt_between_the_reads):
+            self.assertEqual(
+                self._run(
+                    tmp, state_path, health_path, history_path, reconcile=False
+                ),
+                0,
+            )
+        self.assertFalse(
+            armed["value"], "the notification-block catalogue read was never observed"
+        )
+        return observation
 
     def test_reconciliation_fixes_the_false_positive_without_replay_or_data_loss(self) -> None:
         fixture = json.loads(LIVE_CATALOG_COPY.read_text(encoding="utf-8"))
@@ -1781,6 +2021,283 @@ class CveReconciliationPipelineTests(unittest.TestCase):
             self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, resumed["sentKeys"])
             self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, repeated["sentKeys"])
             self.assertEqual(client.send_message.call_count, 0)
+
+    def test_concurrent_maintenance_cannot_advance_inside_the_notification_observation(
+        self,
+    ) -> None:
+        """Final reliability pass — the catalogue result and the notify state are ONE
+        observation, and that observation excludes concurrent writers.
+
+        A real normal pipeline run (this process, real `main()`) reaches its notification
+        observation section; while the section is held, the real maintenance pipeline runs as
+        a separate OS process and attempts its whole pass between the observation's two reads.
+        It must NOT be able to complete its advance inside the window (its checkpoint work is
+        blocked on the very lock the observation holds); once the observation is released it
+        completes silently — corrected catalogue, baseline `high`, no intent left, zero SMTP.
+        Neither run regresses the other: the following normal resumes replay no historical
+        low->high correction and send nothing.
+        """
+        fixture = self._catalog_with_low_severity_false_positive()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            state_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            fw.write_json(state_path, fixture)
+            self._enable_notifications(tmp)
+            fn.ensure_checkpoint(history_path, {
+                "versionsByProduct": {},
+                "cvesById": full_cve_baseline(fixture),
+                "health": {},
+            })
+            fw.fetch_text = self._make_transport()
+            client = _mock_smtp_client()
+
+            with patch.dict(os.environ, NOTIFY_ENV, clear=False), patch(
+                "smtplib.SMTP", return_value=client
+            ), patch(
+                "socket.socket.connect",
+                side_effect=AssertionError("external network forbidden"),
+            ), patch(
+                "socket.create_connection",
+                side_effect=AssertionError("external network forbidden"),
+            ):
+                observation = self._run_with_concurrent_maintenance_attempt(
+                    tmp, state_path, health_path, history_path
+                )
+                self._join_interprocess_maintenance(observation["process"])
+                self.assertFalse(
+                    observation["completed_inside"],
+                    "a separate maintenance process completed its advance while the "
+                    "notification observation was held",
+                )
+
+                # B completed silently once the observation was released.
+                result = json.loads((tmp / "b-done.json").read_text(encoding="utf-8"))
+                self.assertEqual(result["exit"], 0)
+                self.assertEqual(result["smtp_calls"], 0)
+                self.assertEqual(result["sent_keys"], [])
+                self.assertEqual(result["outbox"], [])
+                self.assertEqual(result["pending"], [])
+                self.assertEqual(result["severity_84393"], "high")
+
+                after_a = fn.load_notify_state(history_path)
+                self.assertEqual(
+                    after_a["checkpoint"]["cvesById"]["CVE-2026-84393"]["severity"],
+                    "high",
+                    "an in-flight catalogue image must never regress a certified advance",
+                )
+                self.assertEqual(after_a["outbox"], [])
+                self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, after_a["sentKeys"])
+
+                # Two normal resumes: neither replays the consumed historical correction.
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                resumed = fn.load_notify_state(history_path)
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                repeated = fn.load_notify_state(history_path)
+
+            self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, resumed["sentKeys"])
+            self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, repeated["sentKeys"])
+            self.assertEqual(client.send_message.call_count, 0)
+            self.assertEqual(
+                repeated["checkpoint"]["cvesById"]["CVE-2026-84393"]["severity"], "high"
+            )
+
+    def test_disabled_run_cannot_regress_a_concurrent_advance_before_reactivation(
+        self,
+    ) -> None:
+        """Final reliability pass — the disabled path writes conditioned on its observation.
+
+        Every notification category is disabled, so the pipeline advances its baselines
+        silently. While this run's observation section is held, the real maintenance pipeline
+        (separate OS process) attempts its pass and completes only after the release. The
+        disabled-state write must not push the stale catalogue image it observed back over the
+        certified `high` advance — reactivating notifications then derives nothing and replays
+        no historical correction.
+        """
+        fixture = self._catalog_with_low_severity_false_positive()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            state_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            fw.write_json(state_path, fixture)
+            disabled_payload = fn._default_notification_settings_payload()
+            disabled_payload["recipients"] = ["ops@example.com"]
+            fn.save_notification_settings(tmp / "notification-settings.json", disabled_payload)
+            fn.ensure_checkpoint(history_path, {
+                "versionsByProduct": {},
+                "cvesById": full_cve_baseline(fixture),
+                "health": {},
+            })
+            fw.fetch_text = self._make_transport()
+            client = _mock_smtp_client()
+
+            with patch.dict(os.environ, NOTIFY_ENV, clear=False), patch(
+                "smtplib.SMTP", return_value=client
+            ), patch(
+                "socket.socket.connect",
+                side_effect=AssertionError("external network forbidden"),
+            ), patch(
+                "socket.create_connection",
+                side_effect=AssertionError("external network forbidden"),
+            ):
+                observation = self._run_with_concurrent_maintenance_attempt(
+                    tmp, state_path, health_path, history_path
+                )
+                self._join_interprocess_maintenance(observation["process"])
+                self.assertFalse(
+                    observation["completed_inside"],
+                    "a separate maintenance process completed its advance while the "
+                    "notification observation was held",
+                )
+
+                after_a = fn.load_notify_state(history_path)
+                self.assertEqual(
+                    after_a["checkpoint"]["cvesById"]["CVE-2026-84393"]["severity"],
+                    "high",
+                    "a disabled run must not regress a concurrent certified advance",
+                )
+                self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, after_a["sentKeys"])
+                self.assertEqual(client.send_message.call_count, 0)
+
+                # Reactivation: the baseline already carries the correction, nothing to
+                # derive, nothing to send, nothing to replay.
+                self._enable_notifications(tmp)
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                resumed = fn.load_notify_state(history_path)
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                repeated = fn.load_notify_state(history_path)
+
+            self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, resumed["sentKeys"])
+            self.assertNotIn(CVE_ESCALATION_REPLAY_KEY, repeated["sentKeys"])
+            self.assertNotIn(fn.PENDING_CVE_BASELINE_KEY, repeated)
+            self.assertEqual(client.send_message.call_count, 0)
+            self.assertEqual(
+                repeated["checkpoint"]["cvesById"]["CVE-2026-84393"]["severity"], "high"
+            )
+
+    def test_absent_durable_catalogue_suspends_notifications_without_resetting_state(
+        self,
+    ) -> None:
+        """Final reliability pass — no silent fallback to this run's own stale `final_state`.
+
+        The durable catalogue is externally removed at the exact moment the notification
+        observation tries to read it. The notification work must be suspended with a cleaned
+        diagnostic and the history kept byte-for-byte, never derived from the run's older
+        in-flight image — which would notify the new CVE and advance the checkpoint from data
+        the durable files do not back. The next run re-observes from scratch and delivers the
+        novelty exactly once.
+        """
+        fixture = json.loads(LIVE_CATALOG_COPY.read_text(encoding="utf-8"))
+        expected_key = "new-cve|psirt|CVE-2026-99999|high"
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            state_path = tmp / "state.json"
+            health_path = tmp / "health.json"
+            history_path = tmp / "notify-history.json"
+            fw.write_json(state_path, fixture)
+            self._enable_notifications(tmp)
+            fn.ensure_checkpoint(history_path, {
+                "versionsByProduct": {},
+                "cvesById": full_cve_baseline(fixture),
+                "health": {},
+            })
+            transport = FakeTransport()
+            transport.add_advisory(
+                "FG-IR-26-999",
+                make_csaf_document("FG-IR-26-999", cve_ids=("CVE-2026-99999",)),
+            )
+            transport.default_error = urllib.error.URLError("not served in this test")
+            fw.fetch_text = transport
+            before_bytes = history_path.read_bytes()
+
+            real_config = fn.load_email_config
+            real_read = fw.read_json
+            removed_aside = tmp / "state.json.externally-removed"
+            armed = {"value": False}
+            interposed = {"count": 0}
+
+            def arm_at_notification_block(*args, **kwargs):
+                result = real_config(*args, **kwargs)
+                if interposed["count"] == 0:
+                    armed["value"] = True
+                return result
+
+            def absent_during_the_observation(path, default):
+                if armed["value"] and path == state_path:
+                    armed["value"] = False
+                    interposed["count"] += 1
+                    state_path.rename(removed_aside)
+                    try:
+                        return real_read(path, default)
+                    finally:
+                        removed_aside.rename(state_path)
+                return real_read(path, default)
+
+            client = _mock_smtp_client()
+            stderr = io.StringIO()
+            with patch.dict(os.environ, NOTIFY_ENV, clear=False), patch(
+                "smtplib.SMTP", return_value=client
+            ), patch(
+                "socket.socket.connect",
+                side_effect=AssertionError("external network forbidden"),
+            ), patch(
+                "socket.create_connection",
+                side_effect=AssertionError("external network forbidden"),
+            ), patch.object(
+                fw, "discover_advisory_ids_from_rss", return_value=["FG-IR-26-999"]
+            ), patch.object(
+                fn, "load_email_config", side_effect=arm_at_notification_block
+            ), patch.object(
+                fw, "read_json", side_effect=absent_during_the_observation
+            ):
+                with contextlib.redirect_stderr(stderr):
+                    self.assertEqual(
+                        self._run(tmp, state_path, health_path, history_path, reconcile=False),
+                        0,
+                    )
+
+                self.assertFalse(armed["value"])
+                self.assertIn("notification email non envoyée", stderr.getvalue())
+                # Suspended, not approximated: the history is byte-for-byte untouched and the
+                # checkpoint does not absorb the novelty from an image nothing durable backs.
+                self.assertEqual(history_path.read_bytes(), before_bytes)
+                suspended = fn.load_notify_state(history_path)
+                self.assertNotIn("CVE-2026-99999", suspended["checkpoint"]["cvesById"])
+                self.assertEqual(suspended["sentKeys"], {})
+                self.assertEqual(client.send_message.call_count, 0)
+                catalog_cves = json.loads(state_path.read_text(encoding="utf-8"))["cves"]
+                self.assertIn(
+                    "CVE-2026-99999", {item["id"] for item in catalog_cves}
+                )
+
+                # The next run (durable catalogue present again) re-observes from scratch and
+                # recovers the novelty exactly once.
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                recovered = fn.load_notify_state(history_path)
+                self.assertIn(expected_key, recovered["sentKeys"])
+                self.assertEqual(client.send_message.call_count, 1)
+                self.assertIn("CVE-2026-99999", recovered["checkpoint"]["cvesById"])
+
+                # Repeated resume: no duplicate email.
+                self.assertEqual(
+                    self._run(tmp, state_path, health_path, history_path, reconcile=False), 0
+                )
+                repeated = fn.load_notify_state(history_path)
+
+            self.assertIn(expected_key, repeated["sentKeys"])
+            self.assertEqual(client.send_message.call_count, 1)
 
 
 class PendingCveBaselineMechanicsTests(unittest.TestCase):
