@@ -260,6 +260,56 @@ def cross_process_lock(target_path: Path):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+# Sentinel for read_coherent_notification_observation(): it is never a valid catalogue, so "the
+# durable catalogue could not be read" can never be confused with any real payload.
+_COHERENT_OBSERVATION_UNAVAILABLE = object()
+
+
+def read_coherent_notification_observation(
+    history_path: Path, catalogue_path: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read the committed catalogue AND the notify state as ONE coherent observation.
+
+    Both reads happen inside a single short cross_process_lock(history_path) section. Every
+    writer of the checkpoint, the staged CVE-baseline intents and the rest of the notify state
+    goes through that very lock, so none of them can advance between the two reads; the
+    catalogue is replaced atomically, so the image read next to that state is the one the
+    notification work will diff against it. A maintenance pass (or any other writer) completing
+    while a run was still collecting can therefore only be observed entirely before this
+    snapshot (its advance is already the baseline) or entirely after it (its stage/consume/
+    commit steps are still excluded by the lock) -- never as a stale catalogue image paired
+    with a freshly certified baseline, the shape that used to let an older run regress that
+    advance and replay the correction as a historical notification (the B3 review's remaining
+    window).
+
+    The lock is released before any derivation, network or SMTP work: it only ever covers the
+    two reads, never the whole notification pass (whose helpers take this same non-reentrant
+    lock themselves).
+
+    Never falls back silently: an absent, unreadable or structurally invalid catalogue raises
+    (the caller isolates the failure by suspending the notification work -- state preserved,
+    cleaned diagnostic, collection unaffected) instead of deriving from this run's own older
+    `final_state` image, which nothing durable backs anymore.
+    """
+    import fortios_notify  # deferred: avoids a load-time circular import with this module
+
+    with cross_process_lock(history_path):
+        try:
+            catalogue = read_json(catalogue_path, _COHERENT_OBSERVATION_UNAVAILABLE)
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            raise RuntimeError(
+                f"Catalogue durable illisible ({type(error).__name__})."
+            ) from error
+        if catalogue is _COHERENT_OBSERVATION_UNAVAILABLE or not isinstance(
+            catalogue, dict
+        ):
+            raise RuntimeError(
+                "Catalogue durable absent ou invalide pour l'observation des notifications"
+            )
+        notify_state = fortios_notify.load_notify_state(history_path)
+    return catalogue, notify_state
+
+
 # --- Health-state tracking --------------------------------------------------------------------
 # A separate JSON file from the main catalog (data/fortios-health.json by default), recording
 # per-source collection status so the UI can show "how fresh/healthy is our data" without
@@ -3677,30 +3727,42 @@ def main(argv: list[str]) -> int:
             and notification_settings.system_notifications_enabled
             and notification_settings.system_recipients
         )
-        # The catalogue observation every baseline below is built from is re-read HERE, together
-        # with the notify state -- never taken from the `final_state` image this run committed
-        # earlier. A writer that completed while this run was suspended (a maintenance pass
-        # finishing right before this block, for instance) advances the catalogue and the durable
-        # checkpoint together; reusing this run's older in-flight image would propose a value
-        # that regresses that certified advance, and the next run would then replay the
-        # correction as a historical low->high notification (the B3 review's remaining window).
-        # An unreadable catalogue aborts this best-effort block (caught below) rather than
-        # deriving from a stale image: the next run re-observes the durable pair from scratch.
-        notify_catalog = read_json(args.output, final_state)
+        # The catalogue observation every baseline below is built from is read HERE, as ONE
+        # coherent snapshot together with the notify state (checkpoint, staged intents, EOL
+        # state) -- never as two separate reads, and never from the `final_state` image this run
+        # committed earlier. See read_coherent_notification_observation(): both reads share one
+        # short section of the history lock every notify-state writer already takes, so a writer
+        # that completed while this run was still collecting (a maintenance pass finishing right
+        # before this block, for instance) is observed either entirely before the snapshot (its
+        # advance is already the baseline diffed below) or entirely after it (its stage/consume/
+        # commit steps are still excluded by the lock) -- never as a stale catalogue image
+        # paired with a freshly certified baseline, the shape that used to let an older run
+        # regress that advance and replay the correction as a historical low->high notification
+        # (the B3 review's remaining window). An absent or unreadable catalogue aborts this
+        # best-effort block (caught below) instead of silently falling back to the stale
+        # final_state image: the next run re-observes the durable pair from scratch.
+        notify_observation = None
+        if notification_settings is not None and notify_checkpoint is not None:
+            notify_observation = read_coherent_notification_observation(
+                args.notify_history_output, args.output
+            )
         if (
-            notification_settings is not None
-            and notify_checkpoint is not None
+            notify_observation is not None
             and not cve_notifications
             and not release_notifications
             and not system_notifications
         ):
+            # Notifications disabled: every baseline below still advances silently, but each
+            # proposal is conditioned (under the write lock, on the baseline this observation
+            # read) so an older disabled run can never regress an advance another writer
+            # certified since -- which a later reactivation would otherwise replay.
+            notify_catalog, notify_state = notify_observation
             health_after = read_health_state(args.health_output).get("sources", {})
             cves_after_by_id = {
                 item["id"]: item
                 for item in notify_catalog.get("cves", [])
                 if item.get("id")
             }
-            notify_state = fortios_notify.load_notify_state(args.notify_history_output)
             _, eol_state_after = fortios_notify.derive_eol_events(
                 notify_catalog.get("fortiosLifecycle", {}),
                 notify_state.get("eolState", {}),
@@ -3717,33 +3779,33 @@ def main(argv: list[str]) -> int:
                     "cvesById": cves_after_by_id,
                     "health": health_after,
                 },
+                observed_checkpoint=notify_state.get("checkpoint"),
+                observed_eol_state=notify_state.get("eolState"),
             )
-        if (
-            notification_settings is not None
-            and notify_checkpoint is not None
-            and (
-                cve_notifications
-                or release_notifications
-                or system_notifications
-            )
+        if notify_observation is not None and (
+            cve_notifications
+            or release_notifications
+            or system_notifications
         ):
+            notify_catalog, notify_state = notify_observation
             health_after = read_health_state(args.health_output).get("sources", {})
-            notify_state = fortios_notify.load_notify_state(args.notify_history_output)
             pending_observed = notify_state.get(fortios_notify.PENDING_CVE_BASELINE_KEY)
 
-            # The derivation baseline is the checkpoint as it stands RIGHT NOW -- freshly
-            # re-read -- not the one this run bootstrapped at start-up. A maintenance pass (or any
-            # other writer) that completed while this run was still collecting has already
-            # consumed its historical corrections into that fresher checkpoint; deriving against
-            # the stale start-up capture would replay them (the B3 "checkpoint périmé" case), so
-            # the durable state -- never an in-flight run's memory -- is the reference that stays
-            # opposable to it. The same freshness contract is enforced again, under the write
-            # lock, by commit_events_with_checkpoint(derivation_checkpoint=...): a correction
-            # certified by someone else is never overwritten by this run's older snapshot, and
+            # The derivation baseline is the checkpoint as it stands RIGHT NOW, from the
+            # coherent observation above -- not the one this run bootstrapped at start-up. A
+            # maintenance pass (or any other writer) that completed while this run was still
+            # collecting has already consumed its historical corrections into that fresher
+            # checkpoint; deriving against the stale start-up capture would replay them (the B3
+            # "checkpoint périmé" case), so the durable state -- never an in-flight run's
+            # memory -- is the reference that stays opposable to it. The same freshness contract
+            # is enforced again, under the write lock, by
+            # commit_events_with_checkpoint(derivation_checkpoint=...): a correction certified
+            # by someone else is never overwritten by this run's older snapshot, and
             # pre-derived events are revalidated against the fresh durable state before entering
-            # the outbox. The catalogue side of the observation is re-read at the same moment
-            # (notify_catalog above), so the proposed baseline and the catalogue it is diffed
-            # against always belong to one coordinated observation of the durable pair.
+            # the outbox. The catalogue side of the observation was read in the same protected
+            # section (read_coherent_notification_observation above), so the proposed baseline
+            # and the catalogue it is diffed against always belong to one coordinated
+            # observation of the durable pair.
             checkpoint_state = notify_state.get("checkpoint") or notify_checkpoint
 
             # cves_after_by_id feeds the new checkpoint below regardless of --cve-backfill, so a

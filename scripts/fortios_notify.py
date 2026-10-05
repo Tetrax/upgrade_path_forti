@@ -2515,12 +2515,38 @@ def commit_disabled_notification_state(
     path: Path,
     eol_state: dict[str, bool],
     checkpoint: dict[str, Any],
+    *,
+    observed_checkpoint: dict[str, Any] | None = None,
+    observed_eol_state: dict[str, bool] | None = None,
 ) -> None:
-    """Atomically advance every notification baseline while delivery is disabled."""
+    """Atomically advance every notification baseline while delivery is disabled.
+
+    `observed_checkpoint` / `observed_eol_state` are the values the caller's coherent
+    observation read next to the catalogue these proposals were derived from (see
+    fortios_watch.read_coherent_notification_observation()). Supplied -- the watcher always
+    does -- every proposed entry is conditioned on the durable state re-read under the write
+    lock, exactly like commit_events_with_checkpoint()'s derivation guard: an entry whose
+    durable value moved since that observation is kept as-is (the durable certification wins),
+    so an older disabled run can never regress an advance another writer certified in the
+    meantime -- which a later reactivation would otherwise replay as a historical
+    notification. Entries the durable state does not carry are written normally. Without the
+    parameters the values are written verbatim (historical behaviour, for callers that hold no
+    observation to condition on).
+    """
     with cross_process_lock(path):
         state = load_notify_state(path)
-        state["eolState"] = eol_state
-        state["checkpoint"] = checkpoint
+        state["eolState"] = (
+            eol_state
+            if observed_eol_state is None
+            else _guarded_map(state.get("eolState"), eol_state, observed_eol_state)
+        )
+        state["checkpoint"] = (
+            checkpoint
+            if observed_checkpoint is None
+            else _guard_checkpoint_write(
+                state.get("checkpoint"), checkpoint, observed_checkpoint
+            )
+        )
         write_json(path, state)
 
 
@@ -2589,9 +2615,10 @@ def _guarded_map(
     proposed: dict[str, Any],
     baseline: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    """Per-entry merge backing _guard_checkpoint_write(): an entry present on disk whose durable
-    value is no longer the one this run derived against is kept as-is (the durable certification
-    wins); everything else is written from `proposed`."""
+    """Per-entry conditional merge: an entry present on disk whose durable value is no longer
+    the one the caller derived its proposal against is kept as-is (the durable certification
+    wins); everything else is written from `proposed`. Backs _guard_checkpoint_write() and the
+    disabled-state writer's baseline conditioning (including its eolState map)."""
     current = current or {}
     baseline = baseline or {}
     guarded: dict[str, Any] = {}
