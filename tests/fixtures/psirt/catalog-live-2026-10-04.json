@@ -1,0 +1,5665 @@
+{
+ "generatedAt": "2026-10-04T20:28:28Z",
+ "cves": [
+  {
+   "id": "CVE-2026-59837",
+   "advisoryId": "FG-IR-26-148",
+   "title": "Stack Buffer Overflow in Log Report",
+   "severity": "medium",
+   "cvssScore": 5.9,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-148",
+   "publishedAt": "2026-07-14",
+   "updatedAt": "2026-07-14",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-22153",
+   "advisoryId": "FG-IR-25-1052",
+   "title": "LDAP authentication bypass in Agentless VPN and FSSO",
+   "severity": "high",
+   "cvssScore": 7.5,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-25-1052",
+   "publishedAt": "2026-02-10",
+   "updatedAt": "2026-07-04",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.4",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.3",
+     "to": "7.6.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.1",
+     "to": "7.6.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-25250",
+   "advisoryId": "FG-IR-24-257",
+   "title": "Information Disclosure on SSLVPN endpoint",
+   "severity": "low",
+   "cvssScore": 3.9,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-24-257",
+   "publishedAt": "2025-06-10",
+   "updatedAt": "2026-06-15",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.7",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.13",
+     "to": "7.2.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.12",
+     "to": "7.2.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.19",
+     "to": "7.0.19"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.18",
+     "to": "7.0.18"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.17",
+     "to": "7.0.17"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.16",
+     "to": "7.0.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.15",
+     "to": "7.0.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.14",
+     "to": "7.0.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.13",
+     "to": "7.0.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.12",
+     "to": "7.0.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.11",
+     "to": "7.0.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.10",
+     "to": "7.0.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.9",
+     "to": "7.0.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.8",
+     "to": "7.0.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.7",
+     "to": "7.0.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.6",
+     "to": "7.0.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.5",
+     "to": "7.0.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.4",
+     "to": "7.0.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.3",
+     "to": "7.0.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.2",
+     "to": "7.0.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.1",
+     "to": "7.0.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.0",
+     "to": "7.0.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.16",
+     "to": "6.4.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.15",
+     "to": "6.4.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.14",
+     "to": "6.4.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.13",
+     "to": "6.4.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.12",
+     "to": "6.4.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.11",
+     "to": "6.4.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.10",
+     "to": "6.4.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.9",
+     "to": "6.4.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.8",
+     "to": "6.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.7",
+     "to": "6.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.6",
+     "to": "6.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.5",
+     "to": "6.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.4",
+     "to": "6.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.3",
+     "to": "6.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.2",
+     "to": "6.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.1",
+     "to": "6.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.0",
+     "to": "6.4.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-67862",
+   "advisoryId": "FG-IR-26-143",
+   "title": "Restricted CLI escape using Lua",
+   "severity": "medium",
+   "cvssScore": 6.0,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-143",
+   "publishedAt": "2026-06-09",
+   "updatedAt": "2026-06-09",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-31514",
+   "advisoryId": "FG-IR-24-452",
+   "title": "Insertion of Sensitive 2FA Information in logs and debug command",
+   "severity": "low",
+   "cvssScore": 2.6,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-24-452",
+   "publishedAt": "2025-10-14",
+   "updatedAt": "2026-06-08",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.3",
+     "to": "7.6.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.1",
+     "to": "7.6.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.12",
+     "to": "7.4.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.11",
+     "to": "7.4.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.10",
+     "to": "7.4.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.9",
+     "to": "7.4.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.8",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.7",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.13",
+     "to": "7.2.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.12",
+     "to": "7.2.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.19",
+     "to": "7.0.19"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.18",
+     "to": "7.0.18"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.17",
+     "to": "7.0.17"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.16",
+     "to": "7.0.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.15",
+     "to": "7.0.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.14",
+     "to": "7.0.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.13",
+     "to": "7.0.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.12",
+     "to": "7.0.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.11",
+     "to": "7.0.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.10",
+     "to": "7.0.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.9",
+     "to": "7.0.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.8",
+     "to": "7.0.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.7",
+     "to": "7.0.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.6",
+     "to": "7.0.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.5",
+     "to": "7.0.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.4",
+     "to": "7.0.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.3",
+     "to": "7.0.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.2",
+     "to": "7.0.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.1",
+     "to": "7.0.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.0",
+     "to": "7.0.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.16",
+     "to": "6.4.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.15",
+     "to": "6.4.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.14",
+     "to": "6.4.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.13",
+     "to": "6.4.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.12",
+     "to": "6.4.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.11",
+     "to": "6.4.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.10",
+     "to": "6.4.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.9",
+     "to": "6.4.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.8",
+     "to": "6.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.7",
+     "to": "6.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.6",
+     "to": "6.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.5",
+     "to": "6.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.4",
+     "to": "6.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.3",
+     "to": "6.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.2",
+     "to": "6.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.1",
+     "to": "6.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.0",
+     "to": "6.4.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-54821",
+   "advisoryId": "FG-IR-25-545",
+   "title": "Trusted hosts bypass via SSH",
+   "severity": "low",
+   "cvssScore": 1.8,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-25-545",
+   "publishedAt": "2025-11-18",
+   "updatedAt": "2026-05-27",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.3",
+     "to": "7.6.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.1",
+     "to": "7.6.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.11",
+     "to": "7.4.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.10",
+     "to": "7.4.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.9",
+     "to": "7.4.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.8",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.7",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.13",
+     "to": "7.2.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.12",
+     "to": "7.2.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.19",
+     "to": "7.0.19"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.18",
+     "to": "7.0.18"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.17",
+     "to": "7.0.17"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.16",
+     "to": "7.0.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.15",
+     "to": "7.0.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.14",
+     "to": "7.0.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.13",
+     "to": "7.0.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.12",
+     "to": "7.0.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.11",
+     "to": "7.0.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.10",
+     "to": "7.0.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.9",
+     "to": "7.0.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.8",
+     "to": "7.0.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.7",
+     "to": "7.0.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.6",
+     "to": "7.0.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.5",
+     "to": "7.0.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.4",
+     "to": "7.0.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.3",
+     "to": "7.0.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.2",
+     "to": "7.0.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.1",
+     "to": "7.0.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.0",
+     "to": "7.0.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.16",
+     "to": "6.4.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.15",
+     "to": "6.4.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.14",
+     "to": "6.4.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.13",
+     "to": "6.4.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.12",
+     "to": "6.4.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.11",
+     "to": "6.4.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.10",
+     "to": "6.4.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.9",
+     "to": "6.4.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.8",
+     "to": "6.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.7",
+     "to": "6.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.6",
+     "to": "6.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.5",
+     "to": "6.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.4",
+     "to": "6.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.3",
+     "to": "6.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.2",
+     "to": "6.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.1",
+     "to": "6.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.0",
+     "to": "6.4.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-26466",
+   "advisoryId": "FG-IR-25-122",
+   "title": "Pre-authentication Denial of Service attack in OpenSSH - CVE-2025-26466",
+   "severity": "medium",
+   "cvssScore": 5.9,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-25-122",
+   "publishedAt": "2025-03-11",
+   "updatedAt": "2026-05-25",
+   "affected": [
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.2"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.1",
+     "to": "7.6.1"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.16",
+     "to": "7.0.16"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.15",
+     "to": "7.0.15"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.14",
+     "to": "7.0.14"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.13",
+     "to": "7.0.13"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.12",
+     "to": "7.0.12"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.15",
+     "to": "6.4.15"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.14",
+     "to": "6.4.14"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.2"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.1",
+     "to": "7.6.1"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.16",
+     "to": "7.0.16"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.15",
+     "to": "7.0.15"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.14",
+     "to": "7.0.14"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.13",
+     "to": "7.0.13"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.12",
+     "to": "7.0.12"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.15",
+     "to": "6.4.15"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.14",
+     "to": "6.4.14"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-67604",
+   "advisoryId": "FG-IR-26-137",
+   "title": "DoS due to unsafe function in signal handler",
+   "severity": "medium",
+   "cvssScore": 5.2,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-137",
+   "publishedAt": "2026-05-12",
+   "updatedAt": "2026-05-12",
+   "affected": [
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.4",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.3",
+     "to": "7.6.3"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.2"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.1",
+     "to": "7.6.1"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.8",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.7",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.12",
+     "to": "7.2.12"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.16",
+     "to": "7.0.16"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.15",
+     "to": "7.0.15"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.14",
+     "to": "7.0.14"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.13",
+     "to": "7.0.13"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.12",
+     "to": "7.0.12"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.11",
+     "to": "7.0.11"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.10",
+     "to": "7.0.10"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.9",
+     "to": "7.0.9"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.8",
+     "to": "7.0.8"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.7",
+     "to": "7.0.7"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.6",
+     "to": "7.0.6"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.5",
+     "to": "7.0.5"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.4",
+     "to": "7.0.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.3",
+     "to": "7.0.3"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.2",
+     "to": "7.0.2"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.1",
+     "to": "7.0.1"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.0",
+     "to": "7.0.0"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.15",
+     "to": "6.4.15"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.14",
+     "to": "6.4.14"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.13",
+     "to": "6.4.13"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.12",
+     "to": "6.4.12"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.11",
+     "to": "6.4.11"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.10",
+     "to": "6.4.10"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.9",
+     "to": "6.4.9"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.8",
+     "to": "6.4.8"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.7",
+     "to": "6.4.7"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.6",
+     "to": "6.4.6"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.5",
+     "to": "6.4.5"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.4",
+     "to": "6.4.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.3",
+     "to": "6.4.3"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.2",
+     "to": "6.4.2"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.1",
+     "to": "6.4.1"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.0",
+     "to": "6.4.0"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.4",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.3",
+     "to": "7.6.3"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.2"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.1",
+     "to": "7.6.1"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.8",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.7",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.12",
+     "to": "7.2.12"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.16",
+     "to": "7.0.16"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.15",
+     "to": "7.0.15"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.14",
+     "to": "7.0.14"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.13",
+     "to": "7.0.13"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.12",
+     "to": "7.0.12"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.11",
+     "to": "7.0.11"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.10",
+     "to": "7.0.10"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.9",
+     "to": "7.0.9"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.8",
+     "to": "7.0.8"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.7",
+     "to": "7.0.7"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.6",
+     "to": "7.0.6"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.5",
+     "to": "7.0.5"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.4",
+     "to": "7.0.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.3",
+     "to": "7.0.3"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.2",
+     "to": "7.0.2"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.1",
+     "to": "7.0.1"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.0",
+     "to": "7.0.0"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.15",
+     "to": "6.4.15"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.14",
+     "to": "6.4.14"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.13",
+     "to": "6.4.13"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.12",
+     "to": "6.4.12"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.11",
+     "to": "6.4.11"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.10",
+     "to": "6.4.10"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.9",
+     "to": "6.4.9"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.8",
+     "to": "6.4.8"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.7",
+     "to": "6.4.7"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.6",
+     "to": "6.4.6"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.5",
+     "to": "6.4.5"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.4",
+     "to": "6.4.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.3",
+     "to": "6.4.3"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.2",
+     "to": "6.4.2"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.1",
+     "to": "6.4.1"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.0",
+     "to": "6.4.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-44278",
+   "advisoryId": "FG-IR-26-129",
+   "title": "Hardcoded Encryption Key Used for VPN Saved Passwords",
+   "severity": "low",
+   "cvssScore": 2.1,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-129",
+   "publishedAt": "2026-05-12",
+   "updatedAt": "2026-05-12",
+   "affected": [
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.14",
+     "to": "7.2.14"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.13",
+     "to": "7.2.13"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.12",
+     "to": "7.2.12"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-53844",
+   "advisoryId": "FG-IR-26-123",
+   "title": "Out-of-bounds access in CAPWAP daemon",
+   "severity": "high",
+   "cvssScore": 8.3,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-123",
+   "publishedAt": "2026-05-12",
+   "updatedAt": "2026-05-12",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.3",
+     "to": "7.6.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.1",
+     "to": "7.6.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.8",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.7",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.17",
+     "to": "7.0.17"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.16",
+     "to": "7.0.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.15",
+     "to": "7.0.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.14",
+     "to": "7.0.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.13",
+     "to": "7.0.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.12",
+     "to": "7.0.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.11",
+     "to": "7.0.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.10",
+     "to": "7.0.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.9",
+     "to": "7.0.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.8",
+     "to": "7.0.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.7",
+     "to": "7.0.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.6",
+     "to": "7.0.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.5",
+     "to": "7.0.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.4",
+     "to": "7.0.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.3",
+     "to": "7.0.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.2",
+     "to": "7.0.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.1",
+     "to": "7.0.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.0",
+     "to": "7.0.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.16",
+     "to": "6.4.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.15",
+     "to": "6.4.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.14",
+     "to": "6.4.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.13",
+     "to": "6.4.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.12",
+     "to": "6.4.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.11",
+     "to": "6.4.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.10",
+     "to": "6.4.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.9",
+     "to": "6.4.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.8",
+     "to": "6.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.7",
+     "to": "6.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.6",
+     "to": "6.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.5",
+     "to": "6.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.4",
+     "to": "6.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.3",
+     "to": "6.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.2",
+     "to": "6.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.1",
+     "to": "6.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.0",
+     "to": "6.4.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.17",
+     "to": "6.2.17"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.16",
+     "to": "6.2.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.15",
+     "to": "6.2.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.14",
+     "to": "6.2.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.13",
+     "to": "6.2.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.12",
+     "to": "6.2.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.11",
+     "to": "6.2.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.10",
+     "to": "6.2.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.9",
+     "to": "6.2.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.8",
+     "to": "6.2.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.7",
+     "to": "6.2.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.6",
+     "to": "6.2.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.5",
+     "to": "6.2.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.4",
+     "to": "6.2.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.3",
+     "to": "6.2.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.2",
+     "to": "6.2.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.1",
+     "to": "6.2.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.0",
+     "to": "6.2.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.18",
+     "to": "6.0.18"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.17",
+     "to": "6.0.17"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.16",
+     "to": "6.0.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.15",
+     "to": "6.0.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.14",
+     "to": "6.0.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.13",
+     "to": "6.0.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.12",
+     "to": "6.0.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.11",
+     "to": "6.0.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.10",
+     "to": "6.0.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.9",
+     "to": "6.0.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.8",
+     "to": "6.0.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.7",
+     "to": "6.0.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.6",
+     "to": "6.0.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.5",
+     "to": "6.0.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.4",
+     "to": "6.0.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.3",
+     "to": "6.0.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.2",
+     "to": "6.0.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.1",
+     "to": "6.0.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.0",
+     "from": "6.0.0",
+     "to": "6.0.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-39810",
+   "advisoryId": "FG-IR-26-107",
+   "title": "Hardcoded symmetric encryption key for Postgresql",
+   "severity": "medium",
+   "cvssScore": 5.2,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-107",
+   "publishedAt": "2026-04-14",
+   "updatedAt": "2026-04-14",
+   "affected": [
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-22828",
+   "advisoryId": "FG-IR-26-121",
+   "title": "Heap-based buffer overflow in oftpd daemon",
+   "severity": "high",
+   "cvssScore": 7.3,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-121",
+   "publishedAt": "2026-04-14",
+   "updatedAt": "2026-04-14",
+   "affected": [
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.4"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-53847",
+   "advisoryId": "FG-IR-26-125",
+   "title": "Missing Authentication for critical function in CAPWAP daemon",
+   "severity": "medium",
+   "cvssScore": 6.2,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-125",
+   "publishedAt": "2026-04-14",
+   "updatedAt": "2026-04-14",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.0",
+     "to": "7.0.17"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.2",
+     "from": "6.2.9",
+     "to": "6.2.17"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-39809",
+   "advisoryId": "FG-IR-26-102",
+   "title": "Multiple SQL Injections",
+   "severity": "medium",
+   "cvssScore": 6.2,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-102",
+   "publishedAt": "2026-04-14",
+   "updatedAt": "2026-04-14",
+   "affected": [
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.5"
+    },
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.12"
+    },
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.0",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-61624",
+   "advisoryId": "FG-IR-26-122",
+   "title": "Path Traversal in CLI",
+   "severity": "medium",
+   "cvssScore": 5.4,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-122",
+   "publishedAt": "2026-04-14",
+   "updatedAt": "2026-04-14",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-68649",
+   "advisoryId": "FG-IR-26-120",
+   "title": "Path Traversal in CLI",
+   "severity": "medium",
+   "cvssScore": 5.4,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-120",
+   "publishedAt": "2026-04-14",
+   "updatedAt": "2026-04-14",
+   "affected": [
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.7"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-61848",
+   "advisoryId": "FG-IR-26-111",
+   "title": "SQL Injection via JSON RPC API",
+   "severity": "medium",
+   "cvssScore": 6.8,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-111",
+   "publishedAt": "2026-04-14",
+   "updatedAt": "2026-04-14",
+   "affected": [
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.4"
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.8"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-35616",
+   "advisoryId": "FG-IR-26-099",
+   "title": "API authentication and authorization bypass",
+   "severity": "critical",
+   "cvssScore": 9.1,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-099",
+   "publishedAt": "2026-04-04",
+   "updatedAt": "2026-04-21",
+   "affected": [
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.6"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-43892",
+   "advisoryId": "FG-IR-26-154",
+   "title": "Buffer overread in authd and wad daemon",
+   "severity": "medium",
+   "cvssScore": 4.1,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-154",
+   "publishedAt": "2026-07-14",
+   "updatedAt": "2026-07-14",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.3",
+     "to": "7.6.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.2",
+     "to": "7.6.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.1",
+     "to": "7.6.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": "7.6.0",
+     "to": "7.6.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.8",
+     "to": "7.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.7",
+     "to": "7.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.13",
+     "to": "7.2.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.12",
+     "to": "7.2.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.19",
+     "to": "7.0.19"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.18",
+     "to": "7.0.18"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.17",
+     "to": "7.0.17"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.16",
+     "to": "7.0.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.15",
+     "to": "7.0.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.14",
+     "to": "7.0.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.13",
+     "to": "7.0.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.12",
+     "to": "7.0.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.11",
+     "to": "7.0.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.10",
+     "to": "7.0.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.9",
+     "to": "7.0.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.8",
+     "to": "7.0.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.7",
+     "to": "7.0.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.6",
+     "to": "7.0.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.5",
+     "to": "7.0.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.4",
+     "to": "7.0.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.3",
+     "to": "7.0.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.2",
+     "to": "7.0.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.1",
+     "to": "7.0.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": "7.0.0",
+     "to": "7.0.0"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.16",
+     "to": "6.4.16"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.15",
+     "to": "6.4.15"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.14",
+     "to": "6.4.14"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.13",
+     "to": "6.4.13"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.12",
+     "to": "6.4.12"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.11",
+     "to": "6.4.11"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.10",
+     "to": "6.4.10"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.9",
+     "to": "6.4.9"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.8",
+     "to": "6.4.8"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.7",
+     "to": "6.4.7"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.6",
+     "to": "6.4.6"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.5",
+     "to": "6.4.5"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.4",
+     "to": "6.4.4"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.3",
+     "to": "6.4.3"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.2",
+     "to": "6.4.2"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.1",
+     "to": "6.4.1"
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": "6.4.0",
+     "to": "6.4.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-62675",
+   "advisoryId": "FG-IR-26-152",
+   "title": "Header injection in Web Filter warning page",
+   "severity": "low",
+   "cvssScore": 3.4,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-152",
+   "publishedAt": "2026-07-14",
+   "updatedAt": "2026-07-14",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2025-62826",
+   "advisoryId": "FG-IR-26-153",
+   "title": "Header injection in captive portal authentication form",
+   "severity": "low",
+   "cvssScore": 3.1,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-153",
+   "publishedAt": "2026-07-14",
+   "updatedAt": "2026-07-14",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-59836",
+   "advisoryId": "FG-IR-26-147",
+   "title": "Missed certificate verification in AD Connector communication with FortiClient EMS",
+   "severity": "medium",
+   "cvssScore": 6.7,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-147",
+   "publishedAt": "2026-07-14",
+   "updatedAt": "2026-07-14",
+   "affected": [
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "forticlient-ems",
+     "models": [
+      "ems"
+     ],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-59839",
+   "advisoryId": "FG-IR-26-151",
+   "title": "Path traversal in CLI command allows deletion of root file system",
+   "severity": "medium",
+   "cvssScore": 5.0,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-151",
+   "publishedAt": "2026-07-14",
+   "updatedAt": "2026-07-14",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "6.4",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-23573",
+   "advisoryId": "FG-IR-26-150",
+   "title": "SSL-VPN Reflected XSS",
+   "severity": "medium",
+   "cvssScore": 6.1,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-150",
+   "publishedAt": "2026-07-14",
+   "updatedAt": "2026-07-14",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-70468",
+   "advisoryId": "FG-IR-26-160",
+   "title": "FGFM Authentication Weakening via CLI Configuration",
+   "severity": "high",
+   "cvssScore": 7.3,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-160",
+   "publishedAt": "2026-08-12",
+   "updatedAt": "2026-08-12",
+   "affected": [
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-70465",
+   "advisoryId": "FG-IR-26-156",
+   "title": "Heap overflow in kernel driver due to missing size validation",
+   "severity": "high",
+   "cvssScore": 7.3,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-156",
+   "publishedAt": "2026-08-12",
+   "updatedAt": "2026-08-12",
+   "affected": [
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-71407",
+   "advisoryId": "FG-IR-26-161",
+   "title": "Stack buffer overflow in WAD",
+   "severity": "medium",
+   "cvssScore": 5.1,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-161",
+   "publishedAt": "2026-08-12",
+   "updatedAt": "2026-08-12",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-71408",
+   "advisoryId": "FG-IR-26-162",
+   "title": "UI DoS attack",
+   "severity": "medium",
+   "cvssScore": 5.0,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-162",
+   "publishedAt": "2026-08-12",
+   "updatedAt": "2026-08-12",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-84386",
+   "advisoryId": "FG-IR-26-165",
+   "title": "Arbitrary process termination from exposed minifilter communication port",
+   "severity": "medium",
+   "cvssScore": 4.7,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-165",
+   "publishedAt": "2026-09-08",
+   "updatedAt": "2026-09-08",
+   "affected": [
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.7",
+     "to": "7.4.7"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.6",
+     "to": "7.4.6"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.5",
+     "to": "7.4.5"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.4",
+     "to": "7.4.4"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.3",
+     "to": "7.4.3"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.2",
+     "to": "7.4.2"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.1",
+     "to": "7.4.1"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.4",
+     "from": "7.4.0",
+     "to": "7.4.0"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.15",
+     "to": "7.2.15"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.14",
+     "to": "7.2.14"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.13",
+     "to": "7.2.13"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.12",
+     "to": "7.2.12"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.11",
+     "to": "7.2.11"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.10",
+     "to": "7.2.10"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.9",
+     "to": "7.2.9"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.8",
+     "to": "7.2.8"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.7",
+     "to": "7.2.7"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.6",
+     "to": "7.2.6"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.5",
+     "to": "7.2.5"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.4",
+     "to": "7.2.4"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.3",
+     "to": "7.2.3"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.2",
+     "to": "7.2.2"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.1",
+     "to": "7.2.1"
+    },
+    {
+     "product": "forticlient",
+     "models": [
+      "windows"
+     ],
+     "branch": "7.2",
+     "from": "7.2.0",
+     "to": "7.2.0"
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-84392",
+   "advisoryId": "FG-IR-26-173",
+   "title": "Null Pointer Dereference in Log Report",
+   "severity": "low",
+   "cvssScore": 2.5,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-173",
+   "publishedAt": "2026-09-08",
+   "updatedAt": "2026-09-08",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-84391",
+   "advisoryId": "FG-IR-26-172",
+   "title": "Uncontrolled Resource Consumption in SNMP",
+   "severity": "medium",
+   "cvssScore": 5.9,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-172",
+   "publishedAt": "2026-09-08",
+   "updatedAt": "2026-09-08",
+   "affected": [
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortianalyzer",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-22575",
+   "advisoryId": "FG-IR-26-171",
+   "title": "Workflow session email approval process bypass",
+   "severity": "medium",
+   "cvssScore": 4.7,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-171",
+   "publishedAt": "2026-09-08",
+   "updatedAt": "2026-09-08",
+   "affected": [
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortimanager",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  },
+  {
+   "id": "CVE-2026-84393",
+   "advisoryId": "FG-IR-26-174",
+   "title": "ZTNA Portal Improper Certificate Validation",
+   "severity": "high",
+   "cvssScore": 7.3,
+   "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-174",
+   "publishedAt": "2026-09-08",
+   "updatedAt": "2026-09-08",
+   "affected": [
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "8.0",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.6",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.4",
+     "from": null,
+     "to": null
+    },
+    {
+     "product": "fortigate-fortios",
+     "models": [],
+     "branch": "7.2",
+     "from": null,
+     "to": null
+    }
+   ]
+  }
+ ],
+ "fortiosLifecycle": {
+  "8.0": {
+   "releaseDate": "2026-04-21",
+   "support": "2029-04-21",
+   "eol": "2030-10-21"
+  },
+  "7.6": {
+   "releaseDate": "2024-07-25",
+   "support": "2028-07-25",
+   "eol": "2030-01-25"
+  },
+  "7.4": {
+   "releaseDate": "2023-05-11",
+   "support": "2027-05-11",
+   "eol": "2028-11-11"
+  }
+ },
+ "products": [
+  {
+   "id": "fortigate-fortios",
+   "label": "FortiGate / FortiOS",
+   "models": [
+    {
+     "id": "FGT90G",
+     "label": "FortiGate-90G",
+     "firmwares": [
+      {
+       "version": "7.2.10",
+       "build": "1706",
+       "current": true,
+       "notes": [
+        "behavior",
+        "known",
+        "release-notes",
+        "resolved",
+        "special",
+        "upgrade"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes",
+        "known": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/236526/known-issues",
+        "resolved": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/289806/resolved-issues",
+        "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/832438/upgrade-information",
+        "behavior": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/230510/changes-in-default-behavior",
+        "special": "https://docs.fortinet.com/document/fortigate/7.2.10/fortios-release-notes/708555/special-notices"
+       },
+       "maturity": "Mature"
+      },
+      {
+       "version": "7.2.13",
+       "build": "1762",
+       "notes": [
+        "known",
+        "release-notes",
+        "resolved",
+        "special",
+        "upgrade"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes",
+        "known": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/236526/known-issues",
+        "resolved": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/289806/resolved-issues",
+        "special": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/708555/special-notices",
+        "upgrade": "https://docs.fortinet.com/document/fortigate/7.2.13/fortios-release-notes/832438/upgrade-information"
+       },
+       "maturity": "Mature"
+      },
+      {
+       "version": "7.4.12",
+       "build": "2902",
+       "notes": [
+        "behavior",
+        "known",
+        "release-notes",
+        "resolved",
+        "special",
+        "upgrade"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes",
+        "behavior": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/230510/changes-in-default-behavior",
+        "known": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/236526/known-issues",
+        "resolved": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/289806/resolved-issues",
+        "special": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/708555/special-notices",
+        "upgrade": "https://docs.fortinet.com/document/fortigate/7.4.12/fortios-release-notes/832438/upgrade-information"
+       },
+       "maturity": "Mature"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fortianalyzer",
+   "label": "FortiAnalyzer",
+   "models": [
+    {
+     "id": "FAZALI",
+     "label": "FAZ_VM64_ALI",
+     "firmwares": [
+      {
+       "version": "6.4.0",
+       "build": "2002",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.0/release-notes"
+       }
+      },
+      {
+       "version": "6.4.1",
+       "build": "2072",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.1/release-notes"
+       }
+      },
+      {
+       "version": "6.4.2",
+       "build": "2122",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortianalyzer/6.4.2/release-notes"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fortimanager",
+   "label": "FortiManager",
+   "models": [
+    {
+     "id": "FMGALI",
+     "label": "FMG_VM64_ALI",
+     "firmwares": [
+      {
+       "version": "6.4.0",
+       "build": "2002",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.0/release-notes"
+       }
+      },
+      {
+       "version": "6.4.1",
+       "build": "2072",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.1/release-notes"
+       }
+      },
+      {
+       "version": "6.4.2",
+       "build": "2122",
+       "notes": [],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/fortimanager/6.4.2/release-notes"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "forticlient",
+   "label": "FortiClient (Windows/macOS/Linux)",
+   "models": [
+    {
+     "id": "linux",
+     "label": "FortiClient (Linux)",
+     "firmwares": [
+      {
+       "version": "6.0.0",
+       "build": "0029",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.0/linux-release-notes"
+       }
+      },
+      {
+       "version": "6.0.1",
+       "build": "0048",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/linux-release-notes"
+       }
+      },
+      {
+       "version": "6.0.5",
+       "build": "0106",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.5/linux-release-notes"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "forticlient-ems",
+   "label": "FortiClient EMS",
+   "models": [
+    {
+     "id": "ems",
+     "label": "FortiClient EMS",
+     "firmwares": [
+      {
+       "version": "6.0.0",
+       "build": "0052",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.0/ems-release-notes"
+       }
+      },
+      {
+       "version": "6.0.1",
+       "build": "0077",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.1/ems-release-notes"
+       }
+      },
+      {
+       "version": "6.0.2",
+       "build": "0106",
+       "notes": [
+        "release-notes"
+       ],
+       "links": {
+        "release-notes": "https://docs.fortinet.com/document/forticlient/6.0.2/ems-release-notes"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "paths": [
+  {
+   "id": "path-FGT90G-7.2.10-7.4.11",
+   "product": "fortigate-fortios",
+   "model": "FGT90G",
+   "from": "7.2.10",
+   "to": "7.4.11",
+   "hops": [
+    "7.2.10",
+    "7.4.8",
+    "7.4.11"
+   ],
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-09-09T08:34:54Z"
+  },
+  {
+   "id": "path-FGT90G-7.2.9-7.4.12",
+   "product": "fortigate-fortios",
+   "model": "FGT90G",
+   "from": "7.2.9",
+   "to": "7.4.12",
+   "hops": [
+    "7.2.9",
+    "7.2.11",
+    "7.4.11",
+    "7.4.12"
+   ],
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-07-09T16:16:12Z"
+  },
+  {
+   "id": "path-FGT90G-7.2.9-7.4.5",
+   "product": "fortigate-fortios",
+   "model": "FGT90G",
+   "from": "7.2.9",
+   "to": "7.4.5",
+   "hops": [
+    "7.2.9",
+    "7.4.5"
+   ],
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-07-09T16:17:25Z"
+  },
+  {
+   "id": "path-FGT90G-7.2.10-7.4.12",
+   "product": "fortigate-fortios",
+   "model": "FGT90G",
+   "from": "7.2.10",
+   "to": "7.4.12",
+   "hops": [
+    "7.2.10",
+    "7.2.13",
+    "7.4.12"
+   ],
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-10-04T20:28:28Z"
+  },
+  {
+   "id": "path-FGT90G-7.4.11-7.4.12",
+   "product": "fortigate-fortios",
+   "model": "FGT90G",
+   "from": "7.4.11",
+   "to": "7.4.12",
+   "hops": [
+    "7.4.11",
+    "7.4.12"
+   ],
+   "source": "Fortinet Upgrade Path Tool public service",
+   "fetchedAt": "2026-07-13T13:18:15Z"
+  }
+ ],
+ "advisories": [
+  {
+   "id": "adv-fixture-synthetic-1",
+   "createdAt": "2026-01-05T00:00:00Z",
+   "updatedAt": "2026-01-05T00:00:00Z",
+   "product": "fortigate-fortios",
+   "severity": "info",
+   "title": "Fixture advisory (synthetic placeholder)",
+   "description": "Synthetic placeholder kept so catalogue-section preservation tests stay meaningful. Contains no production data.",
+   "source": "Test fixture",
+   "versions": [
+    "7.4.12"
+   ]
+  }
+ ],
+ "compatibilities": [
+  {
+   "id": "compat-fixture-7.2.0",
+   "emsVersion": "7.2.0",
+   "clientVersions": [
+    "7.0.0",
+    "7.2.0"
+   ],
+   "note": "",
+   "source": "Test fixture (synthetic)",
+   "createdAt": "2026-01-05T00:00:00Z",
+   "updatedAt": "2026-01-05T00:00:00Z"
+  }
+ ],
+ "searchHistory": []
+}
