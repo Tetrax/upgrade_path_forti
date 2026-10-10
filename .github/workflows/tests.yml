@@ -119,7 +119,9 @@ jobs:
   docker-build-push:
     name: Build and push Docker image
     runs-on: ubuntu-latest
-    needs: python-tests
+    # `:latest` is what the Portainer stacks deploy on "Pull and redeploy": publish it only once
+    # the browser suite has passed too, not just the unit tests.
+    needs: [python-tests, e2e-tests]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
@@ -145,6 +147,10 @@ jobs:
           tags: |
             ghcr.io/${{ env.REPO_LC }}:latest
             ghcr.io/${{ env.REPO_LC }}:${{ github.sha }}
+          # Lets an operator read which commit a `:latest` deployment runs (rollback target).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -63,14 +63,15 @@ Suppression de l'ancien état, après archivage vérifiable :
   worktrees, le clone obsolète `workspace/Fortiupgrade` et le clone
   `workspace/Fortiupgrade-audit-fixes` ont été supprimés.
 
-La pile de production est celle du projet Compose `fortiupgrade` lancée depuis
+La pile de production était alors celle du projet Compose `fortiupgrade` lancée depuis
 `/home/tetrax/workspace/Fortiupgrade/runtime/compose.yml`. Le nom de projet et tous
 les volumes nommés sont inchangés : la bascule ne recrée que les deux binds
-`data`/`docs`.
+`data`/`docs`. Depuis octobre 2026, cette pile est une **Git Stack Portainer** du même
+nom : voir [Stack Portainer du VPS](#stack-portainer-du-vps).
 
 Rollback après cette consolidation : la **bascule d'image** reste la procédure
-normale — épingler le tag précédent dans `runtime/compose.yml` (`image:` des deux
-services) et relancer la pile ; aucune donnée n'est concernée par un changement
+normale — épingler le tag précédent (aujourd'hui via `FORTIOS_IMAGE` dans la Stack
+Portainer) et relancer la pile ; aucune donnée n'est concernée par un changement
 d'image. En revanche, revenir à l'**ancien chemin de montage**
 `/home/tetrax/deploy/Fortiupgrade/{data,docs}` n'est plus possible, ce répertoire
 ayant été supprimé : les `compose.yml` archivés sous `runtime/rollback/` décrivent
@@ -173,9 +174,18 @@ réconciliation : son comportement historique pouvait réamorcer un état vide.
 ## Source of truth and prerequisites
 
 Use `docker-compose.portainer.yml` as a **Git Stack**, repository
-`https://github.com/Tetrax/upgrade_path_forti`, reference `refs/heads/main` (or the
-reviewed release SHA). Set `FORTIOS_IMAGE=ghcr.io/tetrax/upgrade_path_forti:<merge-SHA>`
-or an immutable `@sha256:...` digest. Both services must resolve the same image.
+`https://github.com/Tetrax/upgrade_path_forti`, reference `refs/heads/main`.
+
+Image policy: leave `FORTIOS_IMAGE` **unset** — both services then run
+`ghcr.io/tetrax/upgrade_path_forti:latest`, and an update is **Pull and redeploy with
+"Re-pull image" enabled** (without re-pull, Portainer restarts the cached `:latest`).
+`:latest` only moves after a merge on `main` whose unit **and** Playwright suites passed
+(the build job waits for both). Each image carries `org.opencontainers.image.revision`
+(the merge SHA): read it before updating, it is the rollback target. To roll back, set
+`FORTIOS_IMAGE=ghcr.io/tetrax/upgrade_path_forti:<previous-SHA>` (or an immutable
+`@sha256:...` digest), update the Stack, and remove the variable once fixed. Both services
+must resolve the same image. Every merge on `main` is therefore deployable: keep unfinished
+work on branches.
 The Stack now uses its own Compose network; no `Subnet-Docker` or fixed IP is needed.
 If upgrading an installation using that network, explicitly preserve it with a
 site-local override when required by its proxy. Recheck the actual proxy peer
@@ -185,6 +195,52 @@ The alternative `docker-compose.portainer-import.yml` keeps named volumes for
 existing installations. **Keep the original Stack name** so Portainer reuses the
 same volumes. For offline image import set `FORTIOS_IMAGE` to the imported tag.
 A different Stack name or bind path is a new data store, not a migration.
+
+## Stack Portainer du VPS
+
+Problème résolu : le VPS tournait en projet Compose CLI depuis `runtime/compose.yml`, fichier
+réservé à root ; chaque livraison exigeait `sudo` et divergeait de l'instance entreprise, déjà
+en Git Stack. Mécanisme autoritatif : la Git Stack Portainer **`fortiupgrade`** sur
+`docker-compose.portainer.yml` (`refs/heads/main`), image `:latest` selon la politique
+ci-dessus. `runtime/compose.yml` n'est plus la source du déploiement ; il est conservé, intact,
+comme rollback vers le mode CLI.
+
+**Le nom `fortiupgrade` est obligatoire** : il fait réutiliser les volumes
+`fortiupgrade_fortios-smtp-secrets` / `fortiupgrade_fortios-microsoft365-secrets` (secrets
+SMTP et Microsoft 365) et le réseau `fortiupgrade_default` (`172.20.0.0/16`), dont la passerelle
+est le pair proxy de confiance de nginx. Un autre nom démarre sans secrets et sur un autre réseau.
+
+Variables de Stack (infrastructure uniquement) :
+
+```text
+FORTIOS_DATA_DIR=/home/tetrax/workspace/Fortiupgrade/runtime/data
+FORTIOS_DOCS_DIR=/home/tetrax/workspace/Fortiupgrade/runtime/docs
+FORTIOS_CERTS_DIR=/var/lib/fortiupgrade/certificates
+FORTIOS_CERTS_MOUNT_MODE=ro
+FORTIOS_CERT_HELPER_SOCKET=/run/fortios-cert-helper/helper.sock
+FORTIOS_CERT_TRUSTED_PROXY_CIDRS=172.20.0.1/32
+FORTIOS_TLS_HOSTNAME=fortiupgrade.valdev.me
+```
+
+Les réglages email (transport, serveur, compte, expéditeur, URL applicative, timeout) sont
+enregistrés depuis l'administration (`data/smtp-settings.json`, source `saved`) et font foi ;
+les variables SMTP/`FORTIOS_APP_URL` de l'environnement ne servent qu'au premier démarrage et
+sont volontairement absentes. Vérifié avant migration : la configuration chargée est identique
+avec et sans elles.
+
+Migration depuis le mode CLI : créer la Stack (sans déployer), supprimer uniquement les
+conteneurs `fortiupgrade-web` et `fortiupgrade-scheduler` — jamais les volumes ni le réseau —,
+puis déployer. Le scheduler doit être au repos (aucune collecte en cours). Les conteneurs
+s'appellent ensuite `fortiupgrade-web-1` / `fortiupgrade-scheduler-1` ; aucun script ni service
+de l'hôte ne dépend de leur nom.
+
+Rollback vers le mode CLI : supprimer les conteneurs de la Stack (pas la Stack, pour conserver
+le réseau), puis `cd runtime && sudo docker compose up -d --no-deps web scheduler`. Aucune donnée
+n'est concernée : mêmes binds, mêmes volumes.
+
+Dépôt privé : activer l'authentification Git de la Stack (jeton fine-grained limité au dépôt,
+`Contents: Read-only`) avant de changer la visibilité, et vérifier que le package GHCR reste
+public ou qu'un registre authentifié est déclaré.
 
 ## Required variables/mounts
 
@@ -455,11 +511,13 @@ login on its authorized network before calling the enterprise deployment complet
 
 ## Update / rollback
 
-1. Keep the previous YAML/env, image and root-only state backup. Check archive
-   readability and checksums. Build/pull only the reviewed, authorized immutable
-   SHA after green CI; an explicitly approved unmerged candidate is not a merge.
-2. Reuse exactly the previous volumes/paths and Stack name. Set the new immutable
-   `FORTIOS_IMAGE`, recreate web and scheduler, and update the host helper if used.
+1. Note the running revision (`org.opencontainers.image.revision` of the current image) and
+   keep the previous Stack variables, image and state backup. Check archive readability and
+   checksums. Deploy only a merge of `main` with green CI; an explicitly approved unmerged
+   candidate is not a merge.
+2. Reuse exactly the previous volumes/paths and Stack name. Pull and redeploy with re-pull
+   (or set `FORTIOS_IMAGE` to an explicit SHA), recreate web and scheduler, and update the
+   host helper if used.
 3. Check web healthy, scheduler running/next slot, HTTPS, catalogue/products,
    official path request, CVE display, admin, email preview and logs. Compare
    credential/cert/settings/checkpoint hashes with the baseline, accounting for

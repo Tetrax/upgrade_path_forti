@@ -100,7 +100,7 @@ l'envoi. Le password est fourni exclusivement par `FORTIOS_SMTP_PASSWORD_FILE` d
 **Administration > Notifications** gère l'apparence, l'activation, les produits et destinataires;
 l'infrastructure est en lecture seule. Avant un upgrade de l'ancienne console, migrer ses paramètres
 vers l'environnement et son secret hors du volume `data/`, en conservant une sauvegarde protégée.
-Épingler `FORTIOS_IMAGE=ghcr.io/tetrax/upgrade_path_forti:<SHA-de-merge>` pour une mise à jour reproductible.
+Laisser `FORTIOS_IMAGE` vide pour suivre `:latest` (mise à jour : **Pull and redeploy** avec re-pull de l’image) ; le définir à `ghcr.io/tetrax/upgrade_path_forti:<SHA>` uniquement pour revenir à une version précise.
 
 6. Cliquer **Deploy the stack**.
 
@@ -269,7 +269,7 @@ cp -a "$BACKUP_DIR/docs" "$DOCS_DIR"
 cp -a "$BACKUP_DIR/certificates" "$CERTS_DIR"
 ```
 
-Redémarrer ensuite la stack épinglée au SHA précédent et refaire les contrôles des chapitres 4 et 5. Tester cette restauration hors production avant de l’adopter.
+Redémarrer ensuite la stack avec `FORTIOS_IMAGE` épinglé au SHA précédent et refaire les contrôles des chapitres 4 et 5. Tester cette restauration hors production avant de l’adopter.
 
 ## 7. Dépannage
 
@@ -282,7 +282,7 @@ Redémarrer ensuite la stack épinglée au SHA précédent et refaire les contr�
 | Alerte navigateur | Vérifier DNS, SAN, chaîne et confiance dans la CA. |
 | HTTP encore exposé | Confirmer le port hôte `443`, mettre à jour la stack et vérifier le firewall. |
 | Données absentes | Vérifier les trois chemins et leurs montages ; ne rien supprimer avant diagnostic. |
-| Mise à jour défaillante | Épingler le SHA précédent ; restaurer les chemins seulement si nécessaire et depuis une sauvegarde testée. |
+| Mise à jour défaillante | Définir `FORTIOS_IMAGE` au SHA précédent (label `org.opencontainers.image.revision` de l’image fautive pour le repérer) ; restaurer les chemins seulement si nécessaire et depuis une sauvegarde testée. |
 
 ## 8. Checklist finale
 
