@@ -1,12 +1,14 @@
-"""Email notifications for FortiOS Upgrade Intelligence — stdlib only (smtplib,
-email.message.EmailMessage), disabled by default, with functional settings persisted in data/ and
-SMTP infrastructure supplied by environment variables plus a mounted password file.
+"""Email notifications for FortiOS Upgrade Intelligence — stdlib only, disabled by default. Two
+transports share one engine: SMTP (smtplib) and Microsoft 365 (Microsoft Graph sendMail).
+Functional settings are persisted in data/; non-secret SMTP/transport settings are bootstrapped
+from the environment and then owned by the admin GUI; secrets come only from private files.
 
 Design in one paragraph: main() derives a list of NotificationEvents by diffing the durable
 pre-collection checkpoint against the collected state (never by re-scanning the whole catalog, which is what keeps a first-time
 activation or a --cve-backfill from spamming years of history). Events are deduplicated against
-a small persistent history file keyed by a stable string, then whatever's left gets folded into
-a single synthetic email per run (never one email per event) and sent over SMTP. Any failure
+a small persistent history file keyed by a stable string, queued in a durable outbox, then folded
+into at most one synthetic email per category and effective recipient list per run (never one
+email per event) and sent through the configured transport. Any failure
 anywhere in this module — bad config, network, auth, whatever — is caught and logged without a
 traceback or a leaked password, and never propagates to the caller: a broken mailbox must never
 break the actual data collection.
@@ -102,7 +104,6 @@ DEFAULT_EMAIL_TRANSPORT_SETTINGS_PATH = Path("data/email-transport-settings.json
 SMTP_SETTINGS_SCHEMA_VERSION = 1
 SMTP_PASSWORD_FILENAME = "smtp-password"  # historical data-sidecar name; not a runtime source
 SMTP_PASSWORD_ENV = "FORTIOS_SMTP_PASSWORD_FILE"
-SMTP_PASSWORD_CANONICAL_PATH = Path("/opt/fortios/smtp-secrets/password")
 SMTP_PASSWORD_STORAGE_AVAILABLE = "available"
 SMTP_PASSWORD_STORAGE_UNAVAILABLE = "storage-unavailable"
 MAX_SMTP_PASSWORD_BYTES = 4096
@@ -712,24 +713,6 @@ def _first_environment_value(environment: dict[str, str], *keys: str) -> str:
     return ""
 
 
-def _env_secret_from_keys(
-    environment: dict[str, str], keys: tuple[str, ...], *, label: str
-) -> tuple[str, str, str]:
-    """Read the first configured secret-file alias without ever accepting plaintext secrets."""
-    for key in keys:
-        secret_file = (environment.get(key) or "").strip()
-        if not secret_file:
-            continue
-        try:
-            value = Path(secret_file).read_text(encoding="utf-8").rstrip("\r\n")
-        except (OSError, UnicodeError) as error:
-            return "", secret_file, sanitize_health_error(error) or f"Secret {label} illisible."
-        if not value:
-            return "", secret_file, f"Le fichier secret {label} est vide."
-        return value, secret_file, ""
-    return "", "", ""
-
-
 class Microsoft365SecretValidationError(ValueError):
     """A submitted client secret is empty, malformed, or outside the byte limit."""
 
@@ -815,16 +798,6 @@ def _open_microsoft365_secret_parent(path: Path) -> int:
         raise
 
 
-def _secret_parent_is_safe(path: Path) -> bool:
-    """Require every parent entry to be a real directory, never a symlink."""
-    try:
-        parent_fd = _open_microsoft365_secret_parent(path)
-    except (OSError, ValueError):
-        return False
-    os.close(parent_fd)
-    return True
-
-
 def _secret_entry_kind_at(parent_fd: int, name: str) -> str:
     try:
         entry_stat = os.lstat(name, dir_fd=parent_fd)
@@ -837,33 +810,6 @@ def _secret_entry_kind_at(parent_fd: int, name: str) -> str:
     if not stat.S_ISREG(entry_stat.st_mode):
         return "nonregular"
     return "regular"
-
-
-def _secret_target_kind(path: Path) -> str:
-    parent_fd = -1
-    try:
-        parent_fd = _open_microsoft365_secret_parent(path)
-        return _secret_entry_kind_at(parent_fd, path.name)
-    except (OSError, ValueError):
-        return "unavailable"
-    finally:
-        if parent_fd != -1:
-            os.close(parent_fd)
-
-
-def _secret_lock_is_safe(path: Path) -> bool:
-    parent_fd = -1
-    try:
-        parent_fd = _open_microsoft365_secret_parent(path)
-        return _secret_entry_kind_at(parent_fd, f"{path.name}.lock") in {
-            "missing",
-            "regular",
-        }
-    except (OSError, ValueError):
-        return False
-    finally:
-        if parent_fd != -1:
-            os.close(parent_fd)
 
 
 def _secret_parent_is_writable(parent_fd: int) -> bool:
@@ -889,22 +835,6 @@ def _secret_entry_is_writable(parent_fd: int, name: str, *, target_kind: str) ->
         dir_fd=parent_fd,
         follow_symlinks=False,
     )
-
-
-def _secret_path_is_writable(path: Path, *, target_kind: str) -> bool:
-    parent_fd = -1
-    try:
-        parent_fd = _open_microsoft365_secret_parent(path)
-        return _secret_entry_is_writable(
-            parent_fd,
-            path.name,
-            target_kind=target_kind,
-        )
-    except (OSError, ValueError):
-        return False
-    finally:
-        if parent_fd != -1:
-            os.close(parent_fd)
 
 
 @contextmanager
@@ -1241,10 +1171,6 @@ def _load_microsoft365_client_secret(
     return value, str(path), "", status
 
 
-def _email_transport_from_env(environment: dict[str, str]) -> str:
-    return _first_environment_value(environment, "FORTIOS_EMAIL_TRANSPORT").casefold() or EMAIL_TRANSPORT_SMTP
-
-
 def smtp_password_path(settings_path: Path) -> Path:
     """Return the historical sidecar location without making it a runtime secret source."""
     return settings_path.with_name(SMTP_PASSWORD_FILENAME)
@@ -1510,16 +1436,6 @@ def load_email_transport_settings(
         return _load_email_transport_settings_unlocked(path, environment)
 
 
-def save_email_transport_settings(
-    path: Path, payload: Any, *, env: dict[str, str] | None = None
-) -> EmailTransportSettings:
-    settings = validate_email_transport_settings(payload)
-    with cross_process_lock(path):
-        write_json(path, settings.to_payload())
-    environment = dict(os.environ) if env is None else env
-    return _load_email_transport_settings_unlocked(path, environment)
-
-
 def _saved_email_appearance(path: Path) -> EmailAppearance:
     """Read only the non-secret appearance sidecar.
 
@@ -1627,12 +1543,6 @@ def load_smtp_settings(
     environment = dict(os.environ) if env is None else env
     with cross_process_lock(path):
         return _load_smtp_settings_unlocked(path, environment)
-
-
-def _appearance_payload_from_settings(payload: Any) -> Any:
-    if not isinstance(payload, dict) or set(payload) != {"emailAppearance"}:
-        raise ValueError("Configuration SMTP invalide.")
-    return payload["emailAppearance"]
 
 
 def _existing_saved_smtp_settings_unlocked(path: Path) -> SmtpSettings | None:
@@ -1940,16 +1850,20 @@ def smtp_public_settings(
     return public
 
 
-# --- Persistent state: sent-history dedup, pending outbox, EOL bootstrap state ------------
+# --- Persistent state: sent-history dedup, pending outbox, checkpoint, transition states -----
 #
-# All three live in one JSON file (data/fortios-notify-history.json by default) so they share a
+# Everything lives in one JSON file (data/fortios-notify-history.json by default) so it shares a
 # single cross_process_lock()'d read-modify-write cycle:
 #   {"sentKeys": {dedup_key: sentAtIso, ...},
-#    "outbox": [{"category", "dedupKey", "summary", "queuedAt", "claimedBy", "claimedAt"}, ...],
-#    "eolState": {branch: isEolBooleanAsOfLastCheck, ...}}
+#    "outbox": [{"category", "dedupKey", "summary", "queuedAt", "claimedBy", "claimedAt",
+#                optional retry/delivery metadata}, ...],
+#    "eolState": {branch: isEolBooleanAsOfLastCheck, ...},
+#    "checkpoint": {...} | null,
+#    "containerSecurityState": {...},
+#    optional "pendingCveBaseline" (see PENDING_CVE_BASELINE_KEY)}
 #
-# See the "Notifications email" section of README.md for the full outbox lifecycle and the
-# recovery procedure for a corrupted state file.
+# The validators below are the exact schema. See docs/notifications.md for the outbox lifecycle,
+# retries and rollback, and the "Notifications email" section of README.md for operations.
 
 _REQUIRED_OUTBOX_STRING_FIELDS = ("category", "dedupKey", "summary", "queuedAt")
 _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS = ("claimedBy", "claimedAt")
@@ -3430,9 +3344,9 @@ def derive_eol_events(
     several days without a single collection: whatever `eol_state` said last time this genuinely
     ran is what's compared against, not "yesterday".
 
-    Returns (events, updated_eol_state) -- the caller must persist the updated state (see
-    save_eol_state()) regardless of whether the email actually sends, since the crossing itself
-    was correctly observed either way.
+    Returns (events, updated_eol_state) -- the caller must persist the updated state together with
+    the events (see commit_eol_transition()) regardless of whether the email actually sends, since
+    the crossing itself was correctly observed either way.
     """
     now_date = dt.datetime.fromisoformat(
         (now or utc_now()).replace("Z", "+00:00")
@@ -4696,23 +4610,6 @@ def compose_recovery_email(
         "link": link,
         "expiresAt": expires_at,
     }
-
-
-def compose_account_recovery_email(
-    purpose: str,
-    token: str,
-    app_url: str,
-    expires_at: str,
-    *,
-    appearance: EmailAppearance | None = None,
-) -> dict[str, str]:
-    return compose_recovery_email(
-        purpose,
-        token,
-        app_url,
-        expires_at,
-        appearance=appearance,
-    )
 
 
 @dataclass(frozen=True)
