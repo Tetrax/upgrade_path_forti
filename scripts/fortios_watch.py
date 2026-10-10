@@ -260,6 +260,128 @@ def cross_process_lock(target_path: Path):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+# Sentinel for read_coherent_notification_observation(): it is never a valid catalogue, so "the
+# durable catalogue could not be read" can never be confused with any real payload.
+_COHERENT_OBSERVATION_UNAVAILABLE = object()
+
+
+def _notification_catalogue_invalid_reason(catalogue: dict[str, Any]) -> str | None:
+    """Why `catalogue` cannot feed the notification block -- None when it can.
+
+    The notification block derives every baseline (CVE ids/severities, versions, EOL, health)
+    from this catalogue BEFORE writing any of them, and each consumer treats a missing or
+    wrong-typed collection as an empty one ({} iterates as nothing, a missing key falls back
+    to []). That silent equivalence is the danger: an invalid catalogue would REPLACE healthy
+    baselines with nothing and the next runs would replay the whole history as new. Missing
+    data is not a valid empty list, so every field the block actually reads is checked against
+    its real contract here, and only for the shapes those paths use:
+
+    - ``cves``: list of entry dicts carrying a non-empty string ``id`` (the baseline is keyed
+      by it);
+    - ``products``: list of product dicts whose ``models``/``firmwares`` lists carry the
+      version strings the version baseline is built from;
+    - ``fortiosLifecycle``: branch -> dict map (derive_eol_events() iterates .items()).
+
+    A genuinely empty list (``cves: []``, no model/firmware) stays valid: this rejects
+    structures, never contents -- extra keys, absent optional fields and entries the consumers
+    already tolerate are left to the consumers.
+    """
+    cves = catalogue.get("cves")
+    if not isinstance(cves, list):
+        return "cves : liste attendue"
+    for entry in cves:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("id"), str)
+            or not entry["id"].strip()
+        ):
+            return "cves : entrées mal formées"
+    products = catalogue.get("products")
+    if not isinstance(products, list):
+        return "products : liste attendue"
+    for product in products:
+        if not isinstance(product, dict):
+            return "products : entrées mal formées"
+        models = product.get("models", [])
+        if not isinstance(models, list) or not all(
+            isinstance(model, dict) for model in models
+        ):
+            return "products : modèles mal formés"
+        for model in models:
+            firmwares = model.get("firmwares", [])
+            if not isinstance(firmwares, list) or not all(
+                isinstance(firmware, dict) for firmware in firmwares
+            ):
+                return "products : firmwares mal formés"
+            if any(
+                firmware.get("version") is not None
+                and not isinstance(firmware.get("version"), str)
+                for firmware in firmwares
+            ):
+                return "products : versions mal formées"
+    lifecycle = catalogue.get("fortiosLifecycle")
+    if not isinstance(lifecycle, dict) or not all(
+        isinstance(info, dict) for info in lifecycle.values()
+    ):
+        return "fortiosLifecycle : objet attendu"
+    return None
+
+
+def read_coherent_notification_observation(
+    history_path: Path, catalogue_path: Path
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read the committed catalogue AND the notify state as ONE coherent observation.
+
+    Both reads happen inside a single short cross_process_lock(history_path) section. Every
+    writer of the checkpoint, the staged CVE-baseline intents and the rest of the notify state
+    goes through that very lock, so none of them can advance between the two reads; the
+    catalogue is replaced atomically, so the image read next to that state is the one the
+    notification work will diff against it. A maintenance pass (or any other writer) completing
+    while a run was still collecting can therefore only be observed entirely before this
+    snapshot (its advance is already the baseline) or entirely after it (its stage/consume/
+    commit steps are still excluded by the lock) -- never as a stale catalogue image paired
+    with a freshly certified baseline, the shape that used to let an older run regress that
+    advance and replay the correction as a historical notification (the B3 review's remaining
+    window).
+
+    The lock is released before any derivation, network or SMTP work: it only ever covers the
+    two reads, never the whole notification pass (whose helpers take this same non-reentrant
+    lock themselves).
+
+    Never falls back silently: an absent, unreadable or structurally invalid catalogue raises
+    (the caller isolates the failure by suspending the notification work -- state preserved,
+    cleaned diagnostic, collection unaffected) instead of deriving from this run's own older
+    `final_state` image, which nothing durable backs anymore. Structural validity covers the
+    fields the notification block actually consumes -- checked BEFORE it can write any
+    baseline, see _notification_catalogue_invalid_reason() -- so a wrong-typed or missing
+    collection can never be iterated as if it were empty and silently replace a healthy
+    baseline with nothing.
+    """
+    import fortios_notify  # deferred: avoids a load-time circular import with this module
+
+    with cross_process_lock(history_path):
+        try:
+            catalogue = read_json(catalogue_path, _COHERENT_OBSERVATION_UNAVAILABLE)
+        except (OSError, UnicodeDecodeError, ValueError) as error:
+            raise RuntimeError(
+                f"Catalogue durable illisible ({type(error).__name__})."
+            ) from error
+        if catalogue is _COHERENT_OBSERVATION_UNAVAILABLE or not isinstance(
+            catalogue, dict
+        ):
+            raise RuntimeError(
+                "Catalogue durable absent ou invalide pour l'observation des notifications"
+            )
+        invalid_reason = _notification_catalogue_invalid_reason(catalogue)
+        if invalid_reason is not None:
+            raise RuntimeError(
+                "Catalogue durable structurellement invalide pour l'observation des "
+                f"notifications ({invalid_reason})."
+            )
+        notify_state = fortios_notify.load_notify_state(history_path)
+    return catalogue, notify_state
+
+
 # --- Health-state tracking --------------------------------------------------------------------
 # A separate JSON file from the main catalog (data/fortios-health.json by default), recording
 # per-source collection status so the UI can show "how fresh/healthy is our data" without
@@ -780,8 +902,43 @@ def normalize_doc_model(doc_model: str) -> str:
     return f"{prefix}{compact}"
 
 
+class UnsafeRedirectError(urllib.error.URLError):
+    """A redirect target was refused before any connection to it was opened."""
+
+
+class _RedirectValidatingHandler(urllib.request.HTTPRedirectHandler):
+    """Redirect handler that vets every Location before it is ever opened.
+
+    Validating only the initial URL would not actually constrain where a
+    request ends up: the stdlib's default handler happily follows a redirect
+    from an allowed host to any other host, and even downgrades https to
+    http/ftp. Every hop therefore goes through ``validator`` first, and a
+    refused hop raises UnsafeRedirectError before any connection to it.
+    """
+
+    def __init__(self, validator: Callable[[str], bool]) -> None:
+        super().__init__()
+        self._validator = validator
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        if not self._validator(newurl):
+            raise UnsafeRedirectError(f"redirection refusée : {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def read_url_with_retry(
-    request: urllib.request.Request, timeout: int, retries: int = 3
+    request: urllib.request.Request,
+    timeout: int,
+    retries: int = 3,
+    redirect_validator: Callable[[str], bool] | None = None,
 ) -> bytes:
     """Open and fully read one HTTP response, retrying transient failures at either stage.
 
@@ -790,12 +947,26 @@ def read_url_with_retry(
     scrape on 2026-07-30.  A partial response is never usable: close it and replay the complete
     request with bounded exponential backoff.  Retry only HTTP statuses commonly used for
     transient throttling or server/gateway failures; definitive responses such as 404 fail fast.
+
+    With ``redirect_validator``, every HTTP redirect target (Location) is checked against it
+    *before* it is opened: an admitted URL must not be able to turn into a request to an
+    unexpected host, port or scheme via a 30x response. A refused target raises
+    UnsafeRedirectError at once — never retried, and no connection is ever made to it.
     """
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            if redirect_validator is None:
+                response = urllib.request.urlopen(request, timeout=timeout)
+            else:
+                opener = urllib.request.build_opener(
+                    _RedirectValidatingHandler(redirect_validator)
+                )
+                response = opener.open(request, timeout=timeout)
+            with response:
                 return response.read()
+        except UnsafeRedirectError:
+            raise  # definitive refusal: retrying could only repeat the same refusal
         except urllib.error.HTTPError as error:
             if error.code not in {408, 429} and not 500 <= error.code < 600:
                 raise
@@ -819,12 +990,16 @@ def read_url_with_retry(
     raise last_error
 
 
-def fetch_text(url: str, timeout: int) -> str:
+def fetch_text(
+    url: str, timeout: int, redirect_validator: Callable[[str], bool] | None = None
+) -> str:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"},
     )
-    return read_url_with_retry(request, timeout).decode("utf-8", errors="ignore")
+    return read_url_with_retry(
+        request, timeout, redirect_validator=redirect_validator
+    ).decode("utf-8", errors="ignore")
 
 
 def html_to_text(raw_html: str) -> str:
@@ -1844,16 +2019,33 @@ def fetch_psirt_versions(timeout: int) -> set[str]:
 
 # --- PSIRT CVE tracking -------------------------------------------------
 #
-# Fortinet publishes a CVRF (Common Vulnerability Reporting Framework) XML
-# export for every PSIRT advisory. The export is a stable machine-readable
-# endpoint and remains available even when the human-readable advisory page
-# presents an anti-bot challenge.
+# Fortinet publishes two machine-readable exports per PSIRT advisory: a CVRF
+# (Common Vulnerability Reporting Framework) XML feed and a CSAF 2.0 JSON
+# export. The CVRF feed is coarse — it lists whole version trains ("FortiOS
+# 7.6", "FortiOS 7.2") as "Known Affected" with no bounds, which the UI reads
+# as "every version of that train is vulnerable". That is exactly what made
+# FG-IR-26-174 flag FortiOS 7.2/7.4/8.0, while the official CSAF export
+# restricts the impact to ">=7.6.1|<=7.6.6" and lists 7.2/7.4/7.6.7/8.0 as NOT
+# affected. CSAF is therefore the single authoritative applicability source:
+# product_status.known_affected carries the exact ranges, known_not_affected /
+# fixed the exclusions. There is deliberately NO silent fallback to the CVRF
+# ranges when CSAF is unavailable (that would re-introduce those false
+# positives): an unreachable, anti-bot-challenged or unvalidated response
+# makes the advisory "unresolved" — previous entries are preserved untouched
+# and the run reports the skip — never "no more CVEs".
 PSIRT_BASE_URL = "https://fortiguard.fortinet.com"
 ADVISORY_LINK_RE = re.compile(r"location\.href\s*=\s*'/psirt/(FG-IR-[\w-]+)'")
-CVRF_NAMESPACE = "http://docs.oasis-open.org/csaf/ns/csaf-cvrf/v1.2/cvrf"
-CVRF_VERSION_RE = re.compile(r"\b\d+\.\d+(?:\.\d+){0,2}\b")
+# The CSAF export's file name embeds a slugified advisory title, so it cannot
+# be guessed: one HTML fetch of the advisory page is still needed to discover
+# it. Its target is strictly re-validated (see _validated_csaf_url) — only
+# Fortinet's own file store over https — so an upstream-tampered link can
+# never turn the collector into an open fetcher (no SSRF via upstream links).
+CSAF_HOST = "filestore.fortinet.com"
+CSAF_PATH_PREFIX = "/fortiguard/psirt/"
+CSAF_HREF_RE = re.compile(r'href\s*=\s*"([^"]+)"', re.IGNORECASE)
+CSAF_VERSION_RE_TEXT = r"\d+(?:\.\d+){1,3}"
 
-# CVRF product name -> (our internal product id, model id or None when the product
+# CSAF product name -> (our internal product id, model id or None when the product
 # has no FortiClient-style per-platform model).
 CVE_PRODUCT_MAP: dict[str, tuple[str, str | None]] = {
     "FortiOS": (DEFAULT_PRODUCT_ID, None),
@@ -1868,6 +2060,10 @@ CVE_PRODUCT_MAP: dict[str, tuple[str, str | None]] = {
 # the RSS feed used for the daily incremental refresh isn't filterable by product and only
 # covers the last ~50 advisories across every Fortinet product line.
 CVE_LISTING_PRODUCT_FILTERS = tuple(CVE_PRODUCT_MAP)
+
+# Longest-first so "FortiClientWindows" wins over any shorter prefix, and unknown product
+# names (FortiWeb, FortiMail, FortiADC...) are simply not tracked here at all.
+CSAF_PRODUCT_NAMES = tuple(sorted(CVE_PRODUCT_MAP, key=len, reverse=True))
 
 
 def discover_advisory_ids_from_rss(timeout: int) -> list[str]:
@@ -1900,18 +2096,195 @@ def discover_advisory_ids_from_listing(
     return unique_in_order(ids)
 
 
-def cvrf_local_name(tag: str) -> str:
-    return tag.rsplit("}", 1)[-1]
+class CsafResolutionError(RuntimeError):
+    """An advisory's CSAF data could not be established definitively.
+
+    Callers must treat it as "cannot confirm anything for this advisory":
+    preserve the previously stored entries and report a diagnostic — never as
+    a confirmed empty CVE list.
+    """
 
 
-def cvrf_text(element: ET.Element | None, child_name: str) -> str:
-    if element is None:
-        return ""
-    child = next(
-        (candidate for candidate in element if cvrf_local_name(candidate.tag) == child_name),
-        None,
+def _validated_csaf_url(candidate: str) -> str | None:
+    """Return `candidate` restricted to Fortinet's CSAF file host, or None.
+
+    Accepts only https://filestore.fortinet.com/fortiguard/psirt/*.json with
+    no credentials, no fragment and a normal https port; anything else (other
+    host, http, smuggled destination) is refused rather than fetched.
+    """
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or parsed.hostname != CSAF_HOST:
+        return None
+    if parsed.username or parsed.password or parsed.port not in (None, 443):
+        return None
+    if parsed.fragment:
+        return None
+    if not parsed.path.startswith(CSAF_PATH_PREFIX) or not parsed.path.endswith(".json"):
+        return None
+    return urllib.parse.urlunsplit(("https", CSAF_HOST, parsed.path, parsed.query, ""))
+
+
+def _psirt_page_redirect_allowed(candidate: str) -> bool:
+    """Advisory pages may only ever redirect within the https PSIRT site.
+
+    Same rules as the initial advisory URL: no credential smuggling, no port
+    trickery, no downgrade to http/ftp, no departure from the PSIRT host.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == urllib.parse.urlsplit(PSIRT_BASE_URL).hostname
+        and parsed.port in (None, 443)
+        and not parsed.username
+        and not parsed.password
+        and parsed.path.startswith("/psirt/")
     )
-    return " ".join((child.text or "").split()) if child is not None else ""
+
+
+def _csaf_redirect_allowed(candidate: str) -> bool:
+    """CSAF downloads may only redirect to another validated CSAF destination."""
+    return _validated_csaf_url(candidate) is not None
+
+
+def discover_csaf_url(advisory_id: str, raw_html: str) -> str | None:
+    """Find and validate the CSAF export URL advertised by an advisory page.
+
+    The page links ``/psirt/csaf/<advisory_id>?csaf_url=<file-store URL>``;
+    the parameter is re-validated here instead of trusted (see
+    _validated_csaf_url). Returns None when no usable link exists — including
+    an anti-bot challenge page, which callers turn into an unresolved
+    advisory, never into an empty result.
+    """
+    page_url = f"{PSIRT_BASE_URL}/psirt/{advisory_id}"
+    psirt_host = urllib.parse.urlsplit(PSIRT_BASE_URL).hostname
+    for raw_href in CSAF_HREF_RE.findall(raw_html):
+        resolved = urllib.parse.urljoin(page_url, html.unescape(raw_href.strip()))
+        direct = _validated_csaf_url(resolved)
+        if direct:
+            return direct
+        parsed = urllib.parse.urlsplit(resolved)
+        if (
+            parsed.scheme == "https"
+            and parsed.hostname == psirt_host
+            and parsed.path == f"/psirt/csaf/{advisory_id}"
+        ):
+            relayed = urllib.parse.parse_qs(parsed.query).get("csaf_url", [""])[0]
+            validated = _validated_csaf_url(relayed)
+            if validated:
+                return validated
+    return None
+
+
+def csaf_branch(version: str) -> str:
+    return ".".join(version.split(".")[:2])
+
+
+def split_csaf_product_value(value: Any) -> tuple[str, str] | None:
+    """Split one product_status value into (tracked product, version clause).
+
+    Returns None for values that are *definitively* statements about a product
+    this tool does not track. That includes entirely different Fortinet lines
+    (FortiWeb, FortiMail, FortiPAM, FortiProxy...) and names that merely
+    *start with* a tracked one — "FortiManager Cloud 7.2 all versions" is a
+    distinct cloud product, not on-prem FortiManager, so it is ignored like
+    any other untracked product.
+
+    Anything else is uninterpretable rather than "out of scope": a non-string
+    or null entry, an empty value, or an opaque identifier (CSAF product id,
+    stray token) that names no Fortinet product at all. Those raise — treating
+    them as an untracked product let a partially-invalid export look like a
+    confirmed "no longer affected" and delete the previously stored entries.
+    Raising suspends the advisory instead, preserving previous data.
+    """
+    if not isinstance(value, str):
+        raise CsafResolutionError(f"product_status value is not a string: {value!r}")
+    compact = " ".join(value.split())
+    if not compact:
+        raise CsafResolutionError("product_status value is empty")
+    for product_name in CSAF_PRODUCT_NAMES:
+        if not compact.startswith(product_name):
+            continue
+        rest = compact[len(product_name):]
+        stripped = rest.strip().lstrip("-/").strip()
+        if stripped and stripped[0].isupper():
+            return None  # a different product sharing the prefix ("FortiManager Cloud")
+        return product_name, rest
+    if compact.startswith("Forti"):
+        # A recognizable, untracked Fortinet product line (FortiWeb, FortiPAM,
+        # FortiProxy...): explicitly out of scope, whatever its version clause.
+        return None
+    raise CsafResolutionError(
+        f"unresolved product_status value (no recognizable product): {value!r}"
+    )
+
+
+def parse_csaf_version_clause(rest: str) -> dict[str, Any] | None:
+    """Parse the version part of one CSAF product_status value.
+
+    Shapes observed in Fortinet's exports:
+      ">=7.6.1|<=7.6.6"      bounded range ("FortiOS >=7.6.1|<=7.6.6")
+      ">=7.6.1" / "<=7.6.6"  half-open range
+      "8.0 all versions"     whole train, no bounds
+      "7.6.7" / "-7.6.7"     one exact version
+      "upcoming  7.6.7"      one exact (not yet released) version
+
+    Returns {"branch", "from", "to"} — or None when the clause matches none
+    of these; callers then suspend the advisory (for a tracked product)
+    instead of guessing or silently dropping the claim.
+
+    The WHOLE normalized clause must match one of the shapes above. A bound
+    embedded in unknown or contradictory text (">=7.6.1|<7.6.7", "version
+    >=7.6.1", ">=7.6.1 or later") is deliberately NOT accepted: partially
+    consuming the clause used to reinterpret it as a smaller claim — e.g. a
+    malformed ">=7.6.1|<7.6.7" silently became a lower bound with no upper
+    bound — which is exactly how a non-probative value could weaken a stored
+    range instead of suspending the advisory.
+    """
+    rest = " ".join(rest.split()).lstrip("-/").strip()
+    if not rest:
+        return None
+    all_versions = re.fullmatch(r"(\d+\.\d+)\s+all versions", rest, re.IGNORECASE)
+    if all_versions:
+        return {"branch": all_versions.group(1), "from": None, "to": None}
+    bounded = re.fullmatch(
+        rf">=\s*({CSAF_VERSION_RE_TEXT})\s*\|\s*<=\s*({CSAF_VERSION_RE_TEXT})", rest
+    )
+    if bounded:
+        from_version = bounded.group(1)
+        to_version = bounded.group(2)
+        if csaf_branch(from_version) != csaf_branch(to_version):
+            return None  # a cross-train range cannot be represented per-branch
+        if version_key(from_version) > version_key(to_version):
+            return None
+        return {
+            "branch": csaf_branch(from_version),
+            "from": from_version,
+            "to": to_version,
+        }
+    from_only = re.fullmatch(rf">=\s*({CSAF_VERSION_RE_TEXT})", rest)
+    if from_only:
+        version = from_only.group(1)
+        return {"branch": csaf_branch(version), "from": version, "to": None}
+    to_only = re.fullmatch(rf"<=\s*({CSAF_VERSION_RE_TEXT})", rest)
+    if to_only:
+        version = to_only.group(1)
+        return {"branch": csaf_branch(version), "from": None, "to": version}
+    exact = re.fullmatch(
+        rf"(?:upcoming\s+)?({CSAF_VERSION_RE_TEXT})", rest, re.IGNORECASE
+    )
+    if exact:
+        version = exact.group(1)
+        return {"branch": csaf_branch(version), "from": version, "to": version}
+    return None
 
 
 def cvss_severity(score: float | None) -> str:
@@ -1928,98 +2301,223 @@ def cvss_severity(score: float | None) -> str:
     return "unknown"
 
 
-def parse_cvrf_product_id(value: str) -> dict[str, Any] | None:
-    """Translate one CVRF ProductID into the application's affected-range shape.
-
-    Fortinet uses both exact product IDs (``FortiOS-7.6.4``) and whole-train
-    product IDs (``FortiOS-FortiOS 7.6``). Exact IDs become a one-version
-    range; two-component train IDs keep open bounds, matching the frontend's
-    existing "all versions of this branch" semantics.
-    """
-    for product_name, (product_id, model_id) in CVE_PRODUCT_MAP.items():
-        prefix = f"{product_name}-"
-        if not value.startswith(prefix):
-            continue
-        versions = CVRF_VERSION_RE.findall(value[len(prefix) :])
-        if not versions:
-            return None
-        version = versions[-1]
-        parts = version.split(".")
-        return {
-            "product": product_id,
-            "models": [model_id] if model_id else [],
-            "branch": ".".join(parts[:2]),
-            "from": version if len(parts) >= 3 else None,
-            "to": version if len(parts) >= 3 else None,
-        }
-    return None
-
-
-def parse_cvrf_document(advisory_id: str, raw_xml: str | bytes) -> list[dict[str, Any]]:
-    root = ET.fromstring(raw_xml)
-    title = cvrf_text(root, "DocumentTitle") or advisory_id
-    tracking = next(
-        (element for element in root if cvrf_local_name(element.tag) == "DocumentTracking"),
-        None,
+def _csaf_range_sort_key(range_entry: dict[str, Any]) -> tuple[Any, ...]:
+    """Stable ordering for affected ranges (deterministic diffs across runs)."""
+    return (
+        range_entry["product"],
+        version_key(range_entry["branch"]),
+        version_key(range_entry["from"] or "0"),
+        version_key(range_entry["to"] or "0"),
     )
-    published_at = cvrf_text(tracking, "InitialReleaseDate")[:10]
-    updated_at = cvrf_text(tracking, "CurrentReleaseDate")[:10]
+
+
+def _csaf_status_list(advisory_id: str, status: dict[str, Any], key: str) -> list[Any]:
+    """One product_status entry list, distinguishing "absent" from "invalid".
+
+    An absent optional key is simply no claim at all ([]). A key that exists
+    but is null or not a list is malformed data — never silently read as "no
+    claim", which would let an invalid export remove stored entries.
+    """
+    if key not in status:
+        return []
+    values = status[key]
+    if values is None:
+        raise CsafResolutionError(f"{advisory_id}: CSAF product_status.{key} is null")
+    if not isinstance(values, list):
+        raise CsafResolutionError(
+            f"{advisory_id}: CSAF product_status.{key} is not a list"
+        )
+    return values
+
+
+def validate_csaf_document(advisory_id: str, doc: Any) -> dict[str, Any]:
+    """Refuse anything that is not the tracked advisory's own CSAF export.
+
+    A successful download is not proof of anything on its own: the response
+    must parse as a CSAF 2.x object whose publisher is Fortinet PSIRT and
+    whose tracking id is exactly the advisory being fetched. A captive
+    portal, a truncated file or a mixed-up document fails here — loudly.
+    """
+    if not isinstance(doc, dict):
+        raise CsafResolutionError(f"{advisory_id}: CSAF document is not a JSON object")
+    document = doc.get("document")
+    if not isinstance(document, dict):
+        raise CsafResolutionError(f"{advisory_id}: CSAF document has no document section")
+    if not str(document.get("csaf_version") or "").startswith("2."):
+        raise CsafResolutionError(
+            f"{advisory_id}: unexpected CSAF version {document.get('csaf_version')!r}"
+        )
+    tracking = document.get("tracking")
+    if not isinstance(tracking, dict) or tracking.get("id") != advisory_id:
+        raise CsafResolutionError(f"{advisory_id}: CSAF tracking id does not match")
+    publisher = document.get("publisher")
+    if not isinstance(publisher, dict) or publisher.get("name") != "Fortinet PSIRT":
+        raise CsafResolutionError(f"{advisory_id}: CSAF publisher is not Fortinet PSIRT")
+    if not isinstance(doc.get("vulnerabilities"), list):
+        raise CsafResolutionError(f"{advisory_id}: CSAF vulnerabilities is not a list")
+    for vulnerability in doc["vulnerabilities"]:
+        if not isinstance(vulnerability, dict):
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerabilities element is not an object"
+            )
+        if not isinstance(vulnerability.get("cve"), str) or not vulnerability["cve"]:
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerability has no cve identifier"
+            )
+        product_status = vulnerability.get("product_status")
+        if not isinstance(product_status, dict):
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerability has no product_status object"
+            )
+        # An absent/null/empty known_affected asserts nothing. Reading it as
+        # "no longer affected" is what would let a truncated or partial export
+        # delete every stored entry of the CVE; skip-with-diagnostic instead.
+        known_affected = product_status.get("known_affected")
+        if not isinstance(known_affected, list) or not known_affected:
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerability has no usable known_affected list"
+            )
+    return doc
+
+
+def parse_csaf_document(advisory_id: str, doc: dict[str, Any]) -> list[dict[str, Any]]:
+    """Translate a validated CSAF export into catalogue CVE entries.
+
+    Only product_status drives applicability: known_affected gives the exact
+    per-train ranges (or "all versions" / single-version claims), while
+    known_not_affected and fixed give exclusions — a version listed there is
+    never reported as affected, even inside an otherwise affected range. One
+    CVE can appear as several vulnerability entries in a single export (one
+    per product/platform); they are merged into one entry, like the previous
+    collector did.
+
+    Raises CsafResolutionError as soon as a value *about a tracked product*
+    uses an unrecognized shape, or when a product/train is claimed both
+    affected and fully unaffected: such an advisory keeps its last confirmed
+    data and surfaces in the run diagnostic instead of being silently
+    dropped or degraded to "not affected".
+    """
+    document = doc.get("document") or {}
+    tracking = document.get("tracking") or {}
+    title = str(document.get("title") or advisory_id)
+    published_at = str(tracking.get("initial_release_date") or "")[:10]
+    updated_at = str(tracking.get("current_release_date") or "")[:10]
     url = f"{PSIRT_BASE_URL}/psirt/{advisory_id}"
 
     entries_by_cve: dict[str, dict[str, Any]] = {}
-    for vulnerability in (
-        element for element in root.iter() if cvrf_local_name(element.tag) == "Vulnerability"
-    ):
-        cve_id = cvrf_text(vulnerability, "CVE")
-        if not cve_id:
-            continue
-
-        cvss_score = None
-        for score_name in ("BaseScoreV3", "BaseScoreV4"):
-            score_text = next(
-                (
-                    " ".join((element.text or "").split())
-                    for element in vulnerability.iter()
-                    if cvrf_local_name(element.tag) == score_name
-                    if element.text and element.text.strip()
-                ),
-                "",
+    for vulnerability in doc.get("vulnerabilities") or []:
+        if not isinstance(vulnerability, dict):
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerabilities element is not an object"
             )
-            if score_text:
-                try:
-                    cvss_score = float(score_text)
-                except ValueError:
-                    pass
+        cve_id = vulnerability.get("cve")
+        if not isinstance(cve_id, str) or not cve_id:
+            raise CsafResolutionError(
+                f"{advisory_id}: a vulnerability has no usable cve identifier"
+            )
+
+        cvss_score: float | None = None
+        severity: str | None = None
+        for score in vulnerability.get("scores") or []:
+            if not isinstance(score, dict):
+                continue
+            metrics = score.get("cvss_v3") or score.get("cvss_v4")
+            if isinstance(metrics, dict):
+                cvss_score = metrics.get("baseScore")
+                severity = str(metrics.get("baseSeverity") or "").lower() or None
                 break
+        severity = severity or cvss_severity(cvss_score)
+
+        status = vulnerability.get("product_status")
+        if not isinstance(status, dict):
+            raise CsafResolutionError(
+                f"{advisory_id}: {cve_id} has no product_status object"
+            )
+        known_affected = _csaf_status_list(advisory_id, status, "known_affected")
+        if not known_affected:
+            raise CsafResolutionError(
+                f"{advisory_id}: {cve_id} has no known_affected status"
+            )
 
         affected_by_key: dict[tuple[Any, ...], dict[str, Any]] = {}
-        for status in (
-            element
-            for element in vulnerability.iter()
-            if cvrf_local_name(element.tag) == "Status"
-        ):
-            if status.get("Type", "").casefold() != "known affected":
-                continue
-            for product_element in (
-                element
-                for element in status.iter()
-                if cvrf_local_name(element.tag) == "ProductID"
-            ):
-                product_id = " ".join((product_element.text or "").split())
-                affected = parse_cvrf_product_id(product_id)
-                if affected is None:
-                    continue
-                key = (
-                    affected["product"],
-                    tuple(affected["models"]),
-                    affected["branch"],
-                    affected["from"],
-                    affected["to"],
+        # Exclusions are scoped to product AND platform (model) AND branch:
+        # FortiClientWindows/Mac/Linux share the same tracked product id, so
+        # keying them by product+branch alone would let a Mac exclusion also
+        # exclude Windows (or even suspend a coherent Windows-only bulletin).
+        exclusions: dict[tuple[str, str | None, str], set[str]] = {}
+        for value in known_affected:
+            split = split_csaf_product_value(value)
+            if split is None:
+                continue  # not a tracked product — out of scope by design.
+            product_name, rest = split
+            clause = parse_csaf_version_clause(rest)
+            if clause is None:
+                raise CsafResolutionError(
+                    f"{advisory_id}: {cve_id} has an unrecognized known_affected "
+                    f"value for {product_name}: {value!r}"
                 )
-                affected_by_key[key] = affected
+            product_id, model_id = CVE_PRODUCT_MAP[product_name]
+            key = (product_id, model_id, clause["branch"], clause["from"], clause["to"])
+            affected_by_key[key] = {
+                "product": product_id,
+                "models": [model_id] if model_id else [],
+                "branch": clause["branch"],
+                "from": clause["from"],
+                "to": clause["to"],
+            }
+        for status_key in ("known_not_affected", "fixed"):
+            for value in _csaf_status_list(advisory_id, status, status_key):
+                split = split_csaf_product_value(value)
+                if split is None:
+                    continue
+                product_name, rest = split
+                clause = parse_csaf_version_clause(rest)
+                if clause is None:
+                    raise CsafResolutionError(
+                        f"{advisory_id}: {cve_id} has an unrecognized {status_key} "
+                        f"value for {product_name}: {value!r}"
+                    )
+                product_id, model_id = CVE_PRODUCT_MAP[product_name]
+                bucket = exclusions.setdefault(
+                    (product_id, model_id, clause["branch"]), set()
+                )
+                if clause["from"] is not None and clause["from"] == clause["to"]:
+                    bucket.add(clause["from"])
+                elif clause["from"] is None and clause["to"] is None:
+                    bucket.add("*")
+                else:
+                    raise CsafResolutionError(
+                        f"{advisory_id}: {cve_id} has an unusable {status_key} range "
+                        f"for {product_name}: {value!r}"
+                    )
+
+        for key, range_entry in affected_by_key.items():
+            product_id, model_id = key[0], key[1]
+            excluded: set[str] = set()
+            for version in exclusions.get(
+                (product_id, model_id, range_entry["branch"]), set()
+            ):
+                if version == "*":
+                    raise CsafResolutionError(
+                        f"{advisory_id}: {cve_id} claims {range_entry['product']} "
+                        f"{range_entry['branch']} both affected and fully unaffected"
+                    )
+                if (
+                    range_entry["from"] is not None
+                    and version_key(version) < version_key(range_entry["from"])
+                ):
+                    continue
+                if (
+                    range_entry["to"] is not None
+                    and version_key(version) > version_key(range_entry["to"])
+                ):
+                    continue
+                excluded.add(version)
+            if excluded:
+                range_entry["excluded"] = sorted(excluded, key=version_key)
 
         if not affected_by_key:
-            continue  # the vulnerability does not touch a product tracked here.
+            continue  # this vulnerability entry touches no tracked product.
 
         entry = entries_by_cve.setdefault(
             cve_id,
@@ -2027,7 +2525,7 @@ def parse_cvrf_document(advisory_id: str, raw_xml: str | bytes) -> list[dict[str
                 "id": cve_id,
                 "advisoryId": advisory_id,
                 "title": title,
-                "severity": cvss_severity(cvss_score),
+                "severity": severity,
                 "cvssScore": cvss_score,
                 "url": url,
                 "publishedAt": published_at,
@@ -2037,25 +2535,41 @@ def parse_cvrf_document(advisory_id: str, raw_xml: str | bytes) -> list[dict[str
         )
         entry["affected"].extend(affected_by_key.values())
 
+    for entry in entries_by_cve.values():
+        entry["affected"] = sorted(entry["affected"], key=_csaf_range_sort_key)
     return list(entries_by_cve.values())
-
-
-def fetch_cvrf_document(advisory_id: str, timeout: int) -> str:
-    return fetch_text(f"{PSIRT_BASE_URL}/psirt/cvrf/{advisory_id}", timeout)
 
 
 def collect_cve_entries_for_advisory(
     advisory_id: str, timeout: int
 ) -> list[dict[str, Any]]:
-    """Return the definitive CVE list from Fortinet's public CVRF export.
+    """Return the definitive CVE list for one advisory, from its CSAF export.
 
-    Transport failures and malformed XML are intentionally raised to the
-    caller, which records the advisory as skipped and preserves its previous
-    data instead of treating an unverified response as an empty result.
+    The advisory page is fetched once to discover the (unguessable) CSAF URL,
+    which is re-validated before use; the export itself is validated
+    (Fortinet PSIRT, CSAF 2.x, tracking.id == advisory_id) and then translated
+    with its exact ranges and exclusions. Every failure — transport, anti-bot
+    challenge without a usable link, invalid or foreign JSON, unknown value
+    shapes for a tracked product — is raised to the caller, which records the
+    advisory as skipped and preserves its previous data. An empty list is
+    reserved for a genuinely confirmed case: a validated export that names no
+    tracked product for this advisory.
     """
-    return parse_cvrf_document(
-        advisory_id, fetch_cvrf_document(advisory_id, timeout)
+    raw_html = fetch_text(
+        f"{PSIRT_BASE_URL}/psirt/{advisory_id}",
+        timeout,
+        redirect_validator=_psirt_page_redirect_allowed,
     )
+    csaf_url = discover_csaf_url(advisory_id, raw_html)
+    if csaf_url is None:
+        raise CsafResolutionError(
+            f"{advisory_id}: no validated CSAF link on the advisory page"
+        )
+    doc = json.loads(
+        fetch_text(csaf_url, timeout, redirect_validator=_csaf_redirect_allowed)
+    )
+    validate_csaf_document(advisory_id, doc)
+    return parse_csaf_document(advisory_id, doc)
 
 
 def upsert_cve(state: dict[str, Any], item: dict[str, Any]) -> bool:
@@ -2121,10 +2635,11 @@ def collect_cve_catalog(
     timeout: int,
     backfill: bool = False,
     backfill_max_pages: int = 30,
+    reconcile_existing: bool = False,
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
     """Per-advisory CVE entries to reconcile (keyed by advisory_id), plus a skipped-id list.
 
-    An advisory_id present in the returned dict got a DEFINITIVE, successfully-parsed CVRF
+    An advisory_id present in the returned dict got a DEFINITIVE, successfully-parsed CSAF
     result this run (see collect_cve_entries_for_advisory()) — its entries are the complete,
     current set of CVEs for that advisory among our tracked products, so the caller should
     replace whatever it previously had for that advisory_id, dropping anything no longer
@@ -2137,6 +2652,12 @@ def collect_cve_catalog(
     regularly revises severity/CVSS/affected versions (or drops a product's relevance entirely)
     on an advisory well after first publishing it, so re-checking ~50 advisories a day is worth
     the trivial extra cost to avoid silently freezing stale data forever.
+    reconcile_existing=True (maintenance pass, `--cve-reconcile-existing`) additionally
+    re-fetches every advisory the catalogue already references, including ones the current RSS
+    window no longer covers — that is what lets a corrected collector repair ranges stored by
+    an older one instead of leaving pre-RSS-window entries frozen with stale data. Idempotent
+    (same upstream ⇒ same entries ⇒ zero deltas) and interruptible (nothing is written until
+    the run's single final commit, under the usual cross-process lock). Without --cve-backfill;
     backfill=True instead walks the paginated, per-product PSIRT listing to seed deep history —
     hundreds of advisories worth of requests, so it's still bounded to genuinely new ids there;
     meant to be run manually/occasionally, not from the daily timer.
@@ -2157,6 +2678,10 @@ def collect_cve_catalog(
         ]
     else:
         advisory_ids = discover_advisory_ids_from_rss(timeout)
+        if reconcile_existing:
+            advisory_ids = unique_in_order(
+                [*advisory_ids, *sorted(existing_advisory_ids)]
+            )
 
     return fetch_cve_entries_for_advisories(advisory_ids, timeout)
 
@@ -2164,7 +2689,7 @@ def collect_cve_catalog(
 def fetch_cve_entries_for_advisories(
     advisory_ids: list[str], timeout: int
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
-    """Fetch the definitive CVRF result for each id in `advisory_ids`, split into resolved
+    """Fetch the definitive CSAF result for each id in `advisory_ids`, split into resolved
     results and a skipped list (see collect_cve_catalog's docstring for what each side means to
     callers). Factored out of collect_cve_catalog() so main() can call it a second time with just
     the skipped ids after a delay, without re-running RSS/listing discovery.
@@ -2178,8 +2703,9 @@ def fetch_cve_entries_for_advisories(
             urllib.error.URLError,
             TimeoutError,
             OSError,
+            http.client.HTTPException,
             json.JSONDecodeError,
-            ET.ParseError,
+            CsafResolutionError,
         ):
             entries = None
         if entries is None:
@@ -2549,6 +3075,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Pages max à parcourir par produit lors du --cve-backfill.",
     )
     parser.add_argument(
+        "--cve-reconcile-existing",
+        action="store_true",
+        help=(
+            "Passe de maintenance : re-récupère aussi chaque advisory déjà référencé par le "
+            "catalogue (y compris ceux sortis du dernier RSS) pour recalculer ses CVE depuis "
+            "l'export CSAF précis. Idempotente et interruptible ; rien n'est écrit avant le "
+            "commit final. À lancer manuellement avec --cve-catalog."
+        ),
+    )
+    parser.add_argument(
         "--cve-retry-delays-seconds",
         type=parse_retry_delays,
         default="300,900",
@@ -2584,6 +3120,50 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--timeout", type=int, default=12)
     parser.add_argument("--skip-network", action="store_true")
     return parser.parse_args(argv)
+
+
+def commit_collected_state(
+    output_path: Path,
+    state: dict[str, Any],
+    advisory_deltas: list[dict[str, Any]],
+    path_deltas: list[UpgradePath],
+    cve_results_by_advisory: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Merge this run's collected deltas into the catalogue under the process lock.
+
+    `state` is this run's own snapshot, read before potentially minutes of network collection —
+    another writer (fortios_server.py, import_forticlient_compat.py) or a concurrent maintenance
+    pass may have changed the file since. The lock serializes writes, not snapshot freshness, so
+    nothing stale may be written back wholesale:
+
+    - firmwares/lifecycle are this script's own exclusive domain: bulk-merged (incoming wins);
+    - advisories/paths are applied as precise upserts from the deltas tracked by the caller;
+    - compatibilities are never touched by this script and are left completely alone;
+    - CVEs are NEVER bulk-merged from the snapshot. Only this run's definitive per-advisory
+      results (cve_results_by_advisory) are applied with replace_cves_for_advisory(), so a run
+      that never re-fetched an advisory cannot resurrect the stale ranges it read at the top of
+      its own run over a concurrent --cve-reconcile-existing correction — and its own fresh,
+      probative results still win over the disk for the advisories it did fetch.
+    """
+    with cross_process_lock(output_path):
+        latest_from_disk = normalize_state(read_json(output_path, {}))
+        state_for_bulk_merge = {
+            **state,
+            "advisories": [],
+            "paths": [],
+            "compatibilities": [],
+            "cves": [],
+        }
+        final_state = merge_state(latest_from_disk, state_for_bulk_merge)
+        for advisory in advisory_deltas:
+            upsert_advisory(final_state, advisory)
+        for path in path_deltas:
+            upsert_path(final_state, path)
+        for advisory_id, entries in cve_results_by_advisory.items():
+            replace_cves_for_advisory(final_state, advisory_id, entries)
+        final_state["generatedAt"] = utc_now()
+        write_json(output_path, final_state)
+    return final_state
 
 
 def main(argv: list[str]) -> int:
@@ -2944,7 +3524,11 @@ def main(argv: list[str]) -> int:
     cve_stats = CveReconciliationStats()
     cve_results_by_advisory: dict[str, list[dict[str, Any]]] = {}
     skipped_cves: list[str] = []
-    if (args.cve_catalog or args.cve_backfill) and not args.skip_network:
+    # Set when the maintenance pass cannot make its silence intent durable (see the staging block
+    # below): the reconciled results are then withheld from the commit and the health record says
+    # so, instead of committing history corrections nothing would keep silent.
+    reconcile_aborted = False
+    if (args.cve_catalog or args.cve_backfill or args.cve_reconcile_existing) and not args.skip_network:
         t0 = time.monotonic()
         started_at = health_mark_running(args.health_output, SOURCE_CVE_PSIRT)
         try:
@@ -2956,13 +3540,15 @@ def main(argv: list[str]) -> int:
                 args.timeout,
                 backfill=args.cve_backfill,
                 backfill_max_pages=args.cve_backfill_max_pages,
+                reconcile_existing=args.cve_reconcile_existing,
             )
             # A handful of advisories failing out of the ~50 fetched daily is almost always a
             # transient PSIRT hiccup (rate limiting, brief outage) that clears up within minutes
             # on its own -- retrying seconds later (the per-request backoff in read_url_with_retry)
             # mostly doesn't help with that, so wait for real before giving the still-failing ones
             # another shot. Bounded and spaced out (not "retry forever until green"): an advisory
-            # can be legitimately CVRF-less (see collect_cve_entries_for_advisory's docstring),
+            # can be legitimately without a usable CSAF link (see collect_cve_entries_for_advisory's
+            # docstring),
             # indistinguishable here from a real failure, so an unbounded loop would spin on it
             # forever every single day; and hammering PSIRT harder/faster when it's already
             # struggling only makes the rate limiting worse, not better (observed directly: 1
@@ -2975,6 +3561,42 @@ def main(argv: list[str]) -> int:
                     skipped_cves, args.timeout
                 )
                 cve_results_by_advisory.update(retried_results)
+
+            # Durable silence intent, written BEFORE the catalogue commit further below: the
+            # corrected historical entries are declared "not news" on disk first, so even if this
+            # process dies between the catalogue commit and the notification work, every later run
+            # — a normal collection included — can still confirm and absorb them instead of
+            # deriving them as brand-new notifications (see
+            # fortios_notify.stage_pending_cve_baseline()). If this intent cannot be made durable,
+            # the reconciliation is abandoned for this run: committing corrections that nothing
+            # would keep silent is exactly the historical-replay window this pass exists to close.
+            # Skipped only when no notification state exists at all — nothing to protect, since a
+            # future first activation bootstraps its baseline silently from whatever the catalogue
+            # holds then.
+            if args.cve_reconcile_existing and cve_results_by_advisory and (
+                notify_checkpoint is not None
+                or os.path.lexists(args.notify_history_output)
+            ):
+                try:
+                    import fortios_notify
+
+                    fortios_notify.stage_pending_cve_baseline(
+                        args.notify_history_output,
+                        {
+                            entry["id"]: entry
+                            for entries in cve_results_by_advisory.values()
+                            for entry in entries
+                            if entry.get("id")
+                        },
+                    )
+                except Exception as error:  # noqa: BLE001 - recorded below, never fatal here.
+                    reconcile_aborted = True
+                    cve_results_by_advisory = {}
+                    sys.stderr.write(
+                        "Avertissement : réconciliation CVE abandonnée, intention durable de "
+                        f"silence non enregistrable ({error}) — les corrections historiques de "
+                        "ce run ne sont pas committées.\n"
+                    )
             # Each advisory here got a definitive CVRF result this run: replace (not just upsert)
             # whatever we had for it, so a CVE Fortinet has since removed/reattributed away from
             # our tracked products actually disappears instead of lingering forever. Advisories
@@ -2985,7 +3607,13 @@ def main(argv: list[str]) -> int:
                 cve_stats += replace_cves_for_advisory(state, advisory_id, entries)
 
             total_considered = len(cve_results_by_advisory) + len(skipped_cves)
-            if total_considered > 0 and not cve_results_by_advisory:
+            if reconcile_aborted:
+                cve_health_status = HEALTH_STATUS_ERROR
+                cve_health_error = (
+                    "Réconciliation CVE abandonnée : intention durable de silence "
+                    "non enregistrable"
+                )
+            elif total_considered > 0 and not cve_results_by_advisory:
                 cve_health_status = HEALTH_STATUS_ERROR
                 cve_health_error = (
                     f"{len(skipped_cves)} advisorie(s) PSIRT injoignable(s)"
@@ -3024,39 +3652,41 @@ def main(argv: list[str]) -> int:
 
     # This run started from a read of args.output taken potentially minutes ago (network
     # scraping in between) — fortios_server.py or import_forticlient_compat.py may have written
-    # to that same file since. The lock below closes the race with those other writers; what it
-    # doesn't do on its own is stop THIS run's own stale copy from clobbering what they wrote:
-    # `state` still carries the advisories/paths/compatibilities exactly as they were at the top
-    # of this function; blindly merging that in would replace a concurrent edit with our stale
-    # pre-collection copy, or resurrect something a user deleted while we were scraping. So the
-    # bulk merge below only ever carries firmwares/lifecycle (this script's own exclusive domain
-    # — no other process writes those) onto a freshly re-read state, while advisories and paths
-    # are applied as precise upserts from the deltas tracked above, and compatibilities (never
-    # touched by this script at all) are left completely alone.
-    #
-    # CVEs need the same delta-reapplication treatment: merge_state()'s CVE merge is a keyed
-    # union that only ever adds/overwrites by id, never removes one absent from the incoming
-    # side — so a CVE reconciled away from `state` above would otherwise come right back the
-    # moment merge_state() re-merges it onto latest_from_disk's still-stale copy (which was
-    # never touched by the reconciliation loop above). Re-applying the same reconciliation on
-    # final_state, after the bulk merge, actually makes the removal stick.
-    with cross_process_lock(args.output):
-        latest_from_disk = normalize_state(read_json(args.output, {}))
-        state_for_bulk_merge = {
-            **state,
-            "advisories": [],
-            "paths": [],
-            "compatibilities": [],
-        }
-        final_state = merge_state(latest_from_disk, state_for_bulk_merge)
-        for advisory in advisory_deltas:
-            upsert_advisory(final_state, advisory)
-        for path in path_deltas:
-            upsert_path(final_state, path)
-        for advisory_id, entries in cve_results_by_advisory.items():
-            replace_cves_for_advisory(final_state, advisory_id, entries)
-        final_state["generatedAt"] = utc_now()
-        write_json(args.output, final_state)
+    # to that same file since, and the maintenance reconciliation (--cve-reconcile-existing) may
+    # even have repaired CVEs of advisories this run never fetched. commit_collected_state()
+    # applies this run's deltas onto a freshly re-read state under the lock (see its docstring:
+    # firmwares/lifecycle bulk-merged, advisories/paths as precise upserts, CVEs only per fetched
+    # advisory) so nothing stale is written back wholesale.
+    final_state = commit_collected_state(
+        args.output, state, advisory_deltas, path_deltas, cve_results_by_advisory
+    )
+
+    # Maintenance reconciliation and notifications: the corrected historical entries this pass
+    # just committed must be part of the notification baseline from this very commit on. The
+    # durable intent was staged BEFORE the commit above (stage_pending_cve_baseline); this step
+    # confirms it against the just-committed catalogue right here, so even a crash that skips
+    # everything below leaves the corrections un-replayable: any later run — normal collection
+    # included — resolves the same staged intent before deriving anything (see
+    # consume_pending_cve_baseline() and the notification block below). Outbox, sentKeys,
+    # preferences and the version/health baselines (a combined run must still be able to notify
+    # them) are untouched.
+    if args.cve_reconcile_existing and notify_checkpoint is not None:
+        try:
+            import fortios_notify
+
+            fortios_notify.consume_pending_cve_baseline(
+                args.notify_history_output,
+                {
+                    item["id"]: item
+                    for item in final_state.get("cves", [])
+                    if item.get("id")
+                },
+            )
+        except Exception as error:  # noqa: BLE001 - notification bookkeeping only.
+            sys.stderr.write(
+                "Avertissement : consommation de l'intention de réconciliation CVE "
+                f"impossible ({error}).\n"
+            )
 
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(
@@ -3069,7 +3699,9 @@ def main(argv: list[str]) -> int:
             skipped_docs_versions=skipped_docs_versions,
             forticlient_catalog_enabled=args.forticlient_catalog,
             skipped_forticlient=skipped_forticlient,
-            cve_catalog_enabled=args.cve_catalog or args.cve_backfill,
+            cve_catalog_enabled=args.cve_catalog
+            or args.cve_backfill
+            or args.cve_reconcile_existing,
             cve_stats=cve_stats,
             skipped_cves=skipped_cves,
         ),
@@ -3138,6 +3770,14 @@ def main(argv: list[str]) -> int:
     # "new" and re-derives the same event, which the existing outbox/sentKeys dedup (keyed by a
     # stable dedup_key, not by which run happened to derive it) makes safe to attempt again from
     # a different, later run.
+    #
+    # A crashed maintenance pass (--cve-reconcile-existing) is the exception that must NOT
+    # re-derive: its corrections are not news, they are the state the pass itself staged as
+    # baseline before committing the catalogue (see the staging block above and
+    # stage_pending_cve_baseline()). This block resolves any staged intent against the
+    # just-committed catalogue before deriving anything — applied entries are diffed against
+    # themselves, and only entries the catalogue has not actually reached yet stay pending for a
+    # later run — so a normal resume can never turn corrected history back into notifications.
     try:
         import uuid
 
@@ -3159,22 +3799,44 @@ def main(argv: list[str]) -> int:
             and notification_settings.system_notifications_enabled
             and notification_settings.system_recipients
         )
+        # The catalogue observation every baseline below is built from is read HERE, as ONE
+        # coherent snapshot together with the notify state (checkpoint, staged intents, EOL
+        # state) -- never as two separate reads, and never from the `final_state` image this run
+        # committed earlier. See read_coherent_notification_observation(): both reads share one
+        # short section of the history lock every notify-state writer already takes, so a writer
+        # that completed while this run was still collecting (a maintenance pass finishing right
+        # before this block, for instance) is observed either entirely before the snapshot (its
+        # advance is already the baseline diffed below) or entirely after it (its stage/consume/
+        # commit steps are still excluded by the lock) -- never as a stale catalogue image
+        # paired with a freshly certified baseline, the shape that used to let an older run
+        # regress that advance and replay the correction as a historical low->high notification
+        # (the B3 review's remaining window). An absent or unreadable catalogue aborts this
+        # best-effort block (caught below) instead of silently falling back to the stale
+        # final_state image: the next run re-observes the durable pair from scratch.
+        notify_observation = None
+        if notification_settings is not None and notify_checkpoint is not None:
+            notify_observation = read_coherent_notification_observation(
+                args.notify_history_output, args.output
+            )
         if (
-            notification_settings is not None
-            and notify_checkpoint is not None
+            notify_observation is not None
             and not cve_notifications
             and not release_notifications
             and not system_notifications
         ):
+            # Notifications disabled: every baseline below still advances silently, but each
+            # proposal is conditioned (under the write lock, on the baseline this observation
+            # read) so an older disabled run can never regress an advance another writer
+            # certified since -- which a later reactivation would otherwise replay.
+            notify_catalog, notify_state = notify_observation
             health_after = read_health_state(args.health_output).get("sources", {})
             cves_after_by_id = {
                 item["id"]: item
-                for item in final_state.get("cves", [])
+                for item in notify_catalog.get("cves", [])
                 if item.get("id")
             }
-            notify_state = fortios_notify.load_notify_state(args.notify_history_output)
             _, eol_state_after = fortios_notify.derive_eol_events(
-                final_state.get("fortiosLifecycle", {}),
+                notify_catalog.get("fortiosLifecycle", {}),
                 notify_state.get("eolState", {}),
                 now=final_state["generatedAt"],
             )
@@ -3184,57 +3846,94 @@ def main(argv: list[str]) -> int:
                 {
                     "versionsByProduct": {
                         product: sorted(versions)
-                        for product, versions in versions_by_product(final_state).items()
+                        for product, versions in versions_by_product(notify_catalog).items()
                     },
                     "cvesById": cves_after_by_id,
                     "health": health_after,
                 },
+                observed_checkpoint=notify_state.get("checkpoint"),
+                observed_eol_state=notify_state.get("eolState"),
             )
-        if (
-            notification_settings is not None
-            and notify_checkpoint is not None
-            and (
-                cve_notifications
-                or release_notifications
-                or system_notifications
-            )
+        if notify_observation is not None and (
+            cve_notifications
+            or release_notifications
+            or system_notifications
         ):
+            notify_catalog, notify_state = notify_observation
             health_after = read_health_state(args.health_output).get("sources", {})
-            notify_state = fortios_notify.load_notify_state(args.notify_history_output)
+            pending_observed = notify_state.get(fortios_notify.PENDING_CVE_BASELINE_KEY)
 
-            checkpoint_versions = {
-                product: set(versions)
-                for product, versions in notify_checkpoint["versionsByProduct"].items()
-            }
-            checkpoint_cves_by_id = notify_checkpoint["cvesById"]
-            checkpoint_health = notify_checkpoint["health"]
+            # The derivation baseline is the checkpoint as it stands RIGHT NOW, from the
+            # coherent observation above -- not the one this run bootstrapped at start-up. A
+            # maintenance pass (or any other writer) that completed while this run was still
+            # collecting has already consumed its historical corrections into that fresher
+            # checkpoint; deriving against the stale start-up capture would replay them (the B3
+            # "checkpoint périmé" case), so the durable state -- never an in-flight run's
+            # memory -- is the reference that stays opposable to it. The same freshness contract
+            # is enforced again, under the write lock, by
+            # commit_events_with_checkpoint(derivation_checkpoint=...): a correction certified
+            # by someone else is never overwritten by this run's older snapshot, and
+            # pre-derived events are revalidated against the fresh durable state before entering
+            # the outbox. The catalogue side of the observation was read in the same protected
+            # section (read_coherent_notification_observation above), so the proposed baseline
+            # and the catalogue it is diffed against always belong to one coordinated
+            # observation of the durable pair.
+            checkpoint_state = notify_state.get("checkpoint") or notify_checkpoint
 
-            events: list[Any] = []
             # cves_after_by_id feeds the new checkpoint below regardless of --cve-backfill, so a
             # normal run right after a backfill still sees those CVEs as already-known rather
             # than spamming all of them as "new".
             cves_after_by_id = {
                 item["id"]: item
-                for item in final_state.get("cves", [])
+                for item in notify_catalog.get("cves", [])
                 if item.get("id")
             }
-            if not args.cve_backfill:
+
+            # A maintenance pass that crashed between its catalogue commit and its baseline
+            # advance leaves a durable intent on disk (stage_pending_cve_baseline). Confirm it
+            # against the catalogue this run just committed: entries the catalogue already
+            # carries with the same notification-relevant severity become part of the diff
+            # baseline, so no run can derive them as brand-new history; anything the catalogue
+            # has not actually reached yet stays staged (it must never be silently advanced to a
+            # state the catalogue does not back). The resolution is certified, not imposed: the
+            # final commit below only retires the ids this run actually observed and resolved, in
+            # the same atomic write that advances the checkpoint.
+            pending_applied, pending_remaining = fortios_notify.resolve_pending_cve_baseline(
+                pending_observed,
+                cves_after_by_id,
+            )
+
+            checkpoint_versions = {
+                product: set(versions)
+                for product, versions in checkpoint_state["versionsByProduct"].items()
+            }
+            checkpoint_cves_by_id = {**checkpoint_state["cvesById"], **pending_applied}
+            checkpoint_health = checkpoint_state["health"]
+
+            events: list[Any] = []
+            # Historical ingestion (--cve-backfill) and the maintenance reconciliation
+            # (--cve-reconcile-existing) never derive notifications: the entries they import or
+            # correct are not news. The checkpoint below still advances to the final catalogue
+            # (and the staged CVE-baseline intent — consumed right after the commit above, and
+            # re-confirmed by every later run — already covers an interruption before this
+            # block), so a later normal run cannot replay any of it as new.
+            if not (args.cve_backfill or args.cve_reconcile_existing):
                 product_labels = {
                     p.get("id"): p.get("label", p.get("id"))
-                    for p in final_state.get("products", [])
+                    for p in notify_catalog.get("products", [])
                 }
                 if release_notifications:
                     events += fortios_notify.derive_version_events(
                         checkpoint_versions,
-                        versions_by_product(final_state),
+                        versions_by_product(notify_catalog),
                         product_labels,
                         detected_at=final_state["generatedAt"],
-                        release_links=release_notes_by_product(final_state),
+                        release_links=release_notes_by_product(notify_catalog),
                     )
                 if cve_notifications:
                     newly_added_cves = [
                         item
-                        for item in final_state.get("cves", [])
+                        for item in notify_catalog.get("cves", [])
                         if item.get("id") and item["id"] not in checkpoint_cves_by_id
                     ]
                     events += fortios_notify.derive_new_cve_events(
@@ -3252,7 +3951,7 @@ def main(argv: list[str]) -> int:
             # later activation cannot replay historical transitions.
             if not args.cve_backfill or not system_notifications:
                 eol_events, eol_state_after = fortios_notify.derive_eol_events(
-                    final_state.get("fortiosLifecycle", {}),
+                    notify_catalog.get("fortiosLifecycle", {}),
                     notify_state.get("eolState", {}),
                     now=final_state["generatedAt"],
                 )
@@ -3312,14 +4011,34 @@ def main(argv: list[str]) -> int:
                     flush=True,
                 )
 
-            new_checkpoint = {
-                "versionsByProduct": {
-                    product: sorted(versions)
-                    for product, versions in versions_by_product(final_state).items()
-                },
-                "cvesById": cves_after_by_id,
-                "health": health_after,
-            }
+            if args.cve_reconcile_existing:
+                # A maintenance pass may only absorb what it actually resolved: the corrections
+                # its own staged intent confirmed against the catalogue it just committed
+                # (checkpoint_cves_by_id = durable baseline + confirmed corrections), plus the
+                # version baseline unchanged. Advancing CVE/version baselines to the WHOLE merged
+                # catalogue would silently absorb a novelty this pass never derived an event for
+                # -- a concurrent collector's new CVE, a newly collected version -- and the next
+                # normal run would then find nothing left to report (the B3 "absorption globale"
+                # case). Anything beyond its own corrections stays diffable; the next normal run
+                # still derives and delivers it exactly once. Health is this run's own source
+                # observation, not catalogue-derived, and keeps advancing as before.
+                new_checkpoint = {
+                    "versionsByProduct": {
+                        product: sorted(versions)
+                        for product, versions in checkpoint_state["versionsByProduct"].items()
+                    },
+                    "cvesById": dict(checkpoint_cves_by_id),
+                    "health": health_after,
+                }
+            else:
+                new_checkpoint = {
+                    "versionsByProduct": {
+                        product: sorted(versions)
+                        for product, versions in versions_by_product(notify_catalog).items()
+                    },
+                    "cvesById": cves_after_by_id,
+                    "health": health_after,
+                }
             claimant = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
             pending = fortios_notify.commit_events_with_checkpoint(
                 args.notify_history_output,
@@ -3328,6 +4047,11 @@ def main(argv: list[str]) -> int:
                 claimant=claimant,
                 transport=email_config.transport,
                 settings=notification_settings,
+                pending_cve_baseline=fortios_notify.PendingCveBaselineResolution(
+                    observed=pending_observed,
+                    remaining=pending_remaining,
+                ),
+                derivation_checkpoint=checkpoint_state,
             )
             fortios_notify.deliver_notification_batches(
                 args.notify_history_output,

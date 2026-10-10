@@ -1533,14 +1533,16 @@
     }
 
 
-    // CVE ranges come from Fortinet's own CVRF advisories (see scripts/fortios_watch.py) as
-    // per-branch bounds — a branch with no from/to means the whole train is affected (Fortinet
-    // phrases that as "X.Y all versions", usually because it's EOL with no planned fix).
+    // CVE ranges come from Fortinet's own CSAF advisories (see scripts/fortios_watch.py):
+    // per-branch bounds (from/to) plus optional exact versions in `excluded` (listed as
+    // known_not_affected/fixed upstream); a branch with no from/to means the whole train is
+    // affected, minus anything in `excluded`.
     function cveMatchesVersion(cve, product, model, version) {
       return (cve.affected || []).some(range => {
         if (range.product !== product) return false;
         if (Array.isArray(range.models) && range.models.length && !range.models.includes(model)) return false;
         if (branchOf(version) !== range.branch) return false;
+        if (Array.isArray(range.excluded) && range.excluded.includes(version)) return false;
         if (!range.from && !range.to) return true;
         if (range.from && compareVersions(version, range.from) < 0) return false;
         if (range.to && compareVersions(version, range.to) > 0) return false;

@@ -98,11 +98,21 @@ def fortios_server_env() -> dict[str, str]:
 
 
 @pytest.fixture
-def fortios_server(tmp_path: Path, fortios_server_env: dict[str, str]):
+def fortios_server_catalog() -> Path:
+    """Catalogue copied into the isolated server's data dir.
+
+    Defaults to the standard E2E fixture; a test module overrides this fixture when it needs to
+    serve a different catalogue (e.g. one produced by the real collector/reconciliation pass).
+    """
+    return FIXTURES_DIR / "catalog.json"
+
+
+@pytest.fixture
+def fortios_server(tmp_path: Path, fortios_server_env: dict[str, str], fortios_server_catalog: Path):
     admin_password = secrets.token_urlsafe(24)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    shutil.copy(FIXTURES_DIR / "catalog.json", data_dir / "fortios-data.generated.json")
+    shutil.copy(fortios_server_catalog, data_dir / "fortios-data.generated.json")
 
     mock_response_path = tmp_path / "mock_response.json"
     mock_response_path.write_text(json.dumps({}))  # no hops configured yet -> "no path" until set
