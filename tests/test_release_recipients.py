@@ -325,13 +325,28 @@ class BatchRoutingTests(unittest.TestCase):
 
 
 class _DeliveryRun(OneCollectorRun):
-    """One collector run whose SMTP client can refuse a chosen recipient list."""
+    """One collector run whose SMTP client can refuse a chosen recipient list.
 
-    def __init__(self, root: Path, *, fail_to: tuple[str, ...] = ()) -> None:
+    ``fail_to`` raises a transport-level failure as soon as one of those addresses is among the
+    message recipients (the historical all-or-nothing path). ``refuse_to`` reproduces the exact
+    ``smtplib.SMTP.send_message`` partial contract instead: accepted recipients are delivered and
+    the refused ``{address: (code, detail)}`` mapping is returned to the caller. A message whose
+    recipients are all refused raises ``SMTPRecipientsRefused``, exactly like smtplib.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        fail_to: tuple[str, ...] = (),
+        refuse_to: tuple[tuple[str, int], ...] = (),
+    ) -> None:
         super().__init__(root)
         self.fail_to = tuple(address.casefold() for address in fail_to)
+        self.refuse_to = {address.casefold(): code for address, code in refuse_to}
         self.sent: list[tuple[str, ...]] = []
         self.failed: list[tuple[str, ...]] = []
+        self.refused: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
 
     def run(self, *extra_arguments: str) -> int:
         client = MagicMock()
@@ -339,7 +354,9 @@ class _DeliveryRun(OneCollectorRun):
         client.__exit__ = MagicMock(return_value=False)
         import smtplib
 
-        def send_message(message: Any, *_args: Any, **_kwargs: Any) -> None:
+        def send_message(
+            message: Any, *_args: Any, **_kwargs: Any
+        ) -> dict[str, tuple[int, bytes]]:
             recipients = tuple(
                 address.strip().casefold()
                 for address in str(message["To"]).split(",")
@@ -348,8 +365,23 @@ class _DeliveryRun(OneCollectorRun):
             if self.fail_to and any(address in self.fail_to for address in recipients):
                 self.failed.append(recipients)
                 raise smtplib.SMTPException("refusé par le test")
-            self.sent.append(recipients)
-            self.messages.append(message.as_bytes())
+            refused = {
+                address: (self.refuse_to[address], b"refused by the test client")
+                for address in recipients
+                if address in self.refuse_to
+            }
+            if refused and len(refused) == len(recipients):
+                self.failed.append(recipients)
+                raise smtplib.SMTPRecipientsRefused(refused)
+            if refused:
+                self.refused.append((recipients, tuple(refused)))
+            accepted = tuple(
+                address for address in recipients if address not in refused
+            )
+            if accepted:
+                self.sent.append(accepted)
+                self.messages.append(message.as_bytes())
+            return refused
 
         client.send_message = MagicMock(side_effect=send_message)
         arguments = [
