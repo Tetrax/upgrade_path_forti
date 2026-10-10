@@ -518,11 +518,7 @@ class EmailConfig:
 
     def is_complete(self) -> bool:
         if self.transport == EMAIL_TRANSPORT_MICROSOFT365:
-            display_name = self.graph_display_name or (
-                self.email_appearance.display_name
-                if self.email_appearance is not None
-                else "FortiUpgrade"
-            )
+            display_name = self.display_name
             return bool(
                 _MICROSOFT365_TENANT_RE.fullmatch(self.graph_tenant_id)
                 and _MICROSOFT365_CLIENT_RE.fullmatch(self.graph_client_id)
@@ -555,9 +551,7 @@ class EmailConfig:
             return False
         if not all(_EMAIL_ADDRESS_RE.match(addr.strip()) for addr in self.smtp_to):
             return False
-        security = self.smtp_security or (
-            "starttls" if self.smtp_starttls else "none"
-        )
+        security = self.effective_smtp_security
         if security not in {"starttls", "tls", "none"}:
             return False
         if security == "none" and not self.smtp_allow_insecure:
@@ -565,6 +559,11 @@ class EmailConfig:
         return not (
             self.smtp_username and (not self.smtp_password or self.smtp_password_error)
         )
+
+    @property
+    def effective_smtp_security(self) -> str:
+        """Explicit ``smtp_security``, else the historical STARTTLS boolean."""
+        return self.smtp_security or ("starttls" if self.smtp_starttls else "none")
 
     @property
     def sender(self) -> str:
@@ -1428,13 +1427,7 @@ def _saved_email_appearance(path: Path) -> EmailAppearance:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
         return _default_email_appearance()
-    if not isinstance(payload, dict):
-        return _default_email_appearance()
-    appearance_payload = payload.get("emailAppearance", payload)
-    try:
-        return validate_email_appearance(appearance_payload)
-    except (TypeError, ValueError):
-        return _default_email_appearance()
+    return _appearance_from_payload(payload)
 
 
 def _invalid_smtp_settings(appearance: EmailAppearance | None = None) -> SmtpSettings:
@@ -1788,34 +1781,36 @@ def _microsoft365_public_status(config: EmailConfig) -> dict[str, Any]:
     }
 
 
-def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
-    public = {
-        # ``state`` remains the verdict of the *configured* transport (what actually sends);
-        # ``smtpState`` lets the admin page show SMTP's own verdict while SMTP is selected.
+def _transport_verdicts(config: EmailConfig) -> dict[str, str]:
+    """``state`` is the verdict of the *configured* transport (what actually sends);
+    ``smtpState`` is SMTP's own verdict, so the admin page can show the selected transport's
+    state (never the other transport's prerequisites)."""
+    return {
         "state": "operational" if config.is_complete() else "incomplete",
         "smtpState": transport_prerequisite_state(config, EMAIL_TRANSPORT_SMTP),
+    }
+
+
+def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
+    return {
+        **_transport_verdicts(config),
         "transport": config.transport,
         "host": config.smtp_host,
         "port": config.smtp_port,
         "starttls": config.smtp_starttls,
         "from": config.smtp_from,
+        "microsoft365": _microsoft365_public_status(config),
     }
-    public["microsoft365"] = _microsoft365_public_status(config)
-    return public
 
 
 def smtp_public_settings(
     settings: SmtpSettings, config: EmailConfig
 ) -> dict[str, Any]:
     preview_config = replace(config, smtp_to=("preview@example.invalid",))
-    public = {
+    return {
         **settings.to_payload(),
         "source": settings.source,
-        # ``state`` is the verdict of the configured transport; ``smtpState`` is SMTP's own
-        # verdict, so the admin page can show the selected transport's state (never the other
-        # transport's prerequisites).
-        "state": "operational" if config.is_complete() else "incomplete",
-        "smtpState": transport_prerequisite_state(config, EMAIL_TRANSPORT_SMTP),
+        **_transport_verdicts(config),
         "previewSendReady": preview_config.is_complete(),
         "passwordConfigured": bool(
             config.smtp_password and not config.smtp_password_error
@@ -1823,9 +1818,8 @@ def smtp_public_settings(
         "passwordStorageState": config.smtp_password_storage_state,
         "canSetPassword": config.smtp_password_write_available,
         "transport": config.transport,
+        "microsoft365": _microsoft365_public_status(config),
     }
-    public["microsoft365"] = _microsoft365_public_status(config)
-    return public
 
 
 # --- Persistent state: sent-history dedup, pending outbox, checkpoint, transition states -----
@@ -5106,9 +5100,7 @@ def send_email_result(
 
     checks: list[str] = []
     stage = "message"
-    security = config.smtp_security or (
-        "starttls" if config.smtp_starttls else "none"
-    )
+    security = config.effective_smtp_security
     try:
         if config.transport == EMAIL_TRANSPORT_MICROSOFT365:
             return _send_microsoft365_email(
