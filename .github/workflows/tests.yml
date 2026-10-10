@@ -59,8 +59,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # Pinned: a new Ruff release can enable new default rules and turn a nightly run red on
+      # unchanged code (0.17.0 added FURB162/UP017). Bump deliberately, fixing findings in the
+      # same change.
       - name: Install ruff
-        run: pip install ruff
+        run: pip install ruff==0.16.10
       - name: Lint scripts
         run: ruff check scripts/
       - name: Lint tests
