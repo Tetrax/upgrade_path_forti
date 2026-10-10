@@ -730,24 +730,20 @@ class SmtpPasswordStorageError(OSError):
 
 
 @dataclass(frozen=True)
-class Microsoft365SecretStorageStatus:
+class SecretStorageStatus:
     state: str
     can_write: bool
     configured: bool
 
 
-def _microsoft365_secret_path(environment: dict[str, str]) -> Path | None:
-    configured = (environment.get(MICROSOFT365_CLIENT_SECRET_ENV) or "").strip()
-    if not configured or "\0" in configured:
-        return None
-    try:
-        return Path(configured).absolute()
-    except (TypeError, ValueError, OSError):
-        return None
+_UNAVAILABLE_SECRET_STORAGE = SecretStorageStatus(
+    MICROSOFT365_SECRET_STORAGE_UNAVAILABLE, False, False
+)
 
 
-def _smtp_password_path(environment: dict[str, str]) -> Path | None:
-    configured = (environment.get(SMTP_PASSWORD_ENV) or "").strip()
+def _configured_secret_path(environment: dict[str, str], key: str) -> Path | None:
+    """Return the absolute secret-file path named by ``key``, or None when unset or unusable."""
+    configured = (environment.get(key) or "").strip()
     if not configured or "\0" in configured:
         return None
     try:
@@ -778,7 +774,7 @@ def _secret_parent_open_flags() -> int:
     )
 
 
-def _open_microsoft365_secret_parent(path: Path) -> int:
+def _open_secret_parent(path: Path) -> int:
     """Open the configured parent by descriptor, rejecting symlinked components."""
     if not path.is_absolute() or not path.name or path.name in {".", ".."}:
         raise OSError("invalid Microsoft 365 secret path")
@@ -838,9 +834,9 @@ def _secret_entry_is_writable(parent_fd: int, name: str, *, target_kind: str) ->
 
 
 @contextmanager
-def _microsoft365_secret_lock(path: Path):
+def _secret_lock(path: Path):
     """Serialize secret writers through a pinned, non-symlinked parent descriptor."""
-    parent_fd = _open_microsoft365_secret_parent(path)
+    parent_fd = _open_secret_parent(path)
     lock_fd = -1
     locked = False
     try:
@@ -880,25 +876,21 @@ def _microsoft365_secret_lock(path: Path):
         os.close(parent_fd)
 
 
-def _inspect_microsoft365_secret_storage(
+def _inspect_secret_storage(
     path: Path | None,
-) -> Microsoft365SecretStorageStatus:
+) -> SecretStorageStatus:
     if path is None:
-        return Microsoft365SecretStorageStatus(
-            MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-            False,
-            False,
-        )
+        return _UNAVAILABLE_SECRET_STORAGE
     parent_fd = -1
     try:
-        parent_fd = _open_microsoft365_secret_parent(path)
+        parent_fd = _open_secret_parent(path)
         target_kind = _secret_entry_kind_at(parent_fd, path.name)
         lock_kind = _secret_entry_kind_at(parent_fd, f"{path.name}.lock")
         if target_kind not in {"missing", "regular"} or lock_kind not in {
             "missing",
             "regular",
         }:
-            return Microsoft365SecretStorageStatus(
+            return SecretStorageStatus(
                 MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
                 False,
                 target_kind == "regular",
@@ -909,7 +901,7 @@ def _inspect_microsoft365_secret_storage(
             dir_fd=parent_fd,
             follow_symlinks=False,
         ):
-            return Microsoft365SecretStorageStatus(
+            return SecretStorageStatus(
                 MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
                 False,
                 target_kind == "regular",
@@ -919,7 +911,7 @@ def _inspect_microsoft365_secret_storage(
             path.name,
             target_kind=target_kind,
         )
-        return Microsoft365SecretStorageStatus(
+        return SecretStorageStatus(
             MICROSOFT365_SECRET_STORAGE_AVAILABLE
             if can_write
             else MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
@@ -927,11 +919,7 @@ def _inspect_microsoft365_secret_storage(
             target_kind == "regular",
         )
     except (OSError, ValueError):
-        return Microsoft365SecretStorageStatus(
-            MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-            False,
-            False,
-        )
+        return _UNAVAILABLE_SECRET_STORAGE
     finally:
         if parent_fd != -1:
             os.close(parent_fd)
@@ -943,23 +931,34 @@ def _microsoft365_storage_error() -> Microsoft365SecretStorageError:
     )
 
 
-def _validate_microsoft365_client_secret(value: object) -> bytes:
+def _validate_secret_bytes(
+    value: object, *, max_bytes: int, error: type[ValueError], message: str
+) -> bytes:
+    """Encode a submitted secret, rejecting empty, oversized, or blank/control-only values.
+
+    ``message`` is a fixed operator text: the secret itself never appears in an error.
+    """
     if not isinstance(value, str) or not value:
-        raise Microsoft365SecretValidationError("Secret client Microsoft 365 invalide.")
+        raise error(message)
     try:
         encoded = value.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise Microsoft365SecretValidationError(
-            "Secret client Microsoft 365 invalide."
-        ) from error
-    if not encoded or len(encoded) > MAX_MICROSOFT365_CLIENT_SECRET_BYTES:
-        raise Microsoft365SecretValidationError("Secret client Microsoft 365 invalide.")
-    if all(
+    except UnicodeEncodeError as exc:
+        raise error(message) from exc
+    if len(encoded) > max_bytes or all(
         character.isspace() or unicodedata.category(character).startswith("C")
         for character in value
     ):
-        raise Microsoft365SecretValidationError("Secret client Microsoft 365 invalide.")
+        raise error(message)
     return encoded
+
+
+def _validate_microsoft365_client_secret(value: object) -> bytes:
+    return _validate_secret_bytes(
+        value,
+        max_bytes=MAX_MICROSOFT365_CLIENT_SECRET_BYTES,
+        error=Microsoft365SecretValidationError,
+        message="Secret client Microsoft 365 invalide.",
+    )
 
 
 def _write_private_secret_bytes(
@@ -968,12 +967,12 @@ def _write_private_secret_bytes(
     unavailable_error: Any,
 ) -> str:
     """Atomically replace one file-backed secret through the existing descriptor-bound writer."""
-    status = _inspect_microsoft365_secret_storage(path)
+    status = _inspect_secret_storage(path)
     if path is None or not status.can_write:
         raise unavailable_error()
 
     try:
-        with _microsoft365_secret_lock(path) as parent_fd:
+        with _secret_lock(path) as parent_fd:
             target_kind = _secret_entry_kind_at(parent_fd, path.name)
             if target_kind not in {"missing", "regular"}:
                 raise unavailable_error()
@@ -1043,7 +1042,7 @@ def save_microsoft365_client_secret(
     """Atomically replace the environment-selected Graph secret without accepting a path."""
     encoded = _validate_microsoft365_client_secret(value)
     environment = dict(os.environ) if env is None else env
-    path = _microsoft365_secret_path(environment)
+    path = _configured_secret_path(environment, MICROSOFT365_CLIENT_SECRET_ENV)
     return _write_private_secret_bytes(path, encoded, _microsoft365_storage_error)
 
 
@@ -1052,32 +1051,26 @@ def _smtp_password_storage_error() -> SmtpPasswordStorageError:
 
 
 def _validate_smtp_password(value: object) -> bytes:
-    if not isinstance(value, str) or not value:
-        raise SmtpPasswordValidationError("Mot de passe SMTP invalide.")
-    try:
-        encoded = value.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise SmtpPasswordValidationError("Mot de passe SMTP invalide.") from error
-    if len(encoded) > MAX_SMTP_PASSWORD_BYTES or all(
-        character.isspace() or unicodedata.category(character).startswith("C")
-        for character in value
-    ):
-        raise SmtpPasswordValidationError("Mot de passe SMTP invalide.")
-    return encoded
+    return _validate_secret_bytes(
+        value,
+        max_bytes=MAX_SMTP_PASSWORD_BYTES,
+        error=SmtpPasswordValidationError,
+        message="Mot de passe SMTP invalide.",
+    )
 
 
 def _smtp_password_storage_status(
     environment: dict[str, str],
-) -> Microsoft365SecretStorageStatus:
-    path = _smtp_password_path(environment)
-    status = _inspect_microsoft365_secret_storage(path)
+) -> SecretStorageStatus:
+    path = _configured_secret_path(environment, SMTP_PASSWORD_ENV)
+    status = _inspect_secret_storage(path)
     if not _smtp_password_write_allowed(path):
-        return Microsoft365SecretStorageStatus(
+        return SecretStorageStatus(
             SMTP_PASSWORD_STORAGE_UNAVAILABLE,
             False,
             status.configured,
         )
-    return Microsoft365SecretStorageStatus(
+    return SecretStorageStatus(
         SMTP_PASSWORD_STORAGE_AVAILABLE
         if status.can_write
         else SMTP_PASSWORD_STORAGE_UNAVAILABLE,
@@ -1098,7 +1091,7 @@ def save_smtp_password(
     if isinstance(value, str) and value == "":
         return _smtp_password_storage_status(environment).state
     encoded = _validate_smtp_password(value)
-    path = _smtp_password_path(environment)
+    path = _configured_secret_path(environment, SMTP_PASSWORD_ENV)
     if not _smtp_password_write_allowed(path):
         raise _smtp_password_storage_error()
     return _write_private_secret_bytes(path, encoded, _smtp_password_storage_error)
@@ -1106,9 +1099,9 @@ def save_smtp_password(
 
 def _load_microsoft365_client_secret(
     environment: dict[str, str],
-) -> tuple[str, str, str, Microsoft365SecretStorageStatus]:
-    path = _microsoft365_secret_path(environment)
-    status = _inspect_microsoft365_secret_storage(path)
+) -> tuple[str, str, str, SecretStorageStatus]:
+    path = _configured_secret_path(environment, MICROSOFT365_CLIENT_SECRET_ENV)
+    status = _inspect_secret_storage(path)
     if path is None:
         return "", "", "Secret Microsoft 365 non configuré.", status
 
@@ -1118,17 +1111,12 @@ def _load_microsoft365_client_secret(
         # Resolve every parent component with O_NOFOLLOW, then keep that directory descriptor
         # pinned while opening the target. O_NONBLOCK prevents a target swapped to a FIFO between
         # the lstat and open from hanging the collector.
-        parent_fd = _open_microsoft365_secret_parent(path)
+        parent_fd = _open_secret_parent(path)
         target_kind = _secret_entry_kind_at(parent_fd, path.name)
         if target_kind == "missing":
             return "", str(path), "Secret Microsoft 365 non configuré.", status
         if target_kind != "regular":
-            unavailable = Microsoft365SecretStorageStatus(
-                MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-                False,
-                False,
-            )
-            return "", str(path), "Secret Microsoft 365 non configuré.", unavailable
+            return "", str(path), "Secret Microsoft 365 non configuré.", _UNAVAILABLE_SECRET_STORAGE
         descriptor = os.open(
             path.name,
             os.O_RDONLY
@@ -1139,12 +1127,7 @@ def _load_microsoft365_client_secret(
         )
         target_stat = os.fstat(descriptor)
         if not stat.S_ISREG(target_stat.st_mode):
-            unavailable = Microsoft365SecretStorageStatus(
-                MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-                False,
-                False,
-            )
-            return "", str(path), "Secret Microsoft 365 non configuré.", unavailable
+            return "", str(path), "Secret Microsoft 365 non configuré.", _UNAVAILABLE_SECRET_STORAGE
         with os.fdopen(descriptor, "rb") as handle:
             descriptor = -1
             raw = handle.read(MAX_MICROSOFT365_CLIENT_SECRET_BYTES + 1)
@@ -1152,12 +1135,7 @@ def _load_microsoft365_client_secret(
             return "", str(path), "Secret Microsoft 365 illisible.", status
         value = raw.decode("utf-8").rstrip("\r\n")
     except (OSError, UnicodeError, ValueError):
-        unavailable = Microsoft365SecretStorageStatus(
-            MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-            False,
-            False,
-        )
-        return "", str(path), "Secret Microsoft 365 illisible.", unavailable
+        return "", str(path), "Secret Microsoft 365 illisible.", _UNAVAILABLE_SECRET_STORAGE
     finally:
         if descriptor != -1:
             try:
