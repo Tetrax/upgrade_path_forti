@@ -635,8 +635,9 @@ class SmtpSettings:
 class EmailTransportSettings:
     """Non-secret transport selection and Microsoft 365 identity settings.
 
-    The client secret is deliberately absent. It is always read from the read-only deployment
-    secret file named by ``FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE``.
+    The client secret is deliberately absent. It is only ever read from the private secret file
+    named by ``FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE`` (written by the admin GUI when that
+    storage is writable; see save_microsoft365_client_secret()).
     """
 
     transport: str = EMAIL_TRANSPORT_SMTP
@@ -776,7 +777,7 @@ def _secret_parent_open_flags() -> int:
 def _open_secret_parent(path: Path) -> int:
     """Open the configured parent by descriptor, rejecting symlinked components."""
     if not path.is_absolute() or not path.name or path.name in {".", ".."}:
-        raise OSError("invalid Microsoft 365 secret path")
+        raise OSError("invalid secret path")
     parent_fd = os.open(os.sep, _secret_parent_open_flags())
     try:
         for component in path.parent.parts[1:]:
@@ -1417,8 +1418,9 @@ def _saved_email_appearance(path: Path) -> EmailAppearance:
     """Read only the non-secret appearance sidecar.
 
     Older releases stored transport fields and a web-managed password beside the appearance.
-    Those fields are deliberately ignored: the deployment environment is the sole SMTP transport
-    authority. A malformed or absent appearance falls back to the safe default without copying
+    Those fields are deliberately ignored: SMTP transport settings now live in their own
+    versioned document and the password only in private secret storage, so a legacy file can
+    never reactivate stale values. A malformed or absent appearance falls back to the safe default without copying
     unknown fields into a response or a new file.
     """
     if not path.is_file():
@@ -4691,6 +4693,7 @@ def _graph_http_result(
             "Authentification Microsoft 365 impossible.", "microsoft365_token_error"
         )
     return failure("Requête Microsoft Graph refusée.", "microsoft365_request_rejected")
+
 
 # Everything a Graph token or sendMail call may raise; mapped to a sanitized SmtpResult.
 _GRAPH_ERRORS = (
