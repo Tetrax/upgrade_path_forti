@@ -4246,61 +4246,44 @@ def compose_email(
     if not events:
         return None
 
+    # Identity shared by every SNS composer; the paragraph (introduction) is per category.
+    sns = {
+        "app_url": app_url,
+        "run_timestamp": run_timestamp,
+        "display_name": appearance.display_name if appearance is not None else "FortiUpgrade",
+        "signature": appearance.signature if appearance is not None else "",
+    }
+
     container = [event for event in events if _is_container_security_event(event)]
     security = [event for event in events if event.details.get("kind") == "cve"]
     if container and not security:
         non_container = [
             event for event in events if not _is_container_security_event(event)
         ]
-        display_name = (
-            appearance.display_name if appearance is not None else "FortiUpgrade"
-        )
         return fortios_email_render.compose_container_security_email(
-            container,
-            app_url=app_url,
-            run_timestamp=run_timestamp,
-            other_events=non_container or None,
-            display_name=display_name,
-            introduction="",
-            signature=appearance.signature if appearance is not None else "",
+            container, other_events=non_container or None, introduction="", **sns
         )
 
     if security:
         non_security = [event for event in events if event.details.get("kind") != "cve"]
-        display_name = (
-            appearance.display_name if appearance is not None else "FortiUpgrade"
-        )
-        introduction = appearance.introduction if appearance is not None else ""
-        signature = appearance.signature if appearance is not None else ""
         return fortios_email_render.compose_email(
             security,
-            app_url=app_url,
-            run_timestamp=run_timestamp,
             other_events=non_security or None,
-            display_name=display_name,
-            introduction=introduction,
-            signature=signature,
+            introduction=appearance.introduction if appearance is not None else "",
+            **sns,
         )
 
     release = [event for event in events if _is_release_event(event)]
     if release:
         non_release = [event for event in events if not _is_release_event(event)]
-        display_name = (
-            appearance.display_name if appearance is not None else "FortiUpgrade"
-        )
         # The release category has its own paragraph: the historical `introduction` is written for
         # vulnerability alerts, so a release email uses the release one, and falls back to the
         # renderer's automatic plural-aware sentence when it is empty.
-        introduction = appearance.release_introduction if appearance is not None else ""
-        signature = appearance.signature if appearance is not None else ""
         return fortios_email_render.compose_release_email(
             release,
-            app_url=app_url,
-            run_timestamp=run_timestamp,
             other_events=non_release or None,
-            display_name=display_name,
-            introduction=introduction,
-            signature=signature,
+            introduction=appearance.release_introduction if appearance is not None else "",
+            **sns,
         )
 
     system = [event for event in events if _is_system_event(event)]
@@ -4311,17 +4294,8 @@ def compose_email(
         # notification_batches), so `non_system` is normally empty; it stays here for the same
         # structural reason as the other composers.
         non_system = [event for event in events if not _is_system_event(event)]
-        display_name = (
-            appearance.display_name if appearance is not None else "FortiUpgrade"
-        )
         return fortios_email_render.compose_system_email(
-            system,
-            app_url=app_url,
-            run_timestamp=run_timestamp,
-            other_events=non_system or None,
-            display_name=display_name,
-            introduction="",
-            signature=appearance.signature if appearance is not None else "",
+            system, other_events=non_system or None, introduction="", **sns
         )
 
     critical = [event for event in events if event.category == CATEGORY_CRITICAL]
