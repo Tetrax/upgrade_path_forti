@@ -655,8 +655,10 @@ journalctl -u fortios-catalog-refresh.service -n 50
 
 ## Déploiement Docker / Portainer
 
-**Procédure de livraison actuelle : [docs/delivery.md](docs/delivery.md)** — Git Stack,
-image SHA/digest, secrets read-only, compatibilité des données et récupération admin.
+**Procédure de livraison actuelle : [docs/delivery.md](docs/delivery.md)** — Git Stack
+Portainer (VPS et entreprise), image `:latest` mise à jour par « Pull and redeploy » avec
+re-pull, rollback par `FORTIOS_IMAGE=<SHA précédent>`, secrets read-only, compatibilité des
+données et récupération admin.
 
 La stack Docker remplace le serveur systemd et ses deux timers par deux
 conteneurs :

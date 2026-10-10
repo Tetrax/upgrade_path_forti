@@ -1,4 +1,6 @@
-# Portainer Git Stack with stable host paths; pin FORTIOS_IMAGE to a SHA/digest.
+# Portainer Git Stack with stable host paths. FORTIOS_IMAGE is optional: unset, both services run
+# :latest (update = "Pull and redeploy" with re-pull). Set it to the previous
+# ghcr.io/tetrax/upgrade_path_forti:<SHA> only to roll back, then remove it again.
 # Uses a project network instead of site-specific static addresses.
 services:
   web:

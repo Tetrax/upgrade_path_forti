@@ -28,7 +28,7 @@ La copie de travail canonical est :
 /home/tetrax/workspace/Fortiupgrade
 ```
 
-Elle héberge à la fois les sources suivies par Git et le runtime vivant placé dans `runtime/` (fichier Compose, `data/`, `docs/` runtime, archives de rollback), lui-même ignoré par Git. Les branches servent au travail en cours ; un worktree temporaire doit être supprimé dès que sa branche est mergée. Aucune seconde copie FortiUpgrade, aucun worktree permanent et aucun dossier de déploiement parallèle ne doivent subsister.
+Elle héberge à la fois les sources suivies par Git et le runtime vivant placé dans `runtime/` (`data/`, `docs/` runtime, archives de rollback et ancien fichier Compose CLI conservé pour rollback), lui-même ignoré par Git. Le déploiement du VPS est la Git Stack Portainer `fortiupgrade` sur `docker-compose.portainer.yml` (voir `docs/delivery.md`). Les branches servent au travail en cours ; un worktree temporaire doit être supprimé dès que sa branche est mergée. Aucune seconde copie FortiUpgrade, aucun worktree permanent et aucun dossier de déploiement parallèle ne doivent subsister.
 
 L’absence d’une fonctionnalité dans la copie de travail courante ne signifie pas qu’elle est absente de FortiUpgrade. Avant de créer une fonctionnalité ou une architecture, vérifier les branches actives (`git branch -r`) afin d’identifier une implémentation existante ou un travail concurrent.
 
