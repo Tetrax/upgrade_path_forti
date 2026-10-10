@@ -1,12 +1,14 @@
-"""Email notifications for FortiOS Upgrade Intelligence — stdlib only (smtplib,
-email.message.EmailMessage), disabled by default, with functional settings persisted in data/ and
-SMTP infrastructure supplied by environment variables plus a mounted password file.
+"""Email notifications for FortiOS Upgrade Intelligence — stdlib only, disabled by default. Two
+transports share one engine: SMTP (smtplib) and Microsoft 365 (Microsoft Graph sendMail).
+Functional settings are persisted in data/; non-secret SMTP/transport settings are bootstrapped
+from the environment and then owned by the admin GUI; secrets come only from private files.
 
 Design in one paragraph: main() derives a list of NotificationEvents by diffing the durable
 pre-collection checkpoint against the collected state (never by re-scanning the whole catalog, which is what keeps a first-time
 activation or a --cve-backfill from spamming years of history). Events are deduplicated against
-a small persistent history file keyed by a stable string, then whatever's left gets folded into
-a single synthetic email per run (never one email per event) and sent over SMTP. Any failure
+a small persistent history file keyed by a stable string, queued in a durable outbox, then folded
+into at most one synthetic email per category and effective recipient list per run (never one
+email per event) and sent through the configured transport. Any failure
 anywhere in this module — bad config, network, auth, whatever — is caught and logged without a
 traceback or a leaked password, and never propagates to the caller: a broken mailbox must never
 break the actual data collection.
@@ -102,7 +104,6 @@ DEFAULT_EMAIL_TRANSPORT_SETTINGS_PATH = Path("data/email-transport-settings.json
 SMTP_SETTINGS_SCHEMA_VERSION = 1
 SMTP_PASSWORD_FILENAME = "smtp-password"  # historical data-sidecar name; not a runtime source
 SMTP_PASSWORD_ENV = "FORTIOS_SMTP_PASSWORD_FILE"
-SMTP_PASSWORD_CANONICAL_PATH = Path("/opt/fortios/smtp-secrets/password")
 SMTP_PASSWORD_STORAGE_AVAILABLE = "available"
 SMTP_PASSWORD_STORAGE_UNAVAILABLE = "storage-unavailable"
 MAX_SMTP_PASSWORD_BYTES = 4096
@@ -517,11 +518,7 @@ class EmailConfig:
 
     def is_complete(self) -> bool:
         if self.transport == EMAIL_TRANSPORT_MICROSOFT365:
-            display_name = self.graph_display_name or (
-                self.email_appearance.display_name
-                if self.email_appearance is not None
-                else "FortiUpgrade"
-            )
+            display_name = self.display_name
             return bool(
                 _MICROSOFT365_TENANT_RE.fullmatch(self.graph_tenant_id)
                 and _MICROSOFT365_CLIENT_RE.fullmatch(self.graph_client_id)
@@ -554,9 +551,7 @@ class EmailConfig:
             return False
         if not all(_EMAIL_ADDRESS_RE.match(addr.strip()) for addr in self.smtp_to):
             return False
-        security = self.smtp_security or (
-            "starttls" if self.smtp_starttls else "none"
-        )
+        security = self.effective_smtp_security
         if security not in {"starttls", "tls", "none"}:
             return False
         if security == "none" and not self.smtp_allow_insecure:
@@ -564,6 +559,11 @@ class EmailConfig:
         return not (
             self.smtp_username and (not self.smtp_password or self.smtp_password_error)
         )
+
+    @property
+    def effective_smtp_security(self) -> str:
+        """Explicit ``smtp_security``, else the historical STARTTLS boolean."""
+        return self.smtp_security or ("starttls" if self.smtp_starttls else "none")
 
     @property
     def sender(self) -> str:
@@ -635,8 +635,9 @@ class SmtpSettings:
 class EmailTransportSettings:
     """Non-secret transport selection and Microsoft 365 identity settings.
 
-    The client secret is deliberately absent. It is always read from the read-only deployment
-    secret file named by ``FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE``.
+    The client secret is deliberately absent. It is only ever read from the private secret file
+    named by ``FORTIOS_MICROSOFT365_CLIENT_SECRET_FILE`` (written by the admin GUI when that
+    storage is writable; see save_microsoft365_client_secret()).
     """
 
     transport: str = EMAIL_TRANSPORT_SMTP
@@ -712,24 +713,6 @@ def _first_environment_value(environment: dict[str, str], *keys: str) -> str:
     return ""
 
 
-def _env_secret_from_keys(
-    environment: dict[str, str], keys: tuple[str, ...], *, label: str
-) -> tuple[str, str, str]:
-    """Read the first configured secret-file alias without ever accepting plaintext secrets."""
-    for key in keys:
-        secret_file = (environment.get(key) or "").strip()
-        if not secret_file:
-            continue
-        try:
-            value = Path(secret_file).read_text(encoding="utf-8").rstrip("\r\n")
-        except (OSError, UnicodeError) as error:
-            return "", secret_file, sanitize_health_error(error) or f"Secret {label} illisible."
-        if not value:
-            return "", secret_file, f"Le fichier secret {label} est vide."
-        return value, secret_file, ""
-    return "", "", ""
-
-
 class Microsoft365SecretValidationError(ValueError):
     """A submitted client secret is empty, malformed, or outside the byte limit."""
 
@@ -747,24 +730,20 @@ class SmtpPasswordStorageError(OSError):
 
 
 @dataclass(frozen=True)
-class Microsoft365SecretStorageStatus:
+class SecretStorageStatus:
     state: str
     can_write: bool
     configured: bool
 
 
-def _microsoft365_secret_path(environment: dict[str, str]) -> Path | None:
-    configured = (environment.get(MICROSOFT365_CLIENT_SECRET_ENV) or "").strip()
-    if not configured or "\0" in configured:
-        return None
-    try:
-        return Path(configured).absolute()
-    except (TypeError, ValueError, OSError):
-        return None
+_UNAVAILABLE_SECRET_STORAGE = SecretStorageStatus(
+    MICROSOFT365_SECRET_STORAGE_UNAVAILABLE, False, False
+)
 
 
-def _smtp_password_path(environment: dict[str, str]) -> Path | None:
-    configured = (environment.get(SMTP_PASSWORD_ENV) or "").strip()
+def _configured_secret_path(environment: dict[str, str], key: str) -> Path | None:
+    """Return the absolute secret-file path named by ``key``, or None when unset or unusable."""
+    configured = (environment.get(key) or "").strip()
     if not configured or "\0" in configured:
         return None
     try:
@@ -795,10 +774,10 @@ def _secret_parent_open_flags() -> int:
     )
 
 
-def _open_microsoft365_secret_parent(path: Path) -> int:
+def _open_secret_parent(path: Path) -> int:
     """Open the configured parent by descriptor, rejecting symlinked components."""
     if not path.is_absolute() or not path.name or path.name in {".", ".."}:
-        raise OSError("invalid Microsoft 365 secret path")
+        raise OSError("invalid secret path")
     parent_fd = os.open(os.sep, _secret_parent_open_flags())
     try:
         for component in path.parent.parts[1:]:
@@ -815,16 +794,6 @@ def _open_microsoft365_secret_parent(path: Path) -> int:
         raise
 
 
-def _secret_parent_is_safe(path: Path) -> bool:
-    """Require every parent entry to be a real directory, never a symlink."""
-    try:
-        parent_fd = _open_microsoft365_secret_parent(path)
-    except (OSError, ValueError):
-        return False
-    os.close(parent_fd)
-    return True
-
-
 def _secret_entry_kind_at(parent_fd: int, name: str) -> str:
     try:
         entry_stat = os.lstat(name, dir_fd=parent_fd)
@@ -837,33 +806,6 @@ def _secret_entry_kind_at(parent_fd: int, name: str) -> str:
     if not stat.S_ISREG(entry_stat.st_mode):
         return "nonregular"
     return "regular"
-
-
-def _secret_target_kind(path: Path) -> str:
-    parent_fd = -1
-    try:
-        parent_fd = _open_microsoft365_secret_parent(path)
-        return _secret_entry_kind_at(parent_fd, path.name)
-    except (OSError, ValueError):
-        return "unavailable"
-    finally:
-        if parent_fd != -1:
-            os.close(parent_fd)
-
-
-def _secret_lock_is_safe(path: Path) -> bool:
-    parent_fd = -1
-    try:
-        parent_fd = _open_microsoft365_secret_parent(path)
-        return _secret_entry_kind_at(parent_fd, f"{path.name}.lock") in {
-            "missing",
-            "regular",
-        }
-    except (OSError, ValueError):
-        return False
-    finally:
-        if parent_fd != -1:
-            os.close(parent_fd)
 
 
 def _secret_parent_is_writable(parent_fd: int) -> bool:
@@ -891,26 +833,10 @@ def _secret_entry_is_writable(parent_fd: int, name: str, *, target_kind: str) ->
     )
 
 
-def _secret_path_is_writable(path: Path, *, target_kind: str) -> bool:
-    parent_fd = -1
-    try:
-        parent_fd = _open_microsoft365_secret_parent(path)
-        return _secret_entry_is_writable(
-            parent_fd,
-            path.name,
-            target_kind=target_kind,
-        )
-    except (OSError, ValueError):
-        return False
-    finally:
-        if parent_fd != -1:
-            os.close(parent_fd)
-
-
 @contextmanager
-def _microsoft365_secret_lock(path: Path):
+def _secret_lock(path: Path):
     """Serialize secret writers through a pinned, non-symlinked parent descriptor."""
-    parent_fd = _open_microsoft365_secret_parent(path)
+    parent_fd = _open_secret_parent(path)
     lock_fd = -1
     locked = False
     try:
@@ -950,25 +876,21 @@ def _microsoft365_secret_lock(path: Path):
         os.close(parent_fd)
 
 
-def _inspect_microsoft365_secret_storage(
+def _inspect_secret_storage(
     path: Path | None,
-) -> Microsoft365SecretStorageStatus:
+) -> SecretStorageStatus:
     if path is None:
-        return Microsoft365SecretStorageStatus(
-            MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-            False,
-            False,
-        )
+        return _UNAVAILABLE_SECRET_STORAGE
     parent_fd = -1
     try:
-        parent_fd = _open_microsoft365_secret_parent(path)
+        parent_fd = _open_secret_parent(path)
         target_kind = _secret_entry_kind_at(parent_fd, path.name)
         lock_kind = _secret_entry_kind_at(parent_fd, f"{path.name}.lock")
         if target_kind not in {"missing", "regular"} or lock_kind not in {
             "missing",
             "regular",
         }:
-            return Microsoft365SecretStorageStatus(
+            return SecretStorageStatus(
                 MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
                 False,
                 target_kind == "regular",
@@ -979,7 +901,7 @@ def _inspect_microsoft365_secret_storage(
             dir_fd=parent_fd,
             follow_symlinks=False,
         ):
-            return Microsoft365SecretStorageStatus(
+            return SecretStorageStatus(
                 MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
                 False,
                 target_kind == "regular",
@@ -989,7 +911,7 @@ def _inspect_microsoft365_secret_storage(
             path.name,
             target_kind=target_kind,
         )
-        return Microsoft365SecretStorageStatus(
+        return SecretStorageStatus(
             MICROSOFT365_SECRET_STORAGE_AVAILABLE
             if can_write
             else MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
@@ -997,11 +919,7 @@ def _inspect_microsoft365_secret_storage(
             target_kind == "regular",
         )
     except (OSError, ValueError):
-        return Microsoft365SecretStorageStatus(
-            MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-            False,
-            False,
-        )
+        return _UNAVAILABLE_SECRET_STORAGE
     finally:
         if parent_fd != -1:
             os.close(parent_fd)
@@ -1013,23 +931,34 @@ def _microsoft365_storage_error() -> Microsoft365SecretStorageError:
     )
 
 
-def _validate_microsoft365_client_secret(value: object) -> bytes:
+def _validate_secret_bytes(
+    value: object, *, max_bytes: int, error: type[ValueError], message: str
+) -> bytes:
+    """Encode a submitted secret, rejecting empty, oversized, or blank/control-only values.
+
+    ``message`` is a fixed operator text: the secret itself never appears in an error.
+    """
     if not isinstance(value, str) or not value:
-        raise Microsoft365SecretValidationError("Secret client Microsoft 365 invalide.")
+        raise error(message)
     try:
         encoded = value.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise Microsoft365SecretValidationError(
-            "Secret client Microsoft 365 invalide."
-        ) from error
-    if not encoded or len(encoded) > MAX_MICROSOFT365_CLIENT_SECRET_BYTES:
-        raise Microsoft365SecretValidationError("Secret client Microsoft 365 invalide.")
-    if all(
+    except UnicodeEncodeError as exc:
+        raise error(message) from exc
+    if len(encoded) > max_bytes or all(
         character.isspace() or unicodedata.category(character).startswith("C")
         for character in value
     ):
-        raise Microsoft365SecretValidationError("Secret client Microsoft 365 invalide.")
+        raise error(message)
     return encoded
+
+
+def _validate_microsoft365_client_secret(value: object) -> bytes:
+    return _validate_secret_bytes(
+        value,
+        max_bytes=MAX_MICROSOFT365_CLIENT_SECRET_BYTES,
+        error=Microsoft365SecretValidationError,
+        message="Secret client Microsoft 365 invalide.",
+    )
 
 
 def _write_private_secret_bytes(
@@ -1038,12 +967,12 @@ def _write_private_secret_bytes(
     unavailable_error: Any,
 ) -> str:
     """Atomically replace one file-backed secret through the existing descriptor-bound writer."""
-    status = _inspect_microsoft365_secret_storage(path)
+    status = _inspect_secret_storage(path)
     if path is None or not status.can_write:
         raise unavailable_error()
 
     try:
-        with _microsoft365_secret_lock(path) as parent_fd:
+        with _secret_lock(path) as parent_fd:
             target_kind = _secret_entry_kind_at(parent_fd, path.name)
             if target_kind not in {"missing", "regular"}:
                 raise unavailable_error()
@@ -1113,7 +1042,7 @@ def save_microsoft365_client_secret(
     """Atomically replace the environment-selected Graph secret without accepting a path."""
     encoded = _validate_microsoft365_client_secret(value)
     environment = dict(os.environ) if env is None else env
-    path = _microsoft365_secret_path(environment)
+    path = _configured_secret_path(environment, MICROSOFT365_CLIENT_SECRET_ENV)
     return _write_private_secret_bytes(path, encoded, _microsoft365_storage_error)
 
 
@@ -1122,32 +1051,26 @@ def _smtp_password_storage_error() -> SmtpPasswordStorageError:
 
 
 def _validate_smtp_password(value: object) -> bytes:
-    if not isinstance(value, str) or not value:
-        raise SmtpPasswordValidationError("Mot de passe SMTP invalide.")
-    try:
-        encoded = value.encode("utf-8")
-    except UnicodeEncodeError as error:
-        raise SmtpPasswordValidationError("Mot de passe SMTP invalide.") from error
-    if len(encoded) > MAX_SMTP_PASSWORD_BYTES or all(
-        character.isspace() or unicodedata.category(character).startswith("C")
-        for character in value
-    ):
-        raise SmtpPasswordValidationError("Mot de passe SMTP invalide.")
-    return encoded
+    return _validate_secret_bytes(
+        value,
+        max_bytes=MAX_SMTP_PASSWORD_BYTES,
+        error=SmtpPasswordValidationError,
+        message="Mot de passe SMTP invalide.",
+    )
 
 
 def _smtp_password_storage_status(
     environment: dict[str, str],
-) -> Microsoft365SecretStorageStatus:
-    path = _smtp_password_path(environment)
-    status = _inspect_microsoft365_secret_storage(path)
+) -> SecretStorageStatus:
+    path = _configured_secret_path(environment, SMTP_PASSWORD_ENV)
+    status = _inspect_secret_storage(path)
     if not _smtp_password_write_allowed(path):
-        return Microsoft365SecretStorageStatus(
+        return SecretStorageStatus(
             SMTP_PASSWORD_STORAGE_UNAVAILABLE,
             False,
             status.configured,
         )
-    return Microsoft365SecretStorageStatus(
+    return SecretStorageStatus(
         SMTP_PASSWORD_STORAGE_AVAILABLE
         if status.can_write
         else SMTP_PASSWORD_STORAGE_UNAVAILABLE,
@@ -1168,7 +1091,7 @@ def save_smtp_password(
     if isinstance(value, str) and value == "":
         return _smtp_password_storage_status(environment).state
     encoded = _validate_smtp_password(value)
-    path = _smtp_password_path(environment)
+    path = _configured_secret_path(environment, SMTP_PASSWORD_ENV)
     if not _smtp_password_write_allowed(path):
         raise _smtp_password_storage_error()
     return _write_private_secret_bytes(path, encoded, _smtp_password_storage_error)
@@ -1176,9 +1099,9 @@ def save_smtp_password(
 
 def _load_microsoft365_client_secret(
     environment: dict[str, str],
-) -> tuple[str, str, str, Microsoft365SecretStorageStatus]:
-    path = _microsoft365_secret_path(environment)
-    status = _inspect_microsoft365_secret_storage(path)
+) -> tuple[str, str, str, SecretStorageStatus]:
+    path = _configured_secret_path(environment, MICROSOFT365_CLIENT_SECRET_ENV)
+    status = _inspect_secret_storage(path)
     if path is None:
         return "", "", "Secret Microsoft 365 non configuré.", status
 
@@ -1188,17 +1111,12 @@ def _load_microsoft365_client_secret(
         # Resolve every parent component with O_NOFOLLOW, then keep that directory descriptor
         # pinned while opening the target. O_NONBLOCK prevents a target swapped to a FIFO between
         # the lstat and open from hanging the collector.
-        parent_fd = _open_microsoft365_secret_parent(path)
+        parent_fd = _open_secret_parent(path)
         target_kind = _secret_entry_kind_at(parent_fd, path.name)
         if target_kind == "missing":
             return "", str(path), "Secret Microsoft 365 non configuré.", status
         if target_kind != "regular":
-            unavailable = Microsoft365SecretStorageStatus(
-                MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-                False,
-                False,
-            )
-            return "", str(path), "Secret Microsoft 365 non configuré.", unavailable
+            return "", str(path), "Secret Microsoft 365 non configuré.", _UNAVAILABLE_SECRET_STORAGE
         descriptor = os.open(
             path.name,
             os.O_RDONLY
@@ -1209,12 +1127,7 @@ def _load_microsoft365_client_secret(
         )
         target_stat = os.fstat(descriptor)
         if not stat.S_ISREG(target_stat.st_mode):
-            unavailable = Microsoft365SecretStorageStatus(
-                MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-                False,
-                False,
-            )
-            return "", str(path), "Secret Microsoft 365 non configuré.", unavailable
+            return "", str(path), "Secret Microsoft 365 non configuré.", _UNAVAILABLE_SECRET_STORAGE
         with os.fdopen(descriptor, "rb") as handle:
             descriptor = -1
             raw = handle.read(MAX_MICROSOFT365_CLIENT_SECRET_BYTES + 1)
@@ -1222,12 +1135,7 @@ def _load_microsoft365_client_secret(
             return "", str(path), "Secret Microsoft 365 illisible.", status
         value = raw.decode("utf-8").rstrip("\r\n")
     except (OSError, UnicodeError, ValueError):
-        unavailable = Microsoft365SecretStorageStatus(
-            MICROSOFT365_SECRET_STORAGE_UNAVAILABLE,
-            False,
-            False,
-        )
-        return "", str(path), "Secret Microsoft 365 illisible.", unavailable
+        return "", str(path), "Secret Microsoft 365 illisible.", _UNAVAILABLE_SECRET_STORAGE
     finally:
         if descriptor != -1:
             try:
@@ -1239,10 +1147,6 @@ def _load_microsoft365_client_secret(
     if not value:
         return "", str(path), "Secret Microsoft 365 illisible.", status
     return value, str(path), "", status
-
-
-def _email_transport_from_env(environment: dict[str, str]) -> str:
-    return _first_environment_value(environment, "FORTIOS_EMAIL_TRANSPORT").casefold() or EMAIL_TRANSPORT_SMTP
 
 
 def smtp_password_path(settings_path: Path) -> Path:
@@ -1510,22 +1414,13 @@ def load_email_transport_settings(
         return _load_email_transport_settings_unlocked(path, environment)
 
 
-def save_email_transport_settings(
-    path: Path, payload: Any, *, env: dict[str, str] | None = None
-) -> EmailTransportSettings:
-    settings = validate_email_transport_settings(payload)
-    with cross_process_lock(path):
-        write_json(path, settings.to_payload())
-    environment = dict(os.environ) if env is None else env
-    return _load_email_transport_settings_unlocked(path, environment)
-
-
 def _saved_email_appearance(path: Path) -> EmailAppearance:
     """Read only the non-secret appearance sidecar.
 
     Older releases stored transport fields and a web-managed password beside the appearance.
-    Those fields are deliberately ignored: the deployment environment is the sole SMTP transport
-    authority. A malformed or absent appearance falls back to the safe default without copying
+    Those fields are deliberately ignored: SMTP transport settings now live in their own
+    versioned document and the password only in private secret storage, so a legacy file can
+    never reactivate stale values. A malformed or absent appearance falls back to the safe default without copying
     unknown fields into a response or a new file.
     """
     if not path.is_file():
@@ -1534,13 +1429,7 @@ def _saved_email_appearance(path: Path) -> EmailAppearance:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
         return _default_email_appearance()
-    if not isinstance(payload, dict):
-        return _default_email_appearance()
-    appearance_payload = payload.get("emailAppearance", payload)
-    try:
-        return validate_email_appearance(appearance_payload)
-    except (TypeError, ValueError):
-        return _default_email_appearance()
+    return _appearance_from_payload(payload)
 
 
 def _invalid_smtp_settings(appearance: EmailAppearance | None = None) -> SmtpSettings:
@@ -1627,12 +1516,6 @@ def load_smtp_settings(
     environment = dict(os.environ) if env is None else env
     with cross_process_lock(path):
         return _load_smtp_settings_unlocked(path, environment)
-
-
-def _appearance_payload_from_settings(payload: Any) -> Any:
-    if not isinstance(payload, dict) or set(payload) != {"emailAppearance"}:
-        raise ValueError("Configuration SMTP invalide.")
-    return payload["emailAppearance"]
 
 
 def _existing_saved_smtp_settings_unlocked(path: Path) -> SmtpSettings | None:
@@ -1900,34 +1783,36 @@ def _microsoft365_public_status(config: EmailConfig) -> dict[str, Any]:
     }
 
 
-def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
-    public = {
-        # ``state`` remains the verdict of the *configured* transport (what actually sends);
-        # ``smtpState`` lets the admin page show SMTP's own verdict while SMTP is selected.
+def _transport_verdicts(config: EmailConfig) -> dict[str, str]:
+    """``state`` is the verdict of the *configured* transport (what actually sends);
+    ``smtpState`` is SMTP's own verdict, so the admin page can show the selected transport's
+    state (never the other transport's prerequisites)."""
+    return {
         "state": "operational" if config.is_complete() else "incomplete",
         "smtpState": transport_prerequisite_state(config, EMAIL_TRANSPORT_SMTP),
+    }
+
+
+def smtp_public_status(config: EmailConfig) -> dict[str, Any]:
+    return {
+        **_transport_verdicts(config),
         "transport": config.transport,
         "host": config.smtp_host,
         "port": config.smtp_port,
         "starttls": config.smtp_starttls,
         "from": config.smtp_from,
+        "microsoft365": _microsoft365_public_status(config),
     }
-    public["microsoft365"] = _microsoft365_public_status(config)
-    return public
 
 
 def smtp_public_settings(
     settings: SmtpSettings, config: EmailConfig
 ) -> dict[str, Any]:
     preview_config = replace(config, smtp_to=("preview@example.invalid",))
-    public = {
+    return {
         **settings.to_payload(),
         "source": settings.source,
-        # ``state`` is the verdict of the configured transport; ``smtpState`` is SMTP's own
-        # verdict, so the admin page can show the selected transport's state (never the other
-        # transport's prerequisites).
-        "state": "operational" if config.is_complete() else "incomplete",
-        "smtpState": transport_prerequisite_state(config, EMAIL_TRANSPORT_SMTP),
+        **_transport_verdicts(config),
         "previewSendReady": preview_config.is_complete(),
         "passwordConfigured": bool(
             config.smtp_password and not config.smtp_password_error
@@ -1935,21 +1820,24 @@ def smtp_public_settings(
         "passwordStorageState": config.smtp_password_storage_state,
         "canSetPassword": config.smtp_password_write_available,
         "transport": config.transport,
+        "microsoft365": _microsoft365_public_status(config),
     }
-    public["microsoft365"] = _microsoft365_public_status(config)
-    return public
 
 
-# --- Persistent state: sent-history dedup, pending outbox, EOL bootstrap state ------------
+# --- Persistent state: sent-history dedup, pending outbox, checkpoint, transition states -----
 #
-# All three live in one JSON file (data/fortios-notify-history.json by default) so they share a
+# Everything lives in one JSON file (data/fortios-notify-history.json by default) so it shares a
 # single cross_process_lock()'d read-modify-write cycle:
 #   {"sentKeys": {dedup_key: sentAtIso, ...},
-#    "outbox": [{"category", "dedupKey", "summary", "queuedAt", "claimedBy", "claimedAt"}, ...],
-#    "eolState": {branch: isEolBooleanAsOfLastCheck, ...}}
+#    "outbox": [{"category", "dedupKey", "summary", "queuedAt", "claimedBy", "claimedAt",
+#                optional retry/delivery metadata}, ...],
+#    "eolState": {branch: isEolBooleanAsOfLastCheck, ...},
+#    "checkpoint": {...} | null,
+#    "containerSecurityState": {...},
+#    optional "pendingCveBaseline" (see PENDING_CVE_BASELINE_KEY)}
 #
-# See the "Notifications email" section of README.md for the full outbox lifecycle and the
-# recovery procedure for a corrupted state file.
+# The validators below are the exact schema. See docs/notifications.md for the outbox lifecycle,
+# retries and rollback, and the "Notifications email" section of README.md for operations.
 
 _REQUIRED_OUTBOX_STRING_FIELDS = ("category", "dedupKey", "summary", "queuedAt")
 _REQUIRED_OUTBOX_NULLABLE_STRING_FIELDS = ("claimedBy", "claimedAt")
@@ -3430,9 +3318,9 @@ def derive_eol_events(
     several days without a single collection: whatever `eol_state` said last time this genuinely
     ran is what's compared against, not "yesterday".
 
-    Returns (events, updated_eol_state) -- the caller must persist the updated state (see
-    save_eol_state()) regardless of whether the email actually sends, since the crossing itself
-    was correctly observed either way.
+    Returns (events, updated_eol_state) -- the caller must persist the updated state together with
+    the events (see commit_eol_transition()) regardless of whether the email actually sends, since
+    the crossing itself was correctly observed either way.
     """
     now_date = dt.datetime.fromisoformat(
         (now or utc_now()).replace("Z", "+00:00")
@@ -4360,61 +4248,44 @@ def compose_email(
     if not events:
         return None
 
+    # Identity shared by every SNS composer; the paragraph (introduction) is per category.
+    sns = {
+        "app_url": app_url,
+        "run_timestamp": run_timestamp,
+        "display_name": appearance.display_name if appearance is not None else "FortiUpgrade",
+        "signature": appearance.signature if appearance is not None else "",
+    }
+
     container = [event for event in events if _is_container_security_event(event)]
     security = [event for event in events if event.details.get("kind") == "cve"]
     if container and not security:
         non_container = [
             event for event in events if not _is_container_security_event(event)
         ]
-        display_name = (
-            appearance.display_name if appearance is not None else "FortiUpgrade"
-        )
         return fortios_email_render.compose_container_security_email(
-            container,
-            app_url=app_url,
-            run_timestamp=run_timestamp,
-            other_events=non_container or None,
-            display_name=display_name,
-            introduction="",
-            signature=appearance.signature if appearance is not None else "",
+            container, other_events=non_container or None, introduction="", **sns
         )
 
     if security:
         non_security = [event for event in events if event.details.get("kind") != "cve"]
-        display_name = (
-            appearance.display_name if appearance is not None else "FortiUpgrade"
-        )
-        introduction = appearance.introduction if appearance is not None else ""
-        signature = appearance.signature if appearance is not None else ""
         return fortios_email_render.compose_email(
             security,
-            app_url=app_url,
-            run_timestamp=run_timestamp,
             other_events=non_security or None,
-            display_name=display_name,
-            introduction=introduction,
-            signature=signature,
+            introduction=appearance.introduction if appearance is not None else "",
+            **sns,
         )
 
     release = [event for event in events if _is_release_event(event)]
     if release:
         non_release = [event for event in events if not _is_release_event(event)]
-        display_name = (
-            appearance.display_name if appearance is not None else "FortiUpgrade"
-        )
         # The release category has its own paragraph: the historical `introduction` is written for
         # vulnerability alerts, so a release email uses the release one, and falls back to the
         # renderer's automatic plural-aware sentence when it is empty.
-        introduction = appearance.release_introduction if appearance is not None else ""
-        signature = appearance.signature if appearance is not None else ""
         return fortios_email_render.compose_release_email(
             release,
-            app_url=app_url,
-            run_timestamp=run_timestamp,
             other_events=non_release or None,
-            display_name=display_name,
-            introduction=introduction,
-            signature=signature,
+            introduction=appearance.release_introduction if appearance is not None else "",
+            **sns,
         )
 
     system = [event for event in events if _is_system_event(event)]
@@ -4425,17 +4296,8 @@ def compose_email(
         # notification_batches), so `non_system` is normally empty; it stays here for the same
         # structural reason as the other composers.
         non_system = [event for event in events if not _is_system_event(event)]
-        display_name = (
-            appearance.display_name if appearance is not None else "FortiUpgrade"
-        )
         return fortios_email_render.compose_system_email(
-            system,
-            app_url=app_url,
-            run_timestamp=run_timestamp,
-            other_events=non_system or None,
-            display_name=display_name,
-            introduction="",
-            signature=appearance.signature if appearance is not None else "",
+            system, other_events=non_system or None, introduction="", **sns
         )
 
     critical = [event for event in events if event.category == CATEGORY_CRITICAL]
@@ -4698,23 +4560,6 @@ def compose_recovery_email(
     }
 
 
-def compose_account_recovery_email(
-    purpose: str,
-    token: str,
-    app_url: str,
-    expires_at: str,
-    *,
-    appearance: EmailAppearance | None = None,
-) -> dict[str, str]:
-    return compose_recovery_email(
-        purpose,
-        token,
-        app_url,
-        expires_at,
-        appearance=appearance,
-    )
-
-
 @dataclass(frozen=True)
 class SmtpResult:
     sent: bool
@@ -4796,91 +4641,71 @@ def _retry_after_seconds(headers: Any) -> int | None:
 def _graph_http_result(
     status: int, *, stage: str, headers: Any = None, message_hint: str | None = None
 ) -> SmtpResult:
-    retry_after = _retry_after_seconds(headers)
+    def failure(
+        message: str, error_code: str, *, retryable: bool = False
+    ) -> SmtpResult:
+        # Only throttling and server errors are retryable; they alone carry Retry-After.
+        return SmtpResult(
+            False,
+            message,
+            error_code=error_code,
+            retryable=retryable,
+            retry_after_seconds=_retry_after_seconds(headers) if retryable else None,
+            transport=EMAIL_TRANSPORT_MICROSOFT365,
+            provider_status=status,
+        )
+
     if stage == "token":
         if status in (400, 401):
-            return SmtpResult(
-                False,
+            return failure(
                 message_hint
                 or "Jeton Microsoft 365 refusé : vérifiez le tenant, le client et le secret.",
-                error_code="microsoft365_token_invalid",
-                retryable=False,
-                transport=EMAIL_TRANSPORT_MICROSOFT365,
-                provider_status=status,
+                "microsoft365_token_invalid",
             )
         if status == 403:
-            return SmtpResult(
-                False,
-                "Authentification Microsoft 365 refusée.",
-                error_code="microsoft365_token_forbidden",
-                retryable=False,
-                transport=EMAIL_TRANSPORT_MICROSOFT365,
-                provider_status=status,
+            return failure(
+                "Authentification Microsoft 365 refusée.", "microsoft365_token_forbidden"
             )
     elif status == 401:
-        return SmtpResult(
-            False,
-            "Jeton Microsoft 365 non autorisé.",
-            error_code="microsoft365_unauthorized",
-            retryable=False,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
-        )
+        return failure("Jeton Microsoft 365 non autorisé.", "microsoft365_unauthorized")
     elif status == 403:
-        return SmtpResult(
-            False,
-            "Permission Microsoft 365 refusée pour cette boîte.",
-            error_code="microsoft365_forbidden",
-            retryable=False,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
+        return failure(
+            "Permission Microsoft 365 refusée pour cette boîte.", "microsoft365_forbidden"
         )
     elif status == 404:
-        return SmtpResult(
-            False,
-            "Boîte expéditrice Microsoft 365 introuvable.",
-            error_code="microsoft365_sender_not_found",
-            retryable=False,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
+        return failure(
+            "Boîte expéditrice Microsoft 365 introuvable.", "microsoft365_sender_not_found"
         )
     if status == 429:
-        return SmtpResult(
-            False,
+        return failure(
             "Microsoft Graph limite temporairement les envois.",
-            error_code="microsoft365_throttled",
+            "microsoft365_throttled",
             retryable=True,
-            retry_after_seconds=retry_after,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
         )
     if status >= 500:
-        return SmtpResult(
-            False,
+        return failure(
             "Microsoft Graph est temporairement indisponible.",
-            error_code="microsoft365_server_error",
+            "microsoft365_server_error",
             retryable=True,
-            retry_after_seconds=retry_after,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
         )
     if stage == "token":
-        return SmtpResult(
-            False,
-            "Authentification Microsoft 365 impossible.",
-            error_code="microsoft365_token_error",
-            retryable=False,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
+        return failure(
+            "Authentification Microsoft 365 impossible.", "microsoft365_token_error"
         )
-    return SmtpResult(
-        False,
-        "Requête Microsoft Graph refusée.",
-        error_code="microsoft365_request_rejected",
-        retryable=False,
-        transport=EMAIL_TRANSPORT_MICROSOFT365,
-        provider_status=status,
-    )
+    return failure("Requête Microsoft Graph refusée.", "microsoft365_request_rejected")
+
+
+# Everything a Graph token or sendMail call may raise; mapped to a sanitized SmtpResult.
+_GRAPH_ERRORS = (
+    urllib.error.HTTPError,
+    urllib.error.URLError,
+    OSError,
+    TimeoutError,
+    ValueError,
+    UnicodeError,
+    TypeError,
+    AttributeError,
+)
 
 
 def _graph_exception_result(error: BaseException, *, stage: str) -> SmtpResult:
@@ -4902,15 +4727,7 @@ def _graph_exception_result(error: BaseException, *, stage: str) -> SmtpResult:
             retryable=True,
             transport=EMAIL_TRANSPORT_MICROSOFT365,
         )
-    if isinstance(error, urllib.error.URLError):
-        return SmtpResult(
-            False,
-            "Connexion Microsoft Graph impossible.",
-            error_code="microsoft365_connection_error",
-            retryable=True,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-        )
-    if isinstance(error, OSError):
+    if isinstance(error, OSError):  # includes urllib.error.URLError
         return SmtpResult(
             False,
             "Connexion Microsoft Graph impossible.",
@@ -4984,16 +4801,7 @@ def _send_microsoft365_email(
                 )
                 _log_graph_result("token", result)
                 return result
-    except (
-        urllib.error.HTTPError,
-        urllib.error.URLError,
-        OSError,
-        TimeoutError,
-        ValueError,
-        UnicodeError,
-        TypeError,
-        AttributeError,
-    ) as error:
+    except _GRAPH_ERRORS as error:
         result = _graph_exception_result(error, stage="token")
         _log_graph_result("token", result)
         return result
@@ -5053,16 +4861,7 @@ def _send_microsoft365_email(
     try:
         with _graph_urlopen(graph_request, timeout=config.smtp_timeout) as response:
             status = response.getcode()
-    except (
-        urllib.error.HTTPError,
-        urllib.error.URLError,
-        OSError,
-        TimeoutError,
-        ValueError,
-        UnicodeError,
-        TypeError,
-        AttributeError,
-    ) as error:
+    except _GRAPH_ERRORS as error:
         result = _graph_exception_result(error, stage="delivery")
         _log_graph_result("delivery", result)
         return result
@@ -5231,9 +5030,7 @@ def send_email_result(
 
     checks: list[str] = []
     stage = "message"
-    security = config.smtp_security or (
-        "starttls" if config.smtp_starttls else "none"
-    )
+    security = config.effective_smtp_security
     try:
         if config.transport == EMAIL_TRANSPORT_MICROSOFT365:
             return _send_microsoft365_email(
@@ -5446,14 +5243,9 @@ def deliver_email_result(
     dry run keep working unchanged).
     """
     transport = config.transport
-    if isinstance(transport, str) and transport not in {
-        EMAIL_TRANSPORT_SMTP,
-        EMAIL_TRANSPORT_MICROSOFT365,
-    }:
-        return send_email_result(config, subject, text_body, html_body)
-    if transport == EMAIL_TRANSPORT_MICROSOFT365:
-        return send_email_result(config, subject, text_body, html_body)
-    if send_email is _SEND_EMAIL_ORIGINAL:
+    if (
+        isinstance(transport, str) and transport != EMAIL_TRANSPORT_SMTP
+    ) or send_email is _SEND_EMAIL_ORIGINAL:
         return send_email_result(config, subject, text_body, html_body)
     sent = send_email(config, subject, text_body, html_body)
     return SmtpResult(
@@ -5474,6 +5266,16 @@ def _config_for_test_recipient(config: EmailConfig, recipient: str) -> EmailConf
     return replace(config, smtp_to=(normalized_recipient,))
 
 
+def _invalid_test_recipient_result(config: EmailConfig) -> SmtpResult:
+    return SmtpResult(
+        False,
+        "Destinataire de test invalide.",
+        error_code="invalid_test_recipient",
+        retryable=False,
+        transport=config.transport,
+    )
+
+
 def send_email_preview_result(
     config: EmailConfig,
     preview: dict[str, str],
@@ -5482,13 +5284,7 @@ def send_email_preview_result(
 ) -> SmtpResult:
     preview_config = _config_for_test_recipient(config, recipient)
     if preview_config is None:
-        return SmtpResult(
-            False,
-            "Destinataire de test invalide.",
-            error_code="invalid_test_recipient",
-            retryable=False,
-            transport=config.transport,
-        )
+        return _invalid_test_recipient_result(config)
     return send_email_result(
         preview_config,
         preview["subject"],
@@ -5507,13 +5303,7 @@ def send_test_email_result(
     if recipient is not None:
         recipient_config = _config_for_test_recipient(config, recipient)
         if recipient_config is None:
-            return SmtpResult(
-                False,
-                "Destinataire de test invalide.",
-                error_code="invalid_test_recipient",
-                retryable=False,
-                transport=config.transport,
-            )
+            return _invalid_test_recipient_result(config)
         config = recipient_config
     appearance = appearance or _default_email_appearance()
     transport_label = (
