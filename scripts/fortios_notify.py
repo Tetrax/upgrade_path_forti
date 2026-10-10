@@ -4665,91 +4665,70 @@ def _retry_after_seconds(headers: Any) -> int | None:
 def _graph_http_result(
     status: int, *, stage: str, headers: Any = None, message_hint: str | None = None
 ) -> SmtpResult:
-    retry_after = _retry_after_seconds(headers)
+    def failure(
+        message: str, error_code: str, *, retryable: bool = False
+    ) -> SmtpResult:
+        # Only throttling and server errors are retryable; they alone carry Retry-After.
+        return SmtpResult(
+            False,
+            message,
+            error_code=error_code,
+            retryable=retryable,
+            retry_after_seconds=_retry_after_seconds(headers) if retryable else None,
+            transport=EMAIL_TRANSPORT_MICROSOFT365,
+            provider_status=status,
+        )
+
     if stage == "token":
         if status in (400, 401):
-            return SmtpResult(
-                False,
+            return failure(
                 message_hint
                 or "Jeton Microsoft 365 refusé : vérifiez le tenant, le client et le secret.",
-                error_code="microsoft365_token_invalid",
-                retryable=False,
-                transport=EMAIL_TRANSPORT_MICROSOFT365,
-                provider_status=status,
+                "microsoft365_token_invalid",
             )
         if status == 403:
-            return SmtpResult(
-                False,
-                "Authentification Microsoft 365 refusée.",
-                error_code="microsoft365_token_forbidden",
-                retryable=False,
-                transport=EMAIL_TRANSPORT_MICROSOFT365,
-                provider_status=status,
+            return failure(
+                "Authentification Microsoft 365 refusée.", "microsoft365_token_forbidden"
             )
     elif status == 401:
-        return SmtpResult(
-            False,
-            "Jeton Microsoft 365 non autorisé.",
-            error_code="microsoft365_unauthorized",
-            retryable=False,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
-        )
+        return failure("Jeton Microsoft 365 non autorisé.", "microsoft365_unauthorized")
     elif status == 403:
-        return SmtpResult(
-            False,
-            "Permission Microsoft 365 refusée pour cette boîte.",
-            error_code="microsoft365_forbidden",
-            retryable=False,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
+        return failure(
+            "Permission Microsoft 365 refusée pour cette boîte.", "microsoft365_forbidden"
         )
     elif status == 404:
-        return SmtpResult(
-            False,
-            "Boîte expéditrice Microsoft 365 introuvable.",
-            error_code="microsoft365_sender_not_found",
-            retryable=False,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
+        return failure(
+            "Boîte expéditrice Microsoft 365 introuvable.", "microsoft365_sender_not_found"
         )
     if status == 429:
-        return SmtpResult(
-            False,
+        return failure(
             "Microsoft Graph limite temporairement les envois.",
-            error_code="microsoft365_throttled",
+            "microsoft365_throttled",
             retryable=True,
-            retry_after_seconds=retry_after,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
         )
     if status >= 500:
-        return SmtpResult(
-            False,
+        return failure(
             "Microsoft Graph est temporairement indisponible.",
-            error_code="microsoft365_server_error",
+            "microsoft365_server_error",
             retryable=True,
-            retry_after_seconds=retry_after,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
         )
     if stage == "token":
-        return SmtpResult(
-            False,
-            "Authentification Microsoft 365 impossible.",
-            error_code="microsoft365_token_error",
-            retryable=False,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-            provider_status=status,
+        return failure(
+            "Authentification Microsoft 365 impossible.", "microsoft365_token_error"
         )
-    return SmtpResult(
-        False,
-        "Requête Microsoft Graph refusée.",
-        error_code="microsoft365_request_rejected",
-        retryable=False,
-        transport=EMAIL_TRANSPORT_MICROSOFT365,
-        provider_status=status,
-    )
+    return failure("Requête Microsoft Graph refusée.", "microsoft365_request_rejected")
+
+# Everything a Graph token or sendMail call may raise; mapped to a sanitized SmtpResult.
+_GRAPH_ERRORS = (
+    urllib.error.HTTPError,
+    urllib.error.URLError,
+    OSError,
+    TimeoutError,
+    ValueError,
+    UnicodeError,
+    TypeError,
+    AttributeError,
+)
 
 
 def _graph_exception_result(error: BaseException, *, stage: str) -> SmtpResult:
@@ -4771,15 +4750,7 @@ def _graph_exception_result(error: BaseException, *, stage: str) -> SmtpResult:
             retryable=True,
             transport=EMAIL_TRANSPORT_MICROSOFT365,
         )
-    if isinstance(error, urllib.error.URLError):
-        return SmtpResult(
-            False,
-            "Connexion Microsoft Graph impossible.",
-            error_code="microsoft365_connection_error",
-            retryable=True,
-            transport=EMAIL_TRANSPORT_MICROSOFT365,
-        )
-    if isinstance(error, OSError):
+    if isinstance(error, OSError):  # includes urllib.error.URLError
         return SmtpResult(
             False,
             "Connexion Microsoft Graph impossible.",
@@ -4853,16 +4824,7 @@ def _send_microsoft365_email(
                 )
                 _log_graph_result("token", result)
                 return result
-    except (
-        urllib.error.HTTPError,
-        urllib.error.URLError,
-        OSError,
-        TimeoutError,
-        ValueError,
-        UnicodeError,
-        TypeError,
-        AttributeError,
-    ) as error:
+    except _GRAPH_ERRORS as error:
         result = _graph_exception_result(error, stage="token")
         _log_graph_result("token", result)
         return result
@@ -4922,16 +4884,7 @@ def _send_microsoft365_email(
     try:
         with _graph_urlopen(graph_request, timeout=config.smtp_timeout) as response:
             status = response.getcode()
-    except (
-        urllib.error.HTTPError,
-        urllib.error.URLError,
-        OSError,
-        TimeoutError,
-        ValueError,
-        UnicodeError,
-        TypeError,
-        AttributeError,
-    ) as error:
+    except _GRAPH_ERRORS as error:
         result = _graph_exception_result(error, stage="delivery")
         _log_graph_result("delivery", result)
         return result
@@ -5313,14 +5266,9 @@ def deliver_email_result(
     dry run keep working unchanged).
     """
     transport = config.transport
-    if isinstance(transport, str) and transport not in {
-        EMAIL_TRANSPORT_SMTP,
-        EMAIL_TRANSPORT_MICROSOFT365,
-    }:
-        return send_email_result(config, subject, text_body, html_body)
-    if transport == EMAIL_TRANSPORT_MICROSOFT365:
-        return send_email_result(config, subject, text_body, html_body)
-    if send_email is _SEND_EMAIL_ORIGINAL:
+    if (
+        isinstance(transport, str) and transport != EMAIL_TRANSPORT_SMTP
+    ) or send_email is _SEND_EMAIL_ORIGINAL:
         return send_email_result(config, subject, text_body, html_body)
     sent = send_email(config, subject, text_body, html_body)
     return SmtpResult(
@@ -5341,6 +5289,16 @@ def _config_for_test_recipient(config: EmailConfig, recipient: str) -> EmailConf
     return replace(config, smtp_to=(normalized_recipient,))
 
 
+def _invalid_test_recipient_result(config: EmailConfig) -> SmtpResult:
+    return SmtpResult(
+        False,
+        "Destinataire de test invalide.",
+        error_code="invalid_test_recipient",
+        retryable=False,
+        transport=config.transport,
+    )
+
+
 def send_email_preview_result(
     config: EmailConfig,
     preview: dict[str, str],
@@ -5349,13 +5307,7 @@ def send_email_preview_result(
 ) -> SmtpResult:
     preview_config = _config_for_test_recipient(config, recipient)
     if preview_config is None:
-        return SmtpResult(
-            False,
-            "Destinataire de test invalide.",
-            error_code="invalid_test_recipient",
-            retryable=False,
-            transport=config.transport,
-        )
+        return _invalid_test_recipient_result(config)
     return send_email_result(
         preview_config,
         preview["subject"],
@@ -5374,13 +5326,7 @@ def send_test_email_result(
     if recipient is not None:
         recipient_config = _config_for_test_recipient(config, recipient)
         if recipient_config is None:
-            return SmtpResult(
-                False,
-                "Destinataire de test invalide.",
-                error_code="invalid_test_recipient",
-                retryable=False,
-                transport=config.transport,
-            )
+            return _invalid_test_recipient_result(config)
         config = recipient_config
     appearance = appearance or _default_email_appearance()
     transport_label = (
