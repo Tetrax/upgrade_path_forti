@@ -440,7 +440,7 @@ class AdminStateTests(unittest.TestCase):
                 "initial-password",
                 recovery_email="pending@example.test",
             )
-            now = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.timezone.utc)
+            now = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.UTC)
 
             token = cert_admin.issue_verification_token(credentials, now=now)
             state = cert_admin.load_admin_state(credentials)
@@ -472,7 +472,7 @@ class AdminStateTests(unittest.TestCase):
                 "initial-password",
                 recovery_email="pending@example.test",
             )
-            now = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.timezone.utc)
+            now = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.UTC)
             token = cert_admin.issue_verification_token(credentials, now=now)
 
             promoted = cert_admin.consume_verification_token(
@@ -505,7 +505,7 @@ class AdminStateTests(unittest.TestCase):
             state = cert_admin.load_admin_state(credentials)
             state["currentRecoveryEmail"] = "verified@example.test"
             cert_admin.save_admin_state(credentials, state)
-            now = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.timezone.utc)
+            now = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.UTC)
             token = cert_admin.issue_password_reset_token(credentials, now=now)
 
             revision = cert_admin.reset_credentials_with_token(
@@ -646,7 +646,7 @@ class AdminStateTests(unittest.TestCase):
             state = cert_admin.load_admin_state(credentials)
             state["currentRecoveryEmail"] = "verified@example.test"
             cert_admin.save_admin_state(credentials, state)
-            now = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.timezone.utc)
+            now = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.UTC)
             token = cert_admin.issue_password_reset_token(credentials, now=now)
 
             with self.assertRaises(cert_admin.RecoveryTokenError):
@@ -762,7 +762,7 @@ class AdminStateTests(unittest.TestCase):
                 "initial-password",
                 recovery_email="pending@example.test",
             )
-            issued_at = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.timezone.utc)
+            issued_at = dt.datetime(2026, 1, 2, 3, 4, 5, tzinfo=dt.UTC)
             cert_admin.issue_verification_token(credentials, now=issued_at)
             before = cert_admin.load_admin_state(credentials)
             old_revision = cert_admin.credentials_revision(credentials)

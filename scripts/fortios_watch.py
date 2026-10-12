@@ -668,7 +668,7 @@ def parse_health_timestamp(value: str) -> dt.datetime:
     (fortios_notify.py, via this same function) rely on that ValueError to reject a bad value up
     front.
     """
-    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = dt.datetime.fromisoformat(value)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"Horodatage sans fuseau horaire : {value!r}")
     return parsed.astimezone(dt.UTC)
@@ -873,7 +873,7 @@ def upsert_firmware(state: dict[str, Any], item: Firmware) -> bool:
         # Stamped only here, at first sight of this version — lets the frontend show a
         # "new" badge for a couple weeks. Never touched again once the entry exists, so a
         # daily rescan of an already-known version doesn't reset it.
-        "discoveredAt": dt.datetime.now(dt.timezone.utc).date().isoformat(),
+        "discoveredAt": dt.datetime.now(dt.UTC).date().isoformat(),
     }
     if item.links:
         entry["links"] = dict(item.links)

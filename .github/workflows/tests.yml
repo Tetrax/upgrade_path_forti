@@ -63,7 +63,7 @@ jobs:
       # unchanged code (0.17.0 added FURB162/UP017). Bump deliberately, fixing findings in the
       # same change.
       - name: Install ruff
-        run: pip install ruff==0.16.10
+        run: pip install ruff==0.17.0
       - name: Lint scripts
         run: ruff check scripts/
       - name: Lint tests

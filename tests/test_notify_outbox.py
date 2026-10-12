@@ -169,6 +169,22 @@ class OutboxLifecycleTests(unittest.TestCase):
             notify.record_sent_events(path, [event])
             self.assertIn("k1", notify.load_notify_history(path))
 
+    def test_prune_history_drops_expired_and_unreadable_timestamps(self):
+        """A non-string or garbled sentAt is dropped, never raised out of the prune."""
+        history = {
+            "recent": "2026-10-10T07:00:00Z",
+            "offset": "2026-10-11T09:00:00+02:00",
+            "expired": "2020-01-01T00:00:00Z",
+            "number": 5,
+            "null": None,
+            "garbage": "not-a-date",
+        }
+        pruned = notify.prune_notify_history(history, now="2026-10-12T00:00:00Z")
+        self.assertEqual(
+            pruned,
+            {"recent": "2026-10-10T07:00:00Z", "offset": "2026-10-11T09:00:00+02:00"},
+        )
+
 
 class NotifyStateDeepValidationTests(unittest.TestCase):
     """Regression: an outbox entry only needed a "dedupKey" key to pass validation, so

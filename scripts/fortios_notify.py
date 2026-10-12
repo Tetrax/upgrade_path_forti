@@ -2119,13 +2119,13 @@ def load_notify_history(path: Path) -> dict[str, str]:
 def prune_notify_history(
     history: dict[str, str], *, now: str | None = None
 ) -> dict[str, str]:
-    now_dt = dt.datetime.fromisoformat((now or utc_now()).replace("Z", "+00:00"))
+    now_dt = dt.datetime.fromisoformat(now or utc_now())
     cutoff = now_dt - dt.timedelta(days=NOTIFY_HISTORY_RETENTION_DAYS)
     pruned: dict[str, str] = {}
     for key, sent_at in history.items():
         try:
-            sent_dt = dt.datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
+            sent_dt = dt.datetime.fromisoformat(sent_at)
+        except (ValueError, TypeError):
             continue
         if sent_dt >= cutoff:
             pruned[key] = sent_at
@@ -2147,7 +2147,7 @@ def _parse_iso(value: str | None) -> dt.datetime | None:
     if not value:
         return None
     try:
-        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.datetime.fromisoformat(value)
     except ValueError:
         return None
 
@@ -2264,7 +2264,7 @@ def enqueue_and_claim(
     catalog-derived notifications specifically).
     """
     now = now or utc_now()
-    now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+    now_dt = dt.datetime.fromisoformat(now)
     with cross_process_lock(path):
         state = load_notify_state(path)
         _enqueue_new_events(state["outbox"], state["sentKeys"], new_events, now)
@@ -2703,7 +2703,7 @@ def commit_events_with_checkpoint(
     (see _merge_certified_pending_cve_baseline()).
     """
     now = now or utc_now()
-    now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+    now_dt = dt.datetime.fromisoformat(now)
     with cross_process_lock(path):
         state = load_notify_state(path)
         if pending_cve_baseline is not _LEAVE_PENDING_CVE_BASELINE:
@@ -2799,7 +2799,7 @@ def release_claim(
     immediate retry behavior for transient failures when no outcome is supplied.
     """
     now = now or utc_now()
-    now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+    now_dt = dt.datetime.fromisoformat(now)
     event_keys = {event.dedup_key for event in events} if events is not None else None
     with cross_process_lock(path):
         state = load_notify_state(path)
@@ -2874,7 +2874,7 @@ def record_partial_delivery(
     if not events or not refused_recipients:
         return
     now = now or utc_now()
-    now_dt = dt.datetime.fromisoformat(now.replace("Z", "+00:00"))
+    now_dt = dt.datetime.fromisoformat(now)
     event_keys = {event.dedup_key for event in events}
     refused_folded = {address.casefold() for address in refused_recipients}
     permanent_folded = {address.casefold() for address in permanent_refusals}
@@ -3323,7 +3323,7 @@ def derive_eol_events(
     the crossing itself was correctly observed either way.
     """
     now_date = dt.datetime.fromisoformat(
-        (now or utc_now()).replace("Z", "+00:00")
+        now or utc_now()
     ).date()
     updated_state = dict(eol_state)
     events: list[NotificationEvent] = []
