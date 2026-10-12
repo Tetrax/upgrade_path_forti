@@ -705,7 +705,7 @@ def _french_date(value: str) -> str:
     if not value:
         return ""
     try:
-        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.datetime.fromisoformat(value)
     except ValueError:
         return ""
     return f"{parsed.day} {_RELEASE_MONTHS[parsed.month - 1]} {parsed.year}"

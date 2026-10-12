@@ -243,11 +243,11 @@ def admin_state_path(credentials_path: Path, state_file: Path | None = None) -> 
 
 
 def _utc_now() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def _timestamp(value: dt.datetime | None = None) -> str:
-    return (value or _utc_now()).astimezone(dt.timezone.utc).isoformat()
+    return (value or _utc_now()).astimezone(dt.UTC).isoformat()
 
 
 def _validate_timestamp(value: Any, label: str) -> str:
@@ -367,7 +367,7 @@ def _validate_admin_state(payload: Any) -> dict[str, Any]:
 
 def _credentials_mtime_timestamp(path: Path) -> str:
     try:
-        return _timestamp(dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc))
+        return _timestamp(dt.datetime.fromtimestamp(path.stat().st_mtime, dt.UTC))
     except OSError as error:
         raise CredentialError("Compte administrateur indisponible.") from error
 
@@ -471,7 +471,7 @@ def _coerce_now(value: dt.datetime | None) -> dt.datetime:
     current = value or _utc_now()
     if current.tzinfo is None:
         raise CredentialError("Horodatage de récupération invalide.")
-    return current.astimezone(dt.timezone.utc)
+    return current.astimezone(dt.UTC)
 
 
 def _issue_recovery_token(

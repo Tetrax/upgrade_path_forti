@@ -8,7 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -131,7 +131,7 @@ def create_ca_signed_leaf(
             "[test_policy]\n"
             "commonName=supplied\n",
         )
-        starts_at = not_before or datetime.now(timezone.utc) - timedelta(minutes=1)
+        starts_at = not_before or datetime.now(UTC) - timedelta(minutes=1)
         ends_at = not_after or starts_at + timedelta(days=7)
         sign_command = [
             "openssl", "ca", "-batch", "-config", str(config),
@@ -554,7 +554,7 @@ class CertificateInstallTests(unittest.TestCase):
                 root,
                 ca_cert,
                 ca_key,
-                not_before=datetime.now(timezone.utc) + timedelta(days=1),
+                not_before=datetime.now(UTC) + timedelta(days=1),
             )
             result = run(
                 sys.executable, str(CERTCTL), "install", str(cert),
@@ -574,8 +574,8 @@ class CertificateInstallTests(unittest.TestCase):
                 root,
                 ca_cert,
                 ca_key,
-                not_before=datetime.now(timezone.utc) - timedelta(days=2),
-                not_after=datetime.now(timezone.utc) - timedelta(days=1),
+                not_before=datetime.now(UTC) - timedelta(days=2),
+                not_after=datetime.now(UTC) - timedelta(days=1),
             )
             result = run(
                 sys.executable, str(CERTCTL), "install", str(cert),

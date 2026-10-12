@@ -274,7 +274,7 @@ def _scan_timestamp(value: Any) -> str:
     if not isinstance(value, str) or not value:
         raise ContainerReportError("Rapport Trivy refusé : CreatedAt manquant.")
     try:
-        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(value)
     except ValueError as error:
         raise ContainerReportError("Rapport Trivy refusé : CreatedAt illisible.") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:

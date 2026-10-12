@@ -88,7 +88,7 @@ def test_briefing_summarises_every_monitored_product(app_page):
 
 def test_briefing_follows_the_catalog_instead_of_hardcoded_trains(app_page, fortios_server):
     """A version the bar has never seen — from a different train — shows up after a catalog change."""
-    today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+    today = datetime.datetime.now(datetime.UTC).date().isoformat()
 
     def mutate(catalog):
         manager = next(product for product in catalog["products"] if product["id"] == "fortimanager")
