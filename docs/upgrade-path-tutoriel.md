@@ -94,12 +94,14 @@ FORTIOS_DOCS_DIR=/opt/upgrade_path/docs
 FORTIOS_CERTS_DIR=/opt/upgrade_path/certificates
 ```
 
-Les variables SMTP de Stack sont optionnelles pour la collecte, mais restent autoritatives pour
-l'envoi. Le password est fourni exclusivement par `FORTIOS_SMTP_PASSWORD_FILE` dans le répertoire
-`FORTIOS_SECRETS_DIR`, monté en lecture seule à `/run/fortios-secrets` dans les deux services.
-**Administration > Notifications** gère l'apparence, l'activation, les produits et destinataires;
-l'infrastructure est en lecture seule. Avant un upgrade de l'ancienne console, migrer ses paramètres
-vers l'environnement et son secret hors du volume `data/`, en conservant une sauvegarde protégée.
+Les variables SMTP de Stack sont optionnelles : elles ne servent que d'amorçage au premier
+démarrage. Les paramètres SMTP non secrets (serveur, port, compte, sécurité, expéditeur, URL de
+l'application) se règlent dans **Administration > Notifications**, avec l'apparence, l'activation,
+les produits et les destinataires ; une sauvegarde valide y devient autoritative et l'environnement
+est alors ignoré pour ces champs. Le mot de passe se saisit au même endroit, en écriture seule, et
+est stocké dans le volume dédié `FORTIOS_SMTP_PASSWORD_FILE` (web en écriture, scheduler en
+lecture seule), jamais dans `data/` ni dans la Stack. Migration de l'ancienne console et
+rollback : [delivery.md](delivery.md).
 Laisser `FORTIOS_IMAGE` vide pour suivre `:latest` (mise à jour : **Pull and redeploy** avec re-pull de l’image) ; le définir à `ghcr.io/tetrax/upgrade_path_forti:<SHA>` uniquement pour revenir à une version précise.
 
 6. Cliquer **Deploy the stack**.

@@ -269,7 +269,8 @@ public ou qu'un registre authentifié est déclaré.
 - Host helper/proxy: certificates `ro`, private socket mount `ro`,
   `FORTIOS_CERT_HELPER_SOCKET=/run/fortios-cert-helper/helper.sock`; helper and web
   must be from the same release. No privileged helper inside the application.
-- `FORTIOS_RUN_ON_START=0`. One scheduler, no simultaneous legacy systemd timers.
+- `FORTIOS_RUN_ON_START=0`. One scheduler per data directory; the former host systemd
+  timers are retired and must stay disabled.
   Normal slots: 07:00 full, 07:45 recovery, 15:30 PSIRT, Europe/Paris.
 
 Functional notification preferences and recipients stay in
@@ -539,10 +540,9 @@ login on its authorized network before calling the enterprise deployment complet
    over newly acquired data.
 6. The on-demand relaunch adds no persistent-state migration: an older image simply
    ignores `data/fortios-manual-refresh.json`, which only records the last relaunch
-   outcome for the home page and may be kept or deleted. The systemd deployment
-   already allows `data/` and `docs/` writes (`ReadWritePaths`), which is what the
-   in-process full pass needs; the Compose stack mounts both on `web` already. No
-   unit, Compose, mount or lock change is required, so rollback is image-only.
+   outcome for the home page and may be kept or deleted. The Compose stack already
+   mounts `data/` and `docs/` writable on `web`, which is what the in-process full
+   pass needs. No Compose, mount or lock change is required, so rollback is image-only.
 
 On the shared VPS, hold `/home/tetrax/workspace/.locks/valdev-infra.lock` only
 around targeted infrastructure mutation and verification. Do not hold it for builds

@@ -729,7 +729,7 @@ class MainHealthWiringIntegrationTests(unittest.TestCase):
             self.assertIn(fw.SOURCE_FORTIOS_DOCS, health["sources"][fw.SOURCE_DAILY_RUN]["lastError"])
 
     def test_scoped_cve_only_run_does_not_clobber_other_sources_health(self):
-        """The afternoon retry pass (fortios-cve-afternoon-refresh.timer) only ever passes
+        """The 15:30 afternoon retry pass (scheduler `cve` job) only ever passes
         --cve-catalog, never --docs-catalog/--tool-products/--forticlient-catalog, and is NOT a
         --skip-network run. Before this fix, every source the morning's fuller run had already
         recorded as a real, recent success got clobbered to "skipped" (orange) by this narrower

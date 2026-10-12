@@ -163,7 +163,7 @@ class RefreshLock:
 
     It is the exact same flock refresh_lock() takes on data/fortios-scheduled-refresh.lock, kept
     open until release() — so a run started through this handle excludes, and is excluded by, the
-    scheduler container's jobs and the systemd timers, word for word like a scheduled run does.
+    scheduler container's jobs, word for word like a scheduled run does.
     """
 
     def __init__(self, descriptor: Any) -> None:

@@ -2,7 +2,7 @@
 
 The home page's relaunch button must run exactly the scheduled full pass
 (scripts/scheduled_refresh.py's full run) under the same cross-process collection lock the
-scheduler container and the systemd timers use, answer 202/409 instead of waiting for a scan, and
+scheduler container uses, answer 202/409 instead of waiting for a scan, and
 never report success before that pass really returned.
 
 The HTTP tests run the real server from a throwaway copy of the tree (never the checkout's own
@@ -39,7 +39,7 @@ ADMIN_USERNAME = "valentin"
 ADMIN_PASSWORD = "mot-de-passe-solide"
 
 # A child process that takes the *scheduled* collection lock and holds it, exactly like the
-# scheduler container or a systemd timer would while collecting.
+# scheduler container would while collecting.
 LOCK_HOLDER_SCRIPT = """\
 import sys
 import time

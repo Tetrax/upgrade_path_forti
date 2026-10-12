@@ -4,9 +4,8 @@ Description=FortiOS Upgrade Intelligence — fetch the daily Trivy report from C
 # scan must already be on disk when it starts. The workflow scans main at 04:17 UTC (06:17 Paris)
 # and takes a few minutes.
 #
-# Installed separately from deploy/install.sh on purpose: the live delivery is the Docker stack
-# (web + scheduler containers, see docs/delivery.md) and this unit is a HOST-side auxiliary of it,
-# not part of the retired systemd delivery that install.sh provisions.
+# The live delivery is the Docker stack (web + scheduler containers, see docs/delivery.md); this
+# unit is a HOST-side auxiliary of it, installed by hand.
 #
 # Install (as root):
 #   install -m 644 deploy/fortios-trivy-report-sync.service /etc/systemd/system/
