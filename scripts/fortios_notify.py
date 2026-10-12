@@ -1287,7 +1287,7 @@ def _smtp_settings_from_env(env: dict[str, str]) -> SmtpSettings:
         username=(env.get("FORTIOS_SMTP_USERNAME") or "").strip(),
         sender=(env.get("FORTIOS_SMTP_FROM") or "").strip(),
         app_url=(
-            env.get("FORTIOS_APP_URL") or "https://valdev.me:3001/"
+            env.get("FORTIOS_APP_URL") or "https://fortiupgrade.valdev.me/"
         ).strip(),
         timeout=_env_int(env, "FORTIOS_SMTP_TIMEOUT", 10),
         email_appearance=_default_email_appearance(),

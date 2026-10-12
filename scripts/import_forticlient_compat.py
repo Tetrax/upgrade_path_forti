@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Import Fortinet's official FortiClient <-> EMS compatibility matrix.
 
-Run automatically by the daily catalog-refresh timer (see deploy/fortios-compat-refresh.service).
+Run automatically by the scheduler's daily 07:00 full refresh (scripts/scheduled_refresh.py).
 Fortinet only publishes this matrix as a PDF with sideways column headers, which extracts as
 reversed text (pdfplumber reads it character-by-character in the wrong direction) — parseable,
 but fragile enough that this script refuses to commit if the parse looks suspicious (too few
 rows, malformed version strings): see MIN_EXPECTED_ENTRIES below.
 
-Requires pdfplumber, which isn't part of this project's normal (stdlib-only) dependencies. A
-dedicated venv is provisioned at .venv-compat/ (gitignored) for this script only:
+Requires pdfplumber, which isn't part of this project's normal (stdlib-only) dependencies. The
+Docker image installs it (requirements-runtime.txt); outside Docker, use a dedicated venv at
+.venv-compat/ (gitignored) for this script only:
 
     uv venv .venv-compat && uv pip install --python .venv-compat/bin/python pdfplumber
     .venv-compat/bin/python3 scripts/import_forticlient_compat.py --commit

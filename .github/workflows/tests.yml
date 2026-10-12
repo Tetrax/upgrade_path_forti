@@ -80,7 +80,7 @@ jobs:
       - name: Compile all scripts
         run: python3 -m compileall -q scripts
       - name: Check shell script syntax
-        run: bash -n deploy/install.sh docker/*.sh
+        run: bash -n deploy/certbot-fortiupgrade-deploy.sh docker/*.sh
       - name: Run unittest suite
         run: python3 -m unittest discover -s tests -v
       - name: Audit Python dependencies for known vulnerabilities

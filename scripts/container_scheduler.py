@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run FortiOS refreshes inside the scheduler container.
 
-Mirrors the legacy host timers at 07:00 (full), 07:45 (targeted recovery), and 15:30 (CVE)
+Runs the daily jobs at 07:00 (full), 07:45 (targeted recovery), and 15:30 (CVE)
 in Europe/Paris.  The recovery pass retries only sources left in error by the full run.
 Set FORTIOS_RUN_ON_START=1 for a deliberate initial full refresh after migration.
 """

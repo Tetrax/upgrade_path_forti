@@ -1766,7 +1766,7 @@ class RootAndAdminUrlTests(unittest.TestCase):
                 "/scripts/fortios_server.py",
                 "/AGENTS.md",
                 "/.git/config",
-                "/deploy/install.sh",
+                "/deploy/nginx-fortios-upgrade.conf",
                 "/pytest.ini",
             ):
                 with self.subTest(path=path):

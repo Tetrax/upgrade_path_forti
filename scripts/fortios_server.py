@@ -561,7 +561,7 @@ CONTAINER_SECURITY_REPORT_META_PATH = DATA_DIR / "trivy-report.meta.json"
 # On-demand collection relaunch (home page "État des données" header). This file is UI state for
 # the browser — what the last relaunch did — and never a queue: the real work is always
 # scripts/scheduled_refresh.py's full pass, started under the same shared collection lock the
-# scheduler container and the systemd timers use.
+# scheduler container uses.
 MANUAL_REFRESH_STATE_PATH = DATA_DIR / "fortios-manual-refresh.json"
 MANUAL_REFRESH_STATE_RUNNING = "running"
 MANUAL_REFRESH_STATE_SUCCESS = "success"
@@ -669,7 +669,7 @@ def start_manual_refresh(
 
     Returns 202 with the fresh "running" state once the run has been started, or 409 with the
     current state when a collection is already in progress — this process's own run, or a
-    scheduled one holding the shared lock in the scheduler container / a systemd timer. The
+    scheduled one holding the shared lock in the scheduler container. The
     collection runs on a background thread, so the HTTP request never waits for a scan, and a
     second scan is refused instead of being queued behind the first one.
     """

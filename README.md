@@ -197,14 +197,14 @@ En plus d'afficher un résumé du catalogue de versions connues, cette page perm
 
 Les **alertes internes** créées pour FortiClient ou FortiClient EMS s'affichent aussi sur cette page (lecture seule), pour tout avoir au même endroit. Elles se créent et se modifient toujours depuis `/alerte/` — le bouton "Modifier dans Alertes internes" de chaque carte y renvoie directement, pré-filtré sur le bon produit via `?product=forticlient` ou `?product=forticlient-ems` dans l'URL (ce paramètre fonctionne sur `/alerte/` en général, pas seulement depuis cette page).
 
-La grille de compatibilité **officielle** de Fortinet (publiée en PDF, `FortiClient_ems-compatibility-matrix.pdf`) est importée automatiquement chaque jour par le timer systemd (voir Planification ci-dessous). Elle peut aussi être relancée à la main :
+La grille de compatibilité **officielle** de Fortinet (publiée en PDF, `FortiClient_ems-compatibility-matrix.pdf`) est importée automatiquement chaque jour par le conteneur `scheduler` (voir Planification ci-dessous). Elle peut aussi être relancée à la main dans le conteneur :
 
 ```bash
-.venv-compat/bin/python3 scripts/import_forticlient_compat.py            # aperçu seulement
-.venv-compat/bin/python3 scripts/import_forticlient_compat.py --commit   # écrit dans data/fortios-data.generated.json
+docker exec fortiupgrade-scheduler-1 python scripts/import_forticlient_compat.py            # aperçu seulement
+docker exec fortiupgrade-scheduler-1 python scripts/import_forticlient_compat.py --commit   # écrit dans data/fortios-data.generated.json
 ```
 
-`.venv-compat/` est un venv dédié (gitignored, provisionné par `deploy/install.sh`) contenant `pdfplumber`, seule dépendance non-stdlib du projet — nécessaire car le PDF de Fortinet a des en-têtes de colonnes tournés à 90°, qui ressortent à l'extraction sous forme de texte inversé (ex: "7.2.10" devient "01.2.7"). Le script est volontairement prudent : il refuse de commiter si moins de `MIN_EXPECTED_ENTRIES` (10) combinaisons sont extraites, ce qui indiquerait que Fortinet a changé le format du PDF plutôt qu'une vraie absence de données. Un re-import ne touche que la liste de versions FortiClient de chaque entrée existante (`compat-official-<version EMS>`) — `note`, `source` et `createdAt` d'une entrée déjà modifiée à la main sont préservés, et `updatedAt` ne bouge que si les versions compatibles ont réellement changé. Les combinaisons importées ont pour source `"FortiClient EMS Compatibility Matrix (Fortinet, officielle)"`, pour les distinguer des combinaisons testées par l'équipe.
+L'image Docker installe `pdfplumber` (`requirements-runtime.txt`) ; hors Docker, un venv dédié `.venv-compat/` (gitignored) le fournit. C'est la seule dépendance non-stdlib du projet — nécessaire car le PDF de Fortinet a des en-têtes de colonnes tournés à 90°, qui ressortent à l'extraction sous forme de texte inversé (ex: "7.2.10" devient "01.2.7"). Le script est volontairement prudent : il refuse de commiter si moins de `MIN_EXPECTED_ENTRIES` (10) combinaisons sont extraites, ce qui indiquerait que Fortinet a changé le format du PDF plutôt qu'une vraie absence de données. Un re-import ne touche que la liste de versions FortiClient de chaque entrée existante (`compat-official-<version EMS>`) — `note`, `source` et `createdAt` d'une entrée déjà modifiée à la main sont préservés, et `updatedAt` ne bouge que si les versions compatibles ont réellement changé. Les combinaisons importées ont pour source `"FortiClient EMS Compatibility Matrix (Fortinet, officielle)"`, pour les distinguer des combinaisons testées par l'équipe.
 
 ## Récupérer des chemins officiels Fortinet
 
@@ -366,7 +366,7 @@ Affiché dans `/` sous le bandeau de briefing : section repliable « État des d
 
 Le bouton **Relancer**, dans l'en-tête de cette même section, déclenche une collecte complète réelle à la demande (une seule relance globale, pas un bouton par source). Il appelle la route administrateur `POST /api/cert/data-refresh`, soumise aux protections existantes des mutations `/api/cert/` : session administrateur, contrôle d'origine et jeton CSRF. Sans session, l'interface propose la connexion à `/admin/` et ne démarre rien ; l'accueil reste public.
 
-La passe exécutée est exactement la passe complète planifiée (`scripts/scheduled_refresh.py` : importeur de compatibilité puis `fortios_watch.py --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog --cve-catalog`), sous le **même verrou de collecte** `data/fortios-scheduled-refresh.lock` que le scheduler Docker et les timers systemd : une relance lancée pendant une collecte planifiée — ou une seconde relance — reçoit `409` et n'est jamais mise en file d'attente. La requête HTTP ne bloque pas pendant le scan (`202` puis suivi d'état via `GET /api/cert/data-refresh`) ; la réussite n'est annoncée qu'une fois la passe réellement terminée, et c'est l'état des données rechargé qui indique quelles sources restent en erreur.
+La passe exécutée est exactement la passe complète planifiée (`scripts/scheduled_refresh.py` : importeur de compatibilité puis `fortios_watch.py --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog --cve-catalog`), sous le **même verrou de collecte** `data/fortios-scheduled-refresh.lock` que le scheduler Docker : une relance lancée pendant une collecte planifiée — ou une seconde relance — reçoit `409` et n'est jamais mise en file d'attente. La requête HTTP ne bloque pas pendant le scan (`202` puis suivi d'état via `GET /api/cert/data-refresh`) ; la réussite n'est annoncée qu'une fois la passe réellement terminée, et c'est l'état des données rechargé qui indique quelles sources restent en erreur.
 
 `data/fortios-manual-refresh.json` (gitignored) ne conserve que l'état de la dernière relance (`running`/`success`/`error`), jamais les données collectées. Il n'est pas servi en statique (comme les autres fichiers privés de `data/`), les redémarrages ne le transforment pas en file d'attente, et une relance interrompue par un redémarrage du service est rapportée comme interrompue plutôt que comme une collecte en cours.
 
@@ -631,16 +631,23 @@ reconstruit sa propre image localement et rien n'est publié ni déplacé.
 
 ## Planification
 
-Un timer systemd (`deploy/fortios-catalog-refresh.timer` + `.service`, installés par `deploy/install.sh`) lance chaque jour à 7h00 heure de Paris (CET/CEST, résolu par systemd — le VPS lui-même tourne en UTC), en deux étapes :
+Le conteneur `scheduler` (`scripts/container_scheduler.py`) lance trois passes chaque jour, à
+l'heure de Paris (CET/CEST géré automatiquement), toutes via le même runner
+`scripts/scheduled_refresh.py` et le même verrou que la relance manuelle :
+
+- **07:00, passe complète** (`full`) : import de la grille de compatibilité EMS ↔ FortiClient,
+  puis collecte :
 
 ```bash
+python3 scripts/import_forticlient_compat.py --commit
 python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog --cve-catalog
-.venv-compat/bin/python3 scripts/import_forticlient_compat.py --commit
 ```
 
-La première commande détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool, les nouvelles versions FortiClient/FortiClient EMS via leurs release notes publiques, et les nouvelles CVE PSIRT (voir ci-dessus). La seconde réimporte la grille de compatibilité officielle EMS ↔ FortiClient (voir plus haut). Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`. Si la première étape échoue, systemd n'enchaîne pas sur la seconde (`ExecStart=` multiples) — sans gravité, le timer réessaie le lendemain.
+La collecte détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool, les nouvelles versions FortiClient/FortiClient EMS via leurs release notes publiques, et les nouvelles CVE PSIRT (voir ci-dessus). L'import, lancé juste avant, réimporte la grille de compatibilité officielle EMS ↔ FortiClient (voir plus haut). Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`.
 
-Un second timer, plus léger (`deploy/fortios-cve-afternoon-refresh.timer` + `.service`), relance uniquement `--cve-catalog` à 15h30 heure de Paris — une passe de rattrapage l'après-midi pour les advisories encore en échec après les deux relances internes du matin (voir `--cve-retry-delays-seconds` dans la section "CVE PSIRT Fortinet" plus haut), sans re-scraper inutilement les autres catalogues. ~8h30 d'écart avec le run du matin : largement de quoi laisser un vrai rate limiting côté PSIRT se dissiper, sans pour autant sursolliciter leur infra deux fois par jour à intervalle rapproché (même logique de relances bornées, pas de boucle jusqu'au 100% vert).
+- **07:45, rattrapage** (`recovery`) : relance uniquement les sources laissées en erreur par la
+  passe de 07:00 ; un redémarrage du conteneur après 07:45 l'exécute une fois.
+- **15:30, passe CVE** (`cve`) : relance uniquement `--cve-catalog` — une passe de rattrapage l'après-midi pour les advisories encore en échec après les deux relances internes du matin (voir `--cve-retry-delays-seconds` dans la section "CVE PSIRT Fortinet" plus haut), sans re-scraper inutilement les autres catalogues. ~8h30 d'écart avec le run du matin : largement de quoi laisser un vrai rate limiting côté PSIRT se dissiper, sans pour autant sursolliciter leur infra deux fois par jour à intervalle rapproché (même logique de relances bornées, pas de boucle jusqu'au 100% vert).
 
 Important : `--base data/fortios-data.generated.json` est indispensable en tâche planifiée. Sans lui, le script repart de `data/fortios-data.sample.json` (le petit exemple) et écraserait les chemins déjà récupérés via l'interface.
 
@@ -649,8 +656,7 @@ Un train FortiOS totalement nouveau (ex: un futur 8.4) n'est détecté que s'il 
 Suivre l'exécution :
 
 ```bash
-systemctl list-timers fortios-catalog-refresh.timer
-journalctl -u fortios-catalog-refresh.service -n 50
+docker logs --tail 50 fortiupgrade-scheduler-1
 ```
 
 ## Déploiement Docker / Portainer
@@ -660,7 +666,7 @@ Portainer (VPS et entreprise), image `:latest` mise à jour par « Pull and rede
 re-pull, rollback par `FORTIOS_IMAGE=<SHA précédent>`, secrets read-only, compatibilité des
 données et récupération admin.
 
-La stack Docker remplace le serveur systemd et ses deux timers par deux
+La stack Docker a remplacé l'ancien service systemd et ses timers (retirés du dépôt) par deux
 conteneurs :
 
 - `web` sert l'interface et l'API sur un listener unique, HTTP ou HTTPS ;

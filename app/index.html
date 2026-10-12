@@ -449,10 +449,10 @@
       return { ok: "OK", warning: "Avertissement", error: "Erreur", running: "En cours", skipped: "Ignorée" }[status] || "Inconnu";
     }
 
-    // Matches deploy/fortios-catalog-refresh.timer's OnCalendar=*-*-* 07:00:00 Europe/Paris.
+    // Matches the scheduler container's 07:00 Europe/Paris full refresh (scripts/container_scheduler.py).
     // Built from local (not UTC) Date components deliberately: the browser's own timezone
     // already handles the CET/CEST switch, so as long as it's set to Europe/Paris (true for
-    // this internal tool's users) this lands on the same instant as the systemd timer without
+    // this internal tool's users) this lands on the same instant as the scheduler without
     // having to duplicate a timezone-conversion table in JS.
     function nextScheduledRefresh(now) {
       const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);

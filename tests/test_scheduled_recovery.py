@@ -629,33 +629,6 @@ class CompatibilityNotificationTests(unittest.TestCase):
         self.assertEqual(notify_state["outbox"], [])
 
 
-class SystemdDeploymentTests(unittest.TestCase):
-    ROOT = Path(__file__).resolve().parents[1]
-
-    def test_host_recovery_timer_runs_at_0745_paris(self):
-        timer = (self.ROOT / "deploy" / "fortios-recovery.timer").read_text(encoding="utf-8")
-        self.assertIn("OnCalendar=*-*-* 07:45:00 Europe/Paris", timer)
-        self.assertIn("Persistent=true", timer)
-
-    def test_host_recovery_waits_for_simultaneous_persistent_full_catchup(self):
-        service = (self.ROOT / "deploy" / "fortios-recovery.service").read_text(encoding="utf-8")
-        self.assertIn("After=fortios-catalog-refresh.service", service)
-
-    def test_host_services_use_the_same_shared_runner_as_docker(self):
-        full = (self.ROOT / "deploy" / "fortios-catalog-refresh.service").read_text(encoding="utf-8")
-        recovery = (self.ROOT / "deploy" / "fortios-recovery.service").read_text(encoding="utf-8")
-        cve = (self.ROOT / "deploy" / "fortios-cve-afternoon-refresh.service").read_text(encoding="utf-8")
-        self.assertIn("scripts/scheduled_refresh.py full", full)
-        self.assertIn("scripts/scheduled_refresh.py recovery", recovery)
-        self.assertIn("scripts/scheduled_refresh.py cve", cve)
-
-    def test_installer_enables_the_recovery_timer(self):
-        installer = (self.ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
-        self.assertIn("fortios-recovery.service", installer)
-        self.assertIn("fortios-recovery.timer", installer)
-        self.assertIn("enable --now fortios-recovery.timer", installer)
-
-
 class ContainerScheduleTests(unittest.TestCase):
     PARIS = ZoneInfo("Europe/Paris")
 
