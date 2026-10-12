@@ -412,6 +412,7 @@ class ManualFullPassTests(unittest.TestCase):
                         "fortianalyzer,fortimanager",
                         "--forticlient-catalog",
                         "--cve-catalog",
+                        "--kev-catalog",
                     ],
                 ],
             )
@@ -547,6 +548,7 @@ class DataRefreshEndpointTests(unittest.TestCase):
                         "fortianalyzer,fortimanager",
                         "--forticlient-catalog",
                         "--cve-catalog",
+                        "--kev-catalog",
                     ],
                 ],
             )

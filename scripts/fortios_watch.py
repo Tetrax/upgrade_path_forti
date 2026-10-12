@@ -43,6 +43,17 @@ DOC_MODEL_RE = re.compile(r"\b(?:FG|FWF|FGR|FFW)-[A-Z0-9][A-Z0-9-]*\b")
 DEFAULT_PRODUCT_ID = "fortigate-fortios"
 DEFAULT_PRODUCT_LABEL = "FortiGate / FortiOS"
 PSIRT_RSS_URL = "https://www.fortiguard.com/rss/ir.xml"
+# CISA Known Exploited Vulnerabilities: public JSON catalogue of CVEs with confirmed in-the-wild
+# exploitation. Only used to flag CVEs already in our catalogue; never a source of new CVEs.
+CISA_KEV_URL = (
+    "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+)
+# The full KEV catalogue holds well over a thousand entries; a much shorter document is a
+# truncated or substituted response, never "nothing is exploited any more".
+KEV_MIN_ENTRIES = 100
+CVE_ID_RE = re.compile(r"CVE-\d{4}-\d{4,}")
+# Bounded history of detected RSS discontinuities kept in the catalogue's cveCoverage.
+CVE_COVERAGE_MAX_GAPS = 20
 FORTINET_DOCS_BASE_URL = "https://docs.fortinet.com"
 # Fortinet's Upgrade Path Tool moved in 2026-09: `/upgrade-tool/products/<slug>.json` and
 # `POST /upgrade-tool/upgrade-path` now answer 404. The tool's own page
@@ -403,6 +414,7 @@ SOURCE_FORTICLIENT_EMS = "forticlient-ems"
 SOURCE_CVE_PSIRT = "cve-psirt"
 SOURCE_FORTIOS_LIFECYCLE = "fortios-lifecycle"
 SOURCE_COMPAT_MATRIX = "compat-matrix"
+SOURCE_CISA_KEV = "cisa-kev"
 SOURCE_DAILY_RUN = "daily-run"
 
 ALL_HEALTH_SOURCES = (
@@ -414,6 +426,7 @@ ALL_HEALTH_SOURCES = (
     SOURCE_CVE_PSIRT,
     SOURCE_FORTIOS_LIFECYCLE,
     SOURCE_COMPAT_MATRIX,
+    SOURCE_CISA_KEV,
     SOURCE_DAILY_RUN,
 )
 
@@ -426,6 +439,7 @@ HEALTH_SOURCE_LABELS = {
     SOURCE_CVE_PSIRT: "CVE PSIRT",
     SOURCE_FORTIOS_LIFECYCLE: "Cycle de vie FortiOS",
     SOURCE_COMPAT_MATRIX: "Matrice de compatibilité EMS/FortiClient",
+    SOURCE_CISA_KEV: "CISA KEV (exploitation active)",
 }
 
 DEFAULT_HEALTH_PATH = Path("data/fortios-health.json")
@@ -816,6 +830,14 @@ def normalize_state(payload: dict[str, Any] | None) -> dict[str, Any]:
         "searchHistory": payload.get("searchHistory")
         if isinstance(payload.get("searchHistory"), list)
         else [],
+        # Continuity of the PSIRT RSS observation (see update_cve_coverage()), only present once
+        # a run has observed the feed. An older image simply drops this key on its next write:
+        # the coverage restarts, nothing else is lost.
+        **(
+            {"cveCoverage": payload["cveCoverage"]}
+            if isinstance(payload.get("cveCoverage"), dict)
+            else {}
+        ),
     }
 
 
@@ -2096,6 +2118,103 @@ def discover_advisory_ids_from_listing(
     return unique_in_order(ids)
 
 
+class KevFeedError(ValueError):
+    """The CISA KEV document is not the catalogue it should be (shape, size)."""
+
+
+def parse_cisa_kev(payload: Any) -> dict[str, dict[str, Any]]:
+    """Fortinet entries of the CISA KEV catalogue, keyed by upper-case CVE id.
+
+    Each value is ``{"dateAdded": "YYYY-MM-DD" | None, "ransomware": bool}``. A malformed or
+    suspiciously short document raises KevFeedError: the caller then keeps the flags it already
+    had instead of clearing every CVE's exploitation status on a bad response.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("vulnerabilities"), list):
+        raise KevFeedError("format du catalogue CISA KEV inattendu")
+    vulnerabilities = payload["vulnerabilities"]
+    if len(vulnerabilities) < KEV_MIN_ENTRIES:
+        raise KevFeedError(
+            f"catalogue CISA KEV anormalement court ({len(vulnerabilities)} entrées)"
+        )
+    listed: dict[str, dict[str, Any]] = {}
+    for item in vulnerabilities:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("vendorProject") or "").strip().casefold() != "fortinet":
+            continue
+        cve_id = str(item.get("cveID") or "").strip().upper()
+        if not CVE_ID_RE.fullmatch(cve_id):
+            continue
+        date_added = str(item.get("dateAdded") or "").strip()
+        listed[cve_id] = {
+            "dateAdded": date_added if re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_added) else None,
+            "ransomware": str(item.get("knownRansomwareCampaignUse") or "").strip().casefold()
+            == "known",
+        }
+    return listed
+
+
+def fetch_cisa_kev(timeout: int) -> dict[str, dict[str, Any]]:
+    request = urllib.request.Request(
+        CISA_KEV_URL, headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"}
+    )
+    return parse_cisa_kev(json.loads(read_url_with_retry(request, timeout)))
+
+
+def apply_kev_annotations(
+    state: dict[str, Any], kev_by_id: dict[str, dict[str, Any]]
+) -> int:
+    """Set every catalogued CVE's ``kev`` flag from a freshly read KEV catalogue.
+
+    ``kev`` is the listing (dateAdded, ransomware) when CISA lists the CVE, ``False`` when it was
+    checked and is not listed. An entry without the key has simply never been checked: the
+    notification engine treats that as an unknown baseline, never as "newly exploited", so the
+    first deployment (or a rollback that dropped the flags) cannot replay the whole KEV history.
+    Returns how many catalogued CVEs are listed.
+    """
+    listed = 0
+    for cve in state["cves"]:
+        entry = kev_by_id.get(str(cve.get("id") or "").strip().upper())
+        cve["kev"] = dict(entry) if entry else False
+        listed += bool(entry)
+    return listed
+
+
+def update_cve_coverage(
+    previous: Any, rss_ids: list[str], now: str
+) -> tuple[dict[str, Any], bool]:
+    """Advance the PSIRT RSS continuity record; returns ``(coverage, gap_detected)``.
+
+    The RSS feed is a sliding window of the ~50 most recent advisories (revised old advisories
+    keep their original pubDate, so dates cannot bound the window). Two consecutive collections
+    whose windows share no advisory at all mean the feed moved by more than its whole size in
+    between: advisories published in that interval may never have been seen. That is recorded as
+    a gap, and ``continuousSince`` restarts at this collection.
+    """
+    prev = previous if isinstance(previous, dict) else {}
+    prev_ids = prev.get("rssSeenIds") if isinstance(prev.get("rssSeenIds"), list) else []
+    prev_ids = [item for item in prev_ids if isinstance(item, str)]
+    gaps = prev.get("gaps") if isinstance(prev.get("gaps"), list) else []
+    gaps = [item for item in gaps if isinstance(item, dict)]
+    since = prev.get("continuousSince") if isinstance(prev.get("continuousSince"), str) else None
+    gap_detected = bool(prev_ids) and not (set(prev_ids) & set(rss_ids))
+    if gap_detected:
+        gaps = [
+            *gaps,
+            {"detectedAt": now, "previousCheckAt": prev.get("lastCheckAt")},
+        ][-CVE_COVERAGE_MAX_GAPS:]
+        since = now
+    return (
+        {
+            "continuousSince": since or now,
+            "lastCheckAt": now,
+            "rssSeenIds": sorted(set(rss_ids)),
+            "gaps": gaps,
+        },
+        gap_detected,
+    )
+
+
 class CsafResolutionError(RuntimeError):
     """An advisory's CSAF data could not be established definitively.
 
@@ -2575,6 +2694,11 @@ def collect_cve_entries_for_advisory(
 def upsert_cve(state: dict[str, Any], item: dict[str, Any]) -> bool:
     for index, existing in enumerate(state["cves"]):
         if existing.get("id") == item.get("id"):
+            # A freshly parsed CSAF entry never carries the KEV flag: keep the one already
+            # established (apply_kev_annotations() refreshes it whenever the KEV feed is read), so
+            # a re-fetch neither erases it nor counts as an update by itself.
+            if "kev" not in item and "kev" in existing:
+                item = {**item, "kev": existing["kev"]}
             if existing == item:
                 return False
             state["cves"][index] = item
@@ -3064,6 +3188,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Rafraîchir le catalogue de CVE PSIRT Fortinet (flux RSS, incrémental) pour FortiOS/FAZ/FMG/FortiClient/EMS.",
     )
     parser.add_argument(
+        "--kev-catalog",
+        action="store_true",
+        help="Avec une passe CVE, marquer les CVE du catalogue listées par CISA KEV (exploitation active confirmée).",
+    )
+    parser.add_argument(
         "--cve-backfill",
         action="store_true",
         help="Backfill historique complet des CVE PSIRT via la liste paginée par produit (usage ponctuel, plus lent que --cve-catalog).",
@@ -3128,6 +3257,9 @@ def commit_collected_state(
     advisory_deltas: list[dict[str, Any]],
     path_deltas: list[UpgradePath],
     cve_results_by_advisory: dict[str, list[dict[str, Any]]],
+    *,
+    kev_by_id: dict[str, dict[str, Any]] | None = None,
+    cve_coverage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Merge this run's collected deltas into the catalogue under the process lock.
 
@@ -3144,6 +3276,10 @@ def commit_collected_state(
       that never re-fetched an advisory cannot resurrect the stale ranges it read at the top of
       its own run over a concurrent --cve-reconcile-existing correction — and its own fresh,
       probative results still win over the disk for the advisories it did fetch.
+    - KEV flags (``kev_by_id``, when this run read the CISA catalogue) are applied to every CVE
+      of the merged result, after the per-advisory replacement, so no CVE is left unchecked;
+      without a fresh KEV read the flags already on disk are kept (see upsert_cve()).
+    - ``cve_coverage``, when this run observed the RSS window, replaces the stored record.
     """
     with cross_process_lock(output_path):
         latest_from_disk = normalize_state(read_json(output_path, {}))
@@ -3161,6 +3297,10 @@ def commit_collected_state(
             upsert_path(final_state, path)
         for advisory_id, entries in cve_results_by_advisory.items():
             replace_cves_for_advisory(final_state, advisory_id, entries)
+        if kev_by_id is not None:
+            apply_kev_annotations(final_state, kev_by_id)
+        if cve_coverage is not None:
+            final_state["cveCoverage"] = cve_coverage
         final_state["generatedAt"] = utc_now()
         write_json(output_path, final_state)
     return final_state
@@ -3528,6 +3668,10 @@ def main(argv: list[str]) -> int:
     # below): the reconciled results are then withheld from the commit and the health record says
     # so, instead of committing history corrections nothing would keep silent.
     reconcile_aborted = False
+    # Fresh CISA KEV flags and RSS continuity record for the final commit; None = keep what the
+    # catalogue already holds (feed unavailable, or not observed by this kind of run).
+    kev_by_id: dict[str, dict[str, Any]] | None = None
+    cve_coverage: dict[str, Any] | None = None
     if (args.cve_catalog or args.cve_backfill or args.cve_reconcile_existing) and not args.skip_network:
         t0 = time.monotonic()
         started_at = health_mark_running(args.health_output, SOURCE_CVE_PSIRT)
@@ -3624,6 +3768,25 @@ def main(argv: list[str]) -> int:
             else:
                 cve_health_status = HEALTH_STATUS_OK
                 cve_health_error = None
+            # RSS continuity, only observable on a plain RSS run: backfill walks the listing and
+            # a maintenance pass mixes the catalogue's own ids into the same list.
+            rss_ids = sorted(set(cve_results_by_advisory) | set(skipped_cves))
+            if not (args.cve_backfill or args.cve_reconcile_existing) and rss_ids:
+                cve_coverage, rss_gap = update_cve_coverage(
+                    state.get("cveCoverage"), rss_ids, utc_now()
+                )
+                if rss_gap:
+                    gap_text = (
+                        "trou possible dans le flux RSS PSIRT : aucun bulletin commun avec "
+                        "la collecte précédente, des bulletins ont pu être manqués"
+                    )
+                    if cve_health_status == HEALTH_STATUS_OK:
+                        cve_health_status = HEALTH_STATUS_WARNING
+                    cve_health_error = (
+                        f"{cve_health_error} ; {gap_text}"
+                        if cve_health_error
+                        else gap_text[0].upper() + gap_text[1:]
+                    )
             record_source(
                 SOURCE_CVE_PSIRT,
                 started_at,
@@ -3640,13 +3803,40 @@ def main(argv: list[str]) -> int:
                 status=HEALTH_STATUS_ERROR,
                 error=error,
             )
+        # CISA KEV (--kev-catalog, set by the scheduled passes): an enrichment of the CVEs already
+        # catalogued, with its own health record so a CISA outage never marks the PSIRT
+        # collection itself as failed. Read even when PSIRT failed: existing CVEs still get their
+        # exploitation status.
+        if args.kev_catalog:
+            kev_t0 = time.monotonic()
+            kev_started_at = health_mark_running(args.health_output, SOURCE_CISA_KEV)
+            try:
+                kev_by_id = fetch_cisa_kev(args.timeout)
+                record_source(
+                    SOURCE_CISA_KEV,
+                    kev_started_at,
+                    kev_t0,
+                    status=HEALTH_STATUS_OK,
+                    items=len(kev_by_id),
+                )
+            except Exception as error:  # noqa: BLE001 - recorded, flags on disk are kept.
+                kev_by_id = None
+                record_source(
+                    SOURCE_CISA_KEV,
+                    kev_started_at,
+                    kev_t0,
+                    status=HEALTH_STATUS_ERROR,
+                    error=error,
+                )
     elif args.skip_network:
-        record_source(
-            SOURCE_CVE_PSIRT,
-            utc_now_precise(),
-            time.monotonic(),
-            status=HEALTH_STATUS_SKIPPED,
-        )
+        skipped_sources = [SOURCE_CVE_PSIRT] + ([SOURCE_CISA_KEV] if args.kev_catalog else [])
+        for skipped_source in skipped_sources:
+            record_source(
+                skipped_source,
+                utc_now_precise(),
+                time.monotonic(),
+                status=HEALTH_STATUS_SKIPPED,
+            )
     # else (no --cve-catalog/--cve-backfill, not --skip-network): not requested this run -- leave
     # untouched (see the docs-catalog branch above for why).
 
@@ -3658,7 +3848,13 @@ def main(argv: list[str]) -> int:
     # firmwares/lifecycle bulk-merged, advisories/paths as precise upserts, CVEs only per fetched
     # advisory) so nothing stale is written back wholesale.
     final_state = commit_collected_state(
-        args.output, state, advisory_deltas, path_deltas, cve_results_by_advisory
+        args.output,
+        state,
+        advisory_deltas,
+        path_deltas,
+        cve_results_by_advisory,
+        kev_by_id=kev_by_id,
+        cve_coverage=cve_coverage,
     )
 
     # Maintenance reconciliation and notifications: the corrected historical entries this pass
@@ -3907,7 +4103,22 @@ def main(argv: list[str]) -> int:
                 product: set(versions)
                 for product, versions in checkpoint_state["versionsByProduct"].items()
             }
-            checkpoint_cves_by_id = {**checkpoint_state["cvesById"], **pending_applied}
+            # A staged correction is a freshly parsed entry, without the KEV flag: keep the
+            # durable flag of the same CVE so absorbing the correction never resets (or forges)
+            # its KEV baseline -- the KEV transition stays derivable exactly once.
+            durable_cves_by_id = checkpoint_state["cvesById"]
+            checkpoint_cves_by_id = {
+                **durable_cves_by_id,
+                **{
+                    cve_id: (
+                        {**entry, "kev": durable_cves_by_id[cve_id]["kev"]}
+                        if isinstance(durable_cves_by_id.get(cve_id), dict)
+                        and "kev" in durable_cves_by_id[cve_id]
+                        else {key: value for key, value in entry.items() if key != "kev"}
+                    )
+                    for cve_id, entry in pending_applied.items()
+                },
+            }
             checkpoint_health = checkpoint_state["health"]
 
             events: list[Any] = []
@@ -3936,13 +4147,24 @@ def main(argv: list[str]) -> int:
                         for item in notify_catalog.get("cves", [])
                         if item.get("id") and item["id"] not in checkpoint_cves_by_id
                     ]
-                    events += fortios_notify.derive_new_cve_events(
+                    new_cve_events = fortios_notify.derive_new_cve_events(
                         newly_added_cves, notification_settings
                     )
+                    events += new_cve_events
                     events += fortios_notify.derive_cve_modification_events(
                         checkpoint_cves_by_id,
                         cves_after_by_id,
                         notification_settings,
+                    )
+                    events += fortios_notify.derive_kev_events(
+                        checkpoint_cves_by_id,
+                        cves_after_by_id,
+                        notification_settings,
+                        already_notified_ids={
+                            event.details["id"]
+                            for event in new_cve_events
+                            if "kev" in event.details
+                        },
                     )
 
             # A CVE backfill must not consume a real EOL crossing while system alerts are on:

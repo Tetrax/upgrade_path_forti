@@ -471,6 +471,17 @@ a.badge:hover {
 .badge.danger { background: var(--soft-red); color: var(--danger); }
 .badge.ok { background: var(--soft-green); color: var(--ok); }
 .badge.info { background: var(--soft-blue); color: var(--info); }
+.badge.kev { background: var(--danger); color: #fff; }
+.kev-mark {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+}
+.cve-coverage { margin: 4px 0 12px; font-size: 13px; }
+.cve-coverage-gap { color: var(--warn); font-weight: 700; }
 
 .steps {
   padding: 26px 18px 18px;
