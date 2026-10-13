@@ -61,7 +61,7 @@
       <div class="sidebar-stack">
         <aside class="panel">
           <div class="panel-header">
-            <p class="eyebrow">Tools & resources</p>
+            <p class="eyebrow">Outils</p>
             <h2 class="panel-title">Upgrade Path Tool</h2>
           </div>
           <div class="panel-body">
@@ -478,6 +478,11 @@
       const erroredSources = HEALTH_SOURCE_ORDER.filter(
         id => id !== "daily-run" && sources[id] && classifySourceSeverity(sources[id], now) === "error"
       );
+      // Same exclusion as erroredSources: daily-run only aggregates the others, so counting it
+      // would report one warning twice ("cve-psirt" and the "Avertissement : cve-psirt" it causes).
+      const warnedSources = HEALTH_SOURCE_ORDER.filter(
+        id => id !== "daily-run" && sources[id] && classifySourceSeverity(sources[id], now) === "warning"
+      );
 
       // The top-line dot must reflect the TRUE overall health, not just daily-run's own status.
       // compat-matrix (import_forticlient_compat.py) runs as a separate step AFTER
@@ -487,14 +492,20 @@
       // source is (erroredSources, same list already used for the "N source(s) en erreur" text
       // below, so the two can never disagree). "warning" (succeeded but flagged as suspicious),
       // "skipped" (deliberately not run) and "running" (mid-collection) all still count as a
-      // pass here, same as before -- only a real "error" verdict turns the dot red. A source
+      // pass for the collection itself -- only a real "error" verdict turns the dot red -- but
+      // the dot turns orange and the text says so, never a plain green "réussie". A source
       // absent from the health file entirely (never run yet) is likewise not an error: it's
       // simply not in HEALTH_SOURCE_ORDER.filter(id => sources[id]), same exclusion the detailed
       // table below already uses.
       const overallSucceeded = classifySourceSeverity(dailyRun, now) !== "error" && erroredSources.length === 0;
-      els.healthSummaryDot.className = `health-dot ${overallSucceeded ? "ok" : "error"}`;
+      const overallWarning = overallSucceeded && (warnedSources.length > 0 || classifySourceSeverity(dailyRun, now) === "warning");
+      els.healthSummaryDot.className = `health-dot ${overallSucceeded ? (overallWarning ? "warning" : "ok") : "error"}`;
+      const warningCount = warnedSources.length;
+      const warningSuffix = warningCount
+        ? ` avec ${warningCount} avertissement${warningCount > 1 ? "s" : ""}`
+        : "";
       const ageText = dailyRun && dailyRun.lastSuccessAt
-        ? `dernière collecte globale réussie le ${formatDateTime(dailyRun.lastSuccessAt)}`
+        ? `dernière collecte globale réussie${warningSuffix} le ${formatDateTime(dailyRun.lastSuccessAt)}`
         : "aucune collecte globale réussie connue";
       const summaryParts = [ageText, `prochain rafraîchissement prévu le ${formatDateTime(nextScheduledRefresh(now).toISOString())}`];
       if (erroredSources.length) {
@@ -527,7 +538,7 @@
             <td>${escapeHtml(healthStatusLabel(record.status))}</td>
             <td>${escapeHtml(lastSuccess)}</td>
             <td>${failures}</td>
-            <td class="${record.lastError ? "health-error-cell" : ""}">${errorText}</td>
+            <td class="${record.lastError ? (severity === "error" ? "health-error-cell" : "health-warning-cell") : ""}">${errorText}</td>
           </tr>
         `;
       }).join("");
@@ -967,7 +978,7 @@
         ${offlineBanner}
         <div class="path-head">
           <div>
-            <p class="eyebrow">Recommended path</p>
+            <p class="eyebrow">Chemin recommandé</p>
             <div class="path-title">
               <span class="from">${escapeHtml(path.from)}</span>
               <span class="arrow">→</span>
@@ -1007,15 +1018,15 @@
         </div>
         <div class="content-band">
           ${renderChecklist()}
-          <h3 class="section-title">Recommended Upgrade Path</h3>
+          <h3 class="section-title">Chemin de mise à niveau recommandé</h3>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Version</th>
                   <th>Build</th>
-                  <th>Release notes</th>
-                  <th>Advisories</th>
+                  <th>Notes de version</th>
+                  <th>Alertes internes</th>
                   <th>CVE</th>
                 </tr>
               </thead>
@@ -1050,7 +1061,7 @@
 
     function renderSteps(hops) {
       return hops.map((version, index) => {
-        const label = index === 0 ? "Current" : index === hops.length - 1 ? "Target" : `Hop ${index}`;
+        const label = index === 0 ? "Actuelle" : index === hops.length - 1 ? "Cible" : `Étape ${index}`;
         const targetClass = index === hops.length - 1 ? " target" : "";
         const step = `
           <div class="step${targetClass}">
@@ -1063,7 +1074,7 @@
     }
 
     // Below this CVSS score, a CVE badge just adds noise to the "Infos ingénieur" column —
-    // collapse it into a "+N CVE mineures" count instead of hiding it outright (the full detail
+    // collapse it into a "+N moyennes/faibles" count instead of hiding it outright (the full detail
     // stays in the "Vulnérabilités connues" section below the table, unfiltered).
     const CVE_BADGE_MIN_SCORE = 7;
 
@@ -1093,7 +1104,7 @@
         return `<a class="badge ${cveBadgeClass(cve.severity)}" href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">🛡 ${escapeHtml(cve.id)}${kevMark}</a>`;
       });
       if (minorCveCount > 0) {
-        const label = `+${minorCveCount} CVE mineure${minorCveCount > 1 ? "s" : ""}`;
+        const label = `+${minorCveCount} moyenne${minorCveCount > 1 ? "s" : ""}/faible${minorCveCount > 1 ? "s" : ""}`;
         cveBadges.push(`<span class="badge" title="${minorCveCount} CVE avec un score CVSS &lt; ${CVE_BADGE_MIN_SCORE} — détail dans la section CVE ci-dessous">${escapeHtml(label)}</span>`);
       }
       const advisories = advisoryBadges.length ? advisoryBadges.join(" ") : `<span class="badge ok">Aucune</span>`;
@@ -1101,7 +1112,7 @@
 
       return `
         <tr class="${rowClass}">
-          <td class="version-cell">${escapeHtml(version)} ${index === 0 ? `<span class="badge">Current</span>` : ""} ${index === path.hops.length - 1 ? `<span class="badge danger">Target</span>` : ""}</td>
+          <td class="version-cell">${escapeHtml(version)} ${index === 0 ? `<span class="badge">Actuelle</span>` : ""} ${index === path.hops.length - 1 ? `<span class="badge target">Cible</span>` : ""}</td>
           <td>${escapeHtml(firmware?.build || "-")}</td>
           <td><div class="notes">${renderNoteTokens(firmware?.notes || [], firmware?.links || {})}</div></td>
           <td><div class="badge-cell">${advisories}</div></td>
@@ -1112,11 +1123,11 @@
 
     function renderNoteTokens(notes, links) {
       const all = [
-        ["resolved", "R", "Resolved issues"],
-        ["known", "K", "Known issues"],
-        ["upgrade", "U", "Upgrade information"],
-        ["behavior", "B", "Changes in default behavior"],
-        ["release-notes", "D", "Public Fortinet docs"]
+        ["resolved", "R", "Problèmes résolus (Resolved issues)"],
+        ["known", "K", "Problèmes connus (Known issues)"],
+        ["upgrade", "U", "Informations de mise à niveau (Upgrade information)"],
+        ["behavior", "B", "Changements de comportement par défaut (Changes in default behavior)"],
+        ["release-notes", "D", "Documentation publique Fortinet"]
       ];
       return all.map(([key, label, title]) => {
         const active = notes.includes(key);
@@ -1593,7 +1604,7 @@
 
     // Critical/high stay open by default (what an engineer needs to see first); medium/low are
     // collapsed but still present — same "don't hide, just fold" approach as the "+N CVE
-    // mineures" summary in the table above.
+    // moyennes/faibles" summary in the table above.
     const CVE_SEVERITY_GROUPS = [
       { key: "critical", label: "Critique", open: true },
       { key: "high", label: "Élevée", open: true },
