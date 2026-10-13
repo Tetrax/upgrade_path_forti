@@ -4178,8 +4178,15 @@ def main(argv: list[str]) -> int:
                     )
                     events += new_cve_events
                     events += modification_events
-                    # A CVE already announced this run (new, or escalated) carries its KEV flag
-                    # in that same event: no second section for it.
+                    # A CVE announced by another event of this run (new, or escalated) carries its
+                    # KEV flag in that event: no second section for it. Only an event that will
+                    # really be queued counts -- one whose key was already sent or is already
+                    # pending is dropped at enqueue time and must not swallow the KEV listing.
+                    known_keys = set(notify_state.get("sentKeys") or {}) | {
+                        entry.get("dedupKey")
+                        for entry in notify_state.get("outbox") or []
+                        if isinstance(entry, dict)
+                    }
                     events += fortios_notify.derive_kev_events(
                         checkpoint_cves_by_id,
                         cves_after_by_id,
@@ -4187,7 +4194,7 @@ def main(argv: list[str]) -> int:
                         already_notified_ids={
                             event.details["id"]
                             for event in (*new_cve_events, *modification_events)
-                            if "kev" in event.details
+                            if "kev" in event.details and event.dedup_key not in known_keys
                         },
                     )
 
@@ -4281,6 +4288,8 @@ def main(argv: list[str]) -> int:
                 # unavailable, or a recovery pass) is genuinely new, not history: record it as
                 # "checked, not listed" so the next KEV read can still derive its listing once.
                 # Only the checkpoint gets this baseline, the catalogue keeps the truth (no flag).
+                # Never on a --cve-backfill: what it imports IS history, and must stay an unknown
+                # KEV baseline -- otherwise the next KEV read would replay years of listings.
                 new_checkpoint = {
                     "versionsByProduct": {
                         product: sorted(versions)
@@ -4289,7 +4298,9 @@ def main(argv: list[str]) -> int:
                     "cvesById": {
                         cve_id: (
                             entry
-                            if "kev" in entry or cve_id in checkpoint_cves_by_id
+                            if args.cve_backfill
+                            or "kev" in entry
+                            or cve_id in checkpoint_cves_by_id
                             else {**entry, "kev": False}
                         )
                         for cve_id, entry in cves_after_by_id.items()

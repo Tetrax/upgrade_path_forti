@@ -250,7 +250,11 @@ class CollectionPathTests(unittest.TestCase):
         self._tmp.cleanup()
 
     def run_collection(
-        self, *, kev: Any, rss: tuple[str, ...] = ("FG-IR-26-001",)
+        self,
+        *,
+        kev: Any,
+        rss: tuple[str, ...] = ("FG-IR-26-001",),
+        passes: tuple[str, ...] = ("--cve-catalog", "--kev-catalog"),
     ) -> MagicMock:
         client = MagicMock()
         client.__enter__ = MagicMock(return_value=client)
@@ -275,8 +279,7 @@ class CollectionPathTests(unittest.TestCase):
         ):
             exit_code = fw.main(
                 [
-                    "--cve-catalog",
-                    "--kev-catalog",
+                    *passes,
                     "--base", str(self.base),
                     "--output", str(self.base),
                     "--report", str(self.root / "report.md"),
@@ -348,6 +351,35 @@ class CollectionPathTests(unittest.TestCase):
         coverage = self.catalog()["cveCoverage"]
         self.assertEqual(len(coverage["gaps"]), 1)
         self.assertEqual(coverage["continuousSince"], coverage["gaps"][0]["detectedAt"])
+
+    def test_a_backfill_never_turns_history_into_kev_notifications(self) -> None:
+        self.run_collection(kev={"CVE-2026-1": LISTED})
+        self.catalog_cves.append(cve("CVE-2026-4", "medium", FMG))
+        backfill = self.run_collection(kev={}, passes=("--cve-backfill",))
+        backfill.send_message.assert_not_called()
+        checkpoint = notify.load_notify_state(self.history)["checkpoint"]["cvesById"]
+        self.assertNotIn("kev", checkpoint["CVE-2026-4"])
+        later = self.run_collection(kev={"CVE-2026-1": LISTED, "CVE-2026-4": LISTED})
+        later.send_message.assert_not_called()
+
+    def test_an_already_sent_escalation_does_not_swallow_a_kev_listing(self) -> None:
+        self.run_collection(kev={})
+        self.catalog_cves[0] = cve("CVE-2026-1", "high", FMG)
+        notify.record_sent_events(
+            self.history,
+            [
+                notify.NotificationEvent(
+                    category="DAILY",
+                    dedup_key="cve-severity|psirt|CVE-2026-1|medium-to-high",
+                    summary="déjà envoyé",
+                )
+            ],
+        )
+        client = self.run_collection(kev={"CVE-2026-1": LISTED})
+        client.send_message.assert_called_once()
+        body = client.send_message.call_args.args[0].get_body(preferencelist=("plain",)).get_content()
+        self.assertIn("CVE-2026-1", body)
+        self.assertIn("CISA KEV", body)
 
     def test_a_cve_added_while_kev_is_down_is_still_notified_when_listed(self) -> None:
         self.run_collection(kev={"CVE-2026-1": LISTED})
