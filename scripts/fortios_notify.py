@@ -2392,6 +2392,26 @@ def stage_pending_cve_baseline(path: Path, cves_by_id: dict[str, Any]) -> int:
     return len(staged)
 
 
+def with_durable_kev(
+    entries: dict[str, Any], durable_by_id: dict[str, Any]
+) -> dict[str, Any]:
+    """Staged corrections as they may enter the checkpoint: with the durable KEV flag.
+
+    A staged correction is a freshly parsed CSAF entry, which never carries ``kev``. Merged as is,
+    it would reset the CVE's KEV baseline to "never checked" and silence a later, genuine KEV
+    listing; carrying any ``kev`` it might hold would instead forge a baseline. The durable flag of
+    the same CVE (when there is one) is therefore the only one kept.
+    """
+    merged: dict[str, Any] = {}
+    for cve_id, entry in entries.items():
+        corrected = {key: value for key, value in entry.items() if key != "kev"}
+        durable = durable_by_id.get(cve_id)
+        if isinstance(durable, dict) and "kev" in durable:
+            corrected["kev"] = durable["kev"]
+        merged[cve_id] = corrected
+    return merged
+
+
 def consume_pending_cve_baseline(
     path: Path, cves_by_id: dict[str, Any]
 ) -> tuple[int, int]:
@@ -2422,7 +2442,8 @@ def consume_pending_cve_baseline(
         if not applied:
             return (0, len(remaining or {}))
         checkpoint = dict(checkpoint)
-        checkpoint["cvesById"] = {**checkpoint.get("cvesById", {}), **applied}
+        durable_cves = checkpoint.get("cvesById", {})
+        checkpoint["cvesById"] = {**durable_cves, **with_durable_kev(applied, durable_cves)}
         state["checkpoint"] = checkpoint
         if remaining:
             state[PENDING_CVE_BASELINE_KEY] = remaining
@@ -2599,13 +2620,15 @@ def _revalidate_cve_events_against_checkpoint(
     under the write lock; this revalidates the EVENTS derived from the same capture, so a run
     whose derivation has become stale cannot enqueue a notification the durable state has since
     absorbed (a completed maintenance pass consuming the same correction first, for instance).
-    Only the two families whose premise is a projection of checkpoint['cvesById'] are concerned:
+    Only the three families whose premise is a projection of checkpoint['cvesById'] are concerned:
 
     - ``new-cve|psirt|<id>|<severity>``: valid while the durable baseline still does not carry
       the id (the novelty is genuinely unabsorbed).
     - ``cve-severity|psirt|<id>|<from>-to-<to>``: valid while the durable severity for the id is
       still exactly ``from`` -- i.e. no other writer has certified a value for it since this
       run's baseline, so the transition it announces has not been consumed or superseded.
+    - ``cve-kev|cisa|<id>|listed``: valid while the durable entry for the id does not already
+      carry a KEV listing (no other writer has absorbed the exploitation transition).
 
     `confirmed_intent` extends that same freshness to the staged maintenance intent as it stands
     on disk under this very lock, resolved against the catalogue this commit is certifying (see
@@ -2628,6 +2651,10 @@ def _revalidate_cve_events_against_checkpoint(
     kept: list[NotificationEvent] = []
     for event in new_events:
         parts = event.dedup_key.split("|")
+        if len(parts) == 4 and parts[0] == "cve-kev" and parts[1] == "cisa":
+            durable = current_cves.get(parts[2])
+            if isinstance(durable, dict) and isinstance(durable.get("kev"), dict):
+                continue
         if len(parts) == 4 and parts[1] == "psirt" and parts[0] in {"new-cve", "cve-severity"}:
             cve_id = parts[2]
             durable = current_cves.get(cve_id)
@@ -3210,6 +3237,8 @@ def _security_event(
         "productLabels": labels,
         "change": change,
     }
+    if isinstance(cve.get("kev"), dict):
+        details["kev"] = dict(cve["kev"])
     return NotificationEvent(
         category=CATEGORY_CRITICAL if severity == "critical" else CATEGORY_DAILY,
         dedup_key=dedup_key,
@@ -3292,6 +3321,51 @@ def derive_cve_modification_events(
                     f"{before_severity}-to-{after_severity}"
                 ),
                 change=f"{before_severity}-to-{after_severity}",
+            )
+        )
+    return events
+
+
+def derive_kev_events(
+    cves_before_by_id: dict[str, dict[str, Any]],
+    cves_after_by_id: dict[str, dict[str, Any]],
+    settings: NotificationSettings | None = None,
+    *,
+    already_notified_ids: frozenset[str] | set[str] = frozenset(),
+) -> list[NotificationEvent]:
+    """Notify a CVE of a selected product that CISA now lists as exploited (KEV).
+
+    Confirmed exploitation outranks the severity threshold: a Medium CVE under active attack is
+    notified too. The transition must be observed, never inferred from an unknown baseline:
+
+    - before ``kev: False`` (checked, not listed) and after a listing: notified once;
+    - before without the key (never checked: first deployment, older checkpoint, a rollback that
+      dropped the flags) or already listed: silent, so no KEV history is ever replayed;
+    - a CVE new to the checkpoint and already listed is notified;
+    - in every case, not when another event of the same run for that CVE (new CVE, severity
+      escalation: ``already_notified_ids``) already carries the KEV flag -- one CVE, one section.
+
+    A listing that disappears (CISA removal) is silent. The dedup key is stable per CVE.
+    """
+    settings = settings or _default_detection_settings()
+    events = []
+    for cve_id, after in cves_after_by_id.items():
+        if not isinstance(after.get("kev"), dict):
+            continue
+        if cve_id in already_notified_ids:
+            continue
+        before = cves_before_by_id.get(cve_id)
+        if before is not None and before.get("kev", None) is not False:
+            continue
+        affected = _selected_affected_entries(after, settings)
+        if not affected:
+            continue
+        events.append(
+            _security_event(
+                after,
+                affected,
+                dedup_key=f"cve-kev|cisa|{cve_id}|listed",
+                change="kev-listed",
             )
         )
     return events

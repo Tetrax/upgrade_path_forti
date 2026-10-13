@@ -390,7 +390,8 @@
         advisories: Array.isArray(nextState.advisories) ? nextState.advisories : [],
         cves: Array.isArray(nextState.cves) ? nextState.cves : [],
         fortiosLifecycle: nextState.fortiosLifecycle && typeof nextState.fortiosLifecycle === "object" ? nextState.fortiosLifecycle : {},
-        searchHistory: Array.isArray(nextState.searchHistory) ? nextState.searchHistory : []
+        searchHistory: Array.isArray(nextState.searchHistory) ? nextState.searchHistory : [],
+        cveCoverage: nextState.cveCoverage && typeof nextState.cveCoverage === "object" ? nextState.cveCoverage : {}
       };
     }
 
@@ -1037,6 +1038,7 @@
           ${renderCallouts(hopAdvisories)}
           <details class="checklist-details" open>
             <summary class="checklist-title">Vulnérabilités connues (CVE PSIRT Fortinet) <span class="muted">(${hopCves.length})</span></summary>
+            ${renderCveCoverage()}
             ${renderCveCallouts(hopCves, path)}
           </details>
         </div>
@@ -1092,11 +1094,14 @@
       });
       // Unknown/missing CVSS score is treated as notable (shown), not filtered out — never
       // silently hide a CVE we can't confidently classify as minor.
-      const notableCves = versionCves.filter(cve => !(typeof cve.cvssScore === "number" && cve.cvssScore < CVE_BADGE_MIN_SCORE));
+      // A CVE CISA lists as exploited is never folded into the count, whatever its score.
+      const notableCves = versionCves.filter(cve => isKev(cve) || !(typeof cve.cvssScore === "number" && cve.cvssScore < CVE_BADGE_MIN_SCORE));
       const minorCveCount = versionCves.length - notableCves.length;
       const cveBadges = notableCves.map(cve => {
-        const tooltip = `${cve.title} — CVSS ${cveSeverityLabel(cve.severity)}${typeof cve.cvssScore === "number" ? ` ${cve.cvssScore}` : ""} — ouvrir la fiche PSIRT Fortinet`;
-        return `<a class="badge ${cveBadgeClass(cve.severity)}" href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">🛡 ${escapeHtml(cve.id)}</a>`;
+        const kevText = isKev(cve) ? ` — ${kevLabel(cve)}` : "";
+        const tooltip = `${cve.title} — CVSS ${cveSeverityLabel(cve.severity)}${typeof cve.cvssScore === "number" ? ` ${cve.cvssScore}` : ""}${kevText} — ouvrir la fiche PSIRT Fortinet`;
+        const kevMark = isKev(cve) ? ` <span class="kev-mark">exploitée</span>` : "";
+        return `<a class="badge ${cveBadgeClass(cve.severity)}" href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer" title="${escapeAttr(tooltip)}">🛡 ${escapeHtml(cve.id)}${kevMark}</a>`;
       });
       if (minorCveCount > 0) {
         const label = `+${minorCveCount} moyenne${minorCveCount > 1 ? "s" : ""}/faible${minorCveCount > 1 ? "s" : ""}`;
@@ -1607,6 +1612,41 @@
       { key: "low", label: "Faible", open: false }
     ];
 
+    // CISA KEV flag set by the collector: an object when listed, false when checked and not
+    // listed, absent when never checked (shown exactly like "not listed").
+    function isKev(cve) {
+      return Boolean(cve && cve.kev && typeof cve.kev === "object");
+    }
+
+    function kevLabel(cve) {
+      const added = cve.kev.dateAdded ? `, ajoutée le ${formatDate(cve.kev.dateAdded)}` : "";
+      const ransomware = cve.kev.ransomware ? " — rançongiciel" : "";
+      return `Exploitée activement (CISA KEV${added})${ransomware}`;
+    }
+
+    function formatDate(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value || "-";
+      return date.toLocaleDateString("fr-FR", { timeZone: "UTC" });
+    }
+
+    // What the CVE base can and cannot vouch for: it only ever sees the advisories present in the
+    // PSIRT RSS window when a collection runs, so "Aucune" must never read as a guarantee.
+    function renderCveCoverage() {
+      const published = state.cves.map(cve => cve.publishedAt).filter(Boolean).sort();
+      const coverage = state.cveCoverage || {};
+      const parts = [`${state.cves.length} CVE issues du flux RSS PSIRT Fortinet (environ 50 derniers bulletins)`];
+      if (published.length) parts[0] += `, publiées du ${formatDate(published[0])} au ${formatDate(published[published.length - 1])}`;
+      if (coverage.continuousSince) parts.push(`suivi continu du flux vérifié depuis le ${formatDate(coverage.continuousSince)}`);
+      let text = `Couverture : ${parts.join(" ; ")}. Un bulletin plus ancien peut manquer : « Aucune » n'est pas une garantie.`;
+      const gaps = Array.isArray(coverage.gaps) ? coverage.gaps : [];
+      const lastGap = gaps[gaps.length - 1];
+      const gapHtml = lastGap && lastGap.detectedAt
+        ? ` <span class="cve-coverage-gap">⚠ Trou possible dans le flux détecté le ${escapeHtml(formatDate(lastGap.detectedAt))} : des bulletins ont pu être manqués.</span>`
+        : "";
+      return `<p class="cve-coverage muted">${escapeHtml(text)}${gapHtml}</p>`;
+    }
+
     function renderCveCallouts(cves, path) {
       if (!cves.length) {
         return `<div class="callouts"><div class="callout"><p>Aucune CVE PSIRT Fortinet connue sur ce chemin.</p></div></div>`;
@@ -1640,6 +1680,7 @@
             ${fixedAt
               ? `<span class="badge ok">✅ Corrigé en ${escapeHtml(fixedAt)}</span>`
               : `<span class="badge danger">⚠ Toujours vulnérable après ce chemin</span>`}
+            ${isKev(cve) ? `<span class="badge kev">⚠ ${escapeHtml(kevLabel(cve))}</span>` : ""}
           </div>
           <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a></p>
         </article>
@@ -1695,6 +1736,8 @@
       // Shared team search history is appended to server-side on every live path fetch
       // (record_search_history in fortios_watch.py) — same replace reasoning as above.
       merged.searchHistory = incoming.searchHistory || merged.searchHistory || [];
+      // RSS continuity record written by the collector alongside the CVEs: replaced wholesale.
+      merged.cveCoverage = incoming.cveCoverage || {};
       merged.generatedAt = incoming.generatedAt || new Date().toISOString();
       return merged;
     }
@@ -1772,6 +1815,7 @@
             return [
               `### ${cve.id} - ${cve.title}`,
               `- Sévérité : ${cveSeverityLabel(cve.severity)}${scoreLabel}`,
+              ...(isKev(cve) ? [`- Exploitation : ${kevLabel(cve)}`] : []),
               `- Fiche PSIRT : ${cve.advisoryId} - ${cve.url}`,
               `- Statut : ${fixedAt ? `corrigé en ${fixedAt}` : "toujours vulnérable après ce chemin"}`,
               ""

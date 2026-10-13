@@ -109,11 +109,14 @@ Une notification CVE est créée uniquement pour :
 - une nouvelle CVE **High** ou **Critical** affectant au moins un produit sélectionné ;
 - une CVE existante passant de `Unknown`, `Low` ou `Medium` à `High` ;
 - une CVE existante passant de `Unknown`, `Low` ou `Medium` à `Critical` ;
-- une CVE existante passant de `High` à `Critical`.
+- une CVE existante passant de `High` à `Critical` ;
+- une CVE d’un produit sélectionné que CISA ajoute au catalogue **KEV** (exploitation active confirmée), quelle que soit sa sévérité : transition observée `kev: false` → listée, clé `cve-kev|cisa|<CVE>|listed`, une seule fois.
+
+Une CVE dont le statut KEV n’a jamais été vérifié (clé `kev` absente : premier déploiement, ancien checkpoint, rollback) constitue une référence inconnue et reste silencieuse. Une CVE qui entre dans la référence sans verdict KEV lors d’une collecte normale (flux CISA indisponible, passe de rattrapage) y est enregistrée « vérifiée, non listée », pour que sa future inscription reste notifiable ; jamais lors d’un `--cve-backfill`, dont l’import reste une référence inconnue. Une CVE annoncée par un autre événement du même run réellement mis en file (nouvelle CVE ou escalade, ni déjà envoyé ni déjà en attente) porte la marque dans cet événement, sans section KEV en double. Une inscription est définitive : un retrait du catalogue KEV ne notifie pas et ne remet pas la marque à `false`. Une correction de maintenance conserve la marque durable de sa CVE.
 
 Ne doivent pas produire de notification CVE :
 
-- les CVE `Unknown`, `Low` ou `Medium` ;
+- les CVE `Unknown`, `Low` ou `Medium`, hors entrée au catalogue KEV ;
 - une CVE High ou Critical dont la sévérité n’augmente pas ;
 - une simple republication PSIRT ;
 - une modification de texte, de CVSS ou de périmètre sans escalade de sévérité ;

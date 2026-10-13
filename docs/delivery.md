@@ -294,6 +294,19 @@ also restores historical routing (system events to the CVE list under `enabled`)
 acceptable, keep delivery disabled in the restored old-format preferences until re-upgrade.
 SMTP/Graph credentials, certificates, volumes and live runtime are not changed by this schema.
 
+## CISA KEV flags and CVE coverage: upgrade and rollback
+
+No migration and no preferences change. The scheduled passes add `--kev-catalog`; the first one
+sets a `kev` field on every catalogue CVE (`false` or the listing) and a top-level `cveCoverage`
+record, and stays silent: checkpoint entries written before it carry no `kev` key, which the engine
+treats as an unknown baseline. A new `cisa-kev` health source appears in « État des données ».
+
+Rollback is image-only. An older image ignores both fields, drops `cveCoverage` on its next
+catalogue write and drops `kev` from the CVEs it re-fetches; after a later re-upgrade those CVEs
+are an unknown baseline again (a KEV listing that happened meanwhile is not notified, nothing is
+replayed). A pending `cve-kev|…` outbox entry is still delivered by the older image as an ordinary
+CVE email. Notification history, sent keys and outbox stay valid in both directions.
+
 ## Adding the Microsoft 365 transport
 
 The new image adds an optional Graph transport without replacing SMTP, data

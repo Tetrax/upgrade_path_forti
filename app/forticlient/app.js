@@ -341,7 +341,7 @@ function compatCard(item) {
 
   const relatedCves = cvesForCompat(item);
   for (const cve of relatedCves) {
-    head.appendChild(el("span", { className: `badge ${cveBadgeClass(cve.severity)}`, text: `🛡 ${cve.id}` }));
+    head.appendChild(el("span", { className: `badge ${cveBadgeClass(cve.severity)}`, text: `🛡 ${cve.id}${isKev(cve) ? " · exploitée" : ""}` }));
   }
 
   const versionsLine = el("p", { text: `FortiClient : ${(item.clientVersions || []).join(", ") || "-"}` });
@@ -504,6 +504,11 @@ function cveSeverityToInternal(severity) {
   return { critical: "critical", high: "important", medium: "warning", low: "info" }[severity] || "info";
 }
 
+// CISA KEV flag set by the collector (object = listed); see app/index.html isKev().
+function isKev(cve) {
+  return Boolean(cve && cve.kev && typeof cve.kev === "object");
+}
+
 function relatedCveDetail(cve) {
   const wrapper = el("div", { className: `callout ${calloutClass(cveSeverityToInternal(cve.severity))}` });
   const head = el("div", { className: "callout-head" });
@@ -515,6 +520,12 @@ function relatedCveDetail(cve) {
       text: `${cve.id} · ${CVE_SEVERITY_LABEL[cve.severity] || "Inconnue"}${scoreLabel}`
     })
   );
+  if (isKev(cve)) {
+    const added = cve.kev.dateAdded
+      ? `, ajoutée le ${new Date(cve.kev.dateAdded).toLocaleDateString("fr-FR", { timeZone: "UTC" })}`
+      : "";
+    head.appendChild(el("span", { className: "badge kev", text: `⚠ Exploitée activement (CISA KEV${added})` }));
+  }
   wrapper.appendChild(head);
 
   const link = document.createElement("a");

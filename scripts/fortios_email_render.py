@@ -163,6 +163,17 @@ def compose_subject(security_events: list[Any]) -> str:
     counts = _severity_counts(security_events)
     critical = counts["critical"]
     plural = _plural(total)
+    if _all_kev_listings(security_events):
+        breakdown = " / ".join(
+            f"{counts[level]} {level.capitalize()}"
+            for level in BADGE_SEVERITY_LEVELS
+            if counts[level] > 0
+        )
+        suffix = f" — {breakdown}" if breakdown else ""
+        return (
+            f"[FortiUpgrade] {total} vulnérabilité{plural} exploitée{plural} "
+            f"activement{suffix}"
+        )
 
     if total == 1 and critical == 1:
         products = ", ".join(
@@ -182,8 +193,20 @@ def compose_subject(security_events: list[Any]) -> str:
     return f"[FortiUpgrade] {total} nouvelle{plural} vulnérabilité{plural} — {breakdown}"
 
 
-def _hero_title(total: int) -> str:
+def _all_kev_listings(security_events: list[Any]) -> bool:
+    """True when every CVE of the batch is a "now exploited" (CISA KEV) transition."""
+    return bool(security_events) and all(
+        event.details.get("change") == "kev-listed" for event in security_events
+    )
+
+
+def _hero_title(total: int, *, kev_only: bool = False) -> str:
     plural = _plural(total)
+    if kev_only:
+        return (
+            f"{total} vulnérabilité{plural} de vos équipements Fortinet "
+            f"désormais exploitée{plural} activement (CISA KEV)."
+        )
     return (
         f"{total} nouvelle{plural} vulnérabilité{plural} "
         f"détectée{plural} sur vos équipements Fortinet."
@@ -208,6 +231,19 @@ def _affected_version_line(item: dict[str, Any], product_labels: list[str]) -> s
 
 def _single_event_product_labels(event: Any) -> list[str]:
     return [str(label) for label in event.details.get("productLabels") or []]
+
+
+def _kev_text(details: dict[str, Any]) -> str:
+    """One line for a CVE CISA lists as exploited, '' otherwise (rendering unchanged then)."""
+    kev = details.get("kev")
+    if not isinstance(kev, dict):
+        return ""
+    added = _french_date(str(kev.get("dateAdded") or ""))
+    text = "Exploitation active confirmée (CISA KEV"
+    text += f", ajoutée le {added})" if added else ")"
+    if kev.get("ransomware"):
+        text += " — utilisée dans des campagnes de rançongiciel"
+    return text
 
 
 def _other_events_text(other_events: list[Any] | None) -> list[str]:
@@ -385,7 +421,7 @@ def compose_text_body(
     lines.extend(
         [
             "",
-            _hero_title(total),
+            _hero_title(total, kev_only=_all_kev_listings(security_events)),
             "",
             f"Critical : {counts['critical']}",
             f"High     : {counts['high']}",
@@ -411,10 +447,12 @@ def compose_text_body(
         cvss = details.get("cvssScore")
         cvss_text = str(cvss) if cvss is not None else "Non précisé"
         url = details.get("url") or ""
+        kev_line = _kev_text(details)
         lines.extend(
             [
                 f"{severity} — {details.get('id', '?')}",
                 f"CVSS : {cvss_text}",
+                *([kev_line] if kev_line else []),
                 "",
                 "Produits concernés",
             ]
@@ -483,7 +521,7 @@ def compose_html_body(
     counts = _severity_counts(security_events)
     total = len(security_events)
     product_counts = _product_counts(security_events)
-    hero_title = _hero_title(total)
+    hero_title = _hero_title(total, kev_only=_all_kev_listings(security_events))
 
     # --- Summary counters ---------------------------------------------------
     # One cell per level present (shared markup, see _counter_cell). CRITICAL/HIGH/AU TOTAL keep
@@ -517,6 +555,15 @@ def compose_html_body(
         cvss_text = str(cvss) if cvss is not None else "Non précisé"
         url = str(details.get("url") or app_url)
         products_html = "<br>".join(html.escape(label) for label in labels)
+        kev_line = _kev_text(details)
+        kev_html = (
+            "<tr><td colspan='2' style='padding:0 14px 12px'>"
+            f"<div style='font-size:14px;font-weight:700;color:{SNS_BLACK};"
+            f"background:{SNS_ROSE_PALE};padding:8px 10px'>⚠ {html.escape(kev_line)}</div>"
+            "</td></tr>"
+            if kev_line
+            else ""
+        )
         affected_html = "<br>".join(
             html.escape(_affected_version_line(item, [str(item.get("product") or "Produit")]))
             for item in details.get("affected") or []
@@ -534,6 +581,7 @@ def compose_html_body(
             f"<td colspan='2' style='padding:14px 14px 4px;font-size:16px;font-weight:700;"
             f"color:{SNS_BLACK}'>{html.escape(str(details.get('id', '?')))}</td>"
             "</tr>"
+            f"{kev_html}"
             "<tr><td colspan='2' style='padding:0 14px 12px'>"
             f"<div style='font-size:12px;font-weight:700;color:{SNS_GRAY_TEXT};letter-spacing:1px;"
             "margin:0 0 4px'>PRODUITS CONCERNÉS</div>"

@@ -36,6 +36,7 @@ from fortios_watch import (
     HEALTH_STATUS_ERROR,
     HEALTH_STATUS_RUNNING,
     HEALTH_STATUS_WARNING,
+    SOURCE_CISA_KEV,
     SOURCE_COMPAT_MATRIX,
     SOURCE_CVE_PSIRT,
     SOURCE_FORTIANALYZER,
@@ -66,6 +67,7 @@ RETRYABLE_SOURCE_IDS = (
     SOURCE_FORTICLIENT,
     SOURCE_FORTICLIENT_EMS,
     SOURCE_CVE_PSIRT,
+    SOURCE_CISA_KEV,
     SOURCE_COMPAT_MATRIX,
 )
 Runner = Callable[..., Any]
@@ -120,8 +122,11 @@ def build_retry_plan(health_state: dict[str, Any]) -> RetryPlan:
     if failed_set & {SOURCE_FORTICLIENT, SOURCE_FORTICLIENT_EMS}:
         args.append("--forticlient-catalog")
         checked.update((SOURCE_FORTICLIENT, SOURCE_FORTICLIENT_EMS))
-    if SOURCE_CVE_PSIRT in failed_set:
-        args.append("--cve-catalog")
+    # The KEV read rides on a CVE pass: retrying either one re-reads both, so a CVE recovered
+    # here still gets its exploitation status in the same run.
+    if failed_set & {SOURCE_CVE_PSIRT, SOURCE_CISA_KEV}:
+        args.extend(("--cve-catalog", "--kev-catalog"))
+        checked.update((SOURCE_CVE_PSIRT, SOURCE_CISA_KEV))
 
     return RetryPlan(
         catalog_args=tuple(args),
@@ -349,6 +354,7 @@ def _run_full_unlocked(
             "fortianalyzer,fortimanager",
             "--forticlient-catalog",
             "--cve-catalog",
+            "--kev-catalog",
         ],
         root=root,
         runner=runner,
@@ -426,6 +432,7 @@ def run_cve_refresh(
                 "--base",
                 "data/fortios-data.generated.json",
                 "--cve-catalog",
+                "--kev-catalog",
             ],
             root=root,
             runner=runner,

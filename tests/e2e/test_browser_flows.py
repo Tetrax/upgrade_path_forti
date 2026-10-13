@@ -480,6 +480,44 @@ def test_successful_path_fetch_shows_hops_and_builds(app_page, fortios_server):
     expect(app_page.locator(".offline-banner")).to_have_count(0)
 
 
+def test_exploited_cves_are_flagged_and_the_cve_coverage_is_stated(app_page, fortios_server):
+    """A CISA KEV listing is shown on the CVE (badge and callout), is never folded into the
+    "+N moyennes/faibles" count even with a low score, and the CVE section states what the base
+    covers -- including a detected RSS gap -- so "Aucune" never reads as a guarantee."""
+    catalog_path = fortios_server.data_dir / "fortios-data.generated.json"
+    catalog = __import__("json").loads(catalog_path.read_text(encoding="utf-8"))
+    catalog["cves"][0]["kev"] = {"dateAdded": "2026-10-01", "ransomware": False}
+    catalog["cves"].append({
+        "id": "CVE-2026-77777", "advisoryId": "FG-IR-26-777", "title": "Low but exploited",
+        "severity": "low", "cvssScore": 3.1, "publishedAt": "2026-09-08",
+        "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-777",
+        "affected": [{"product": "fortigate-fortios", "models": [], "branch": "6.2", "from": "6.2.0", "to": "6.2.4"}],
+        "kev": {"dateAdded": "2026-10-02", "ransomware": True},
+    })
+    catalog["cveCoverage"] = {
+        "continuousSince": "2026-10-13T05:00:00Z", "lastCheckAt": "2026-10-13T05:00:00Z",
+        "rssSeenIds": ["FG-IR-26-777"],
+        "gaps": [{"detectedAt": "2026-10-13T05:00:00Z", "previousCheckAt": "2026-10-10T05:00:00Z"}],
+    }
+    catalog_path.write_text(__import__("json").dumps(catalog), encoding="utf-8")
+    app_page.reload()
+
+    fortios_server.set_mock_path_response(["6.2.4", "7.0.14", "8.0.0"])
+    select_path(app_page, current="6.2.4", target="8.0.0")
+    app_page.click("#goButton")
+
+    current_row = app_page.locator("table").first.locator("tbody tr").first
+    expect(current_row).to_contain_text("CVE-2026-99999")
+    expect(current_row).to_contain_text("CVE-2026-77777")
+    expect(current_row.locator(".kev-mark")).to_have_count(2)
+    expect(app_page.locator(".badge.kev").first).to_contain_text("Exploitée activement (CISA KEV")
+    expect(app_page.locator(".badge.kev", has_text="rançongiciel")).to_have_count(1)
+    coverage = app_page.locator(".cve-coverage")
+    expect(coverage).to_contain_text("Couverture :")
+    expect(coverage).to_contain_text("« Aucune » n'est pas une garantie")
+    expect(coverage.locator(".cve-coverage-gap")).to_contain_text("Trou possible")
+
+
 # 5 & 6. Fortinet unavailable -> fallback to cached path, explicit cache banner ----------
 
 def test_fortinet_unavailable_falls_back_to_cached_path_with_banner(app_page, fortios_server):
