@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import dataclasses
 import datetime as dt
 import fcntl
 import html
@@ -2151,6 +2152,10 @@ def parse_cisa_kev(payload: Any) -> dict[str, dict[str, Any]]:
             "ransomware": str(item.get("knownRansomwareCampaignUse") or "").strip().casefold()
             == "known",
         }
+    # Fortinet has had dozens of listed CVEs for years: none at all is a filtered or substituted
+    # document, never "nothing Fortinet is exploited any more".
+    if not listed:
+        raise KevFeedError("catalogue CISA KEV sans aucune entrée Fortinet")
     return listed
 
 
@@ -2170,13 +2175,20 @@ def apply_kev_annotations(
     checked and is not listed. An entry without the key has simply never been checked: the
     notification engine treats that as an unknown baseline, never as "newly exploited", so the
     first deployment (or a rollback that dropped the flags) cannot replay the whole KEV history.
+
+    A listing is definitive: a CVE CISA no longer lists keeps its flag. Confirmed exploitation
+    does not expire, and a document that briefly lost entries can therefore never turn known
+    listings back to False and have the next correct document replay them as new.
     Returns how many catalogued CVEs are listed.
     """
     listed = 0
     for cve in state["cves"]:
         entry = kev_by_id.get(str(cve.get("id") or "").strip().upper())
-        cve["kev"] = dict(entry) if entry else False
-        listed += bool(entry)
+        if entry:
+            cve["kev"] = dict(entry)
+        elif not isinstance(cve.get("kev"), dict):
+            cve["kev"] = False
+        listed += isinstance(cve["kev"], dict)
     return listed
 
 
@@ -3259,7 +3271,7 @@ def commit_collected_state(
     cve_results_by_advisory: dict[str, list[dict[str, Any]]],
     *,
     kev_by_id: dict[str, dict[str, Any]] | None = None,
-    cve_coverage: dict[str, Any] | None = None,
+    rss_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Merge this run's collected deltas into the catalogue under the process lock.
 
@@ -3279,7 +3291,9 @@ def commit_collected_state(
     - KEV flags (``kev_by_id``, when this run read the CISA catalogue) are applied to every CVE
       of the merged result, after the per-advisory replacement, so no CVE is left unchecked;
       without a fresh KEV read the flags already on disk are kept (see upsert_cve()).
-    - ``cve_coverage``, when this run observed the RSS window, replaces the stored record.
+    - ``rss_ids``, when this run observed the RSS window, advance the stored continuity record
+      (update_cve_coverage()) against the record on disk, so two overlapping collections chain
+      their observations instead of the last one erasing a gap the other detected.
     """
     with cross_process_lock(output_path):
         latest_from_disk = normalize_state(read_json(output_path, {}))
@@ -3299,8 +3313,10 @@ def commit_collected_state(
             replace_cves_for_advisory(final_state, advisory_id, entries)
         if kev_by_id is not None:
             apply_kev_annotations(final_state, kev_by_id)
-        if cve_coverage is not None:
-            final_state["cveCoverage"] = cve_coverage
+        if rss_ids:
+            final_state["cveCoverage"], _ = update_cve_coverage(
+                latest_from_disk.get("cveCoverage"), rss_ids, utc_now()
+            )
         final_state["generatedAt"] = utc_now()
         write_json(output_path, final_state)
     return final_state
@@ -3668,10 +3684,10 @@ def main(argv: list[str]) -> int:
     # below): the reconciled results are then withheld from the commit and the health record says
     # so, instead of committing history corrections nothing would keep silent.
     reconcile_aborted = False
-    # Fresh CISA KEV flags and RSS continuity record for the final commit; None = keep what the
+    # Fresh CISA KEV flags and observed RSS window for the final commit; None = keep what the
     # catalogue already holds (feed unavailable, or not observed by this kind of run).
     kev_by_id: dict[str, dict[str, Any]] | None = None
-    cve_coverage: dict[str, Any] | None = None
+    rss_ids: list[str] | None = None
     if (args.cve_catalog or args.cve_backfill or args.cve_reconcile_existing) and not args.skip_network:
         t0 = time.monotonic()
         started_at = health_mark_running(args.health_output, SOURCE_CVE_PSIRT)
@@ -3769,24 +3785,10 @@ def main(argv: list[str]) -> int:
                 cve_health_status = HEALTH_STATUS_OK
                 cve_health_error = None
             # RSS continuity, only observable on a plain RSS run: backfill walks the listing and
-            # a maintenance pass mixes the catalogue's own ids into the same list.
-            rss_ids = sorted(set(cve_results_by_advisory) | set(skipped_cves))
-            if not (args.cve_backfill or args.cve_reconcile_existing) and rss_ids:
-                cve_coverage, rss_gap = update_cve_coverage(
-                    state.get("cveCoverage"), rss_ids, utc_now()
-                )
-                if rss_gap:
-                    gap_text = (
-                        "trou possible dans le flux RSS PSIRT : aucun bulletin commun avec "
-                        "la collecte précédente, des bulletins ont pu être manqués"
-                    )
-                    if cve_health_status == HEALTH_STATUS_OK:
-                        cve_health_status = HEALTH_STATUS_WARNING
-                    cve_health_error = (
-                        f"{cve_health_error} ; {gap_text}"
-                        if cve_health_error
-                        else gap_text[0].upper() + gap_text[1:]
-                    )
+            # a maintenance pass mixes the catalogue's own ids into the same list. Evaluated at
+            # the commit below, under the catalogue lock; a gap is reported on this source then.
+            if not (args.cve_backfill or args.cve_reconcile_existing):
+                rss_ids = sorted(set(cve_results_by_advisory) | set(skipped_cves)) or None
             record_source(
                 SOURCE_CVE_PSIRT,
                 started_at,
@@ -3854,8 +3856,35 @@ def main(argv: list[str]) -> int:
         path_deltas,
         cve_results_by_advisory,
         kev_by_id=kev_by_id,
-        cve_coverage=cve_coverage,
+        rss_ids=rss_ids,
     )
+    coverage = final_state.get("cveCoverage") or {}
+    last_gap = (coverage.get("gaps") or [{}])[-1]
+    psirt_result = health_results.get(SOURCE_CVE_PSIRT)
+    if (
+        rss_ids
+        and psirt_result is not None
+        and isinstance(last_gap, dict)
+        and last_gap.get("detectedAt") == coverage.get("lastCheckAt")
+    ):
+        gap_text = (
+            "trou possible dans le flux RSS PSIRT : aucun bulletin commun avec la collecte "
+            "précédente, des bulletins ont pu être manqués"
+        )
+        previous_error = sanitize_health_error(psirt_result.error)
+        health_results[SOURCE_CVE_PSIRT] = dataclasses.replace(
+            psirt_result,
+            status=(
+                HEALTH_STATUS_WARNING
+                if psirt_result.status == HEALTH_STATUS_OK
+                else psirt_result.status
+            ),
+            error=(
+                f"{previous_error} ; {gap_text}"
+                if previous_error
+                else gap_text[0].upper() + gap_text[1:]
+            ),
+        )
 
     # Maintenance reconciliation and notifications: the corrected historical entries this pass
     # just committed must be part of the notification baseline from this very commit on. The
@@ -4103,21 +4132,13 @@ def main(argv: list[str]) -> int:
                 product: set(versions)
                 for product, versions in checkpoint_state["versionsByProduct"].items()
             }
-            # A staged correction is a freshly parsed entry, without the KEV flag: keep the
-            # durable flag of the same CVE so absorbing the correction never resets (or forges)
-            # its KEV baseline -- the KEV transition stays derivable exactly once.
-            durable_cves_by_id = checkpoint_state["cvesById"]
+            # A staged correction never resets (or forges) a CVE's KEV baseline: see
+            # fortios_notify.with_durable_kev(), also applied by consume_pending_cve_baseline().
             checkpoint_cves_by_id = {
-                **durable_cves_by_id,
-                **{
-                    cve_id: (
-                        {**entry, "kev": durable_cves_by_id[cve_id]["kev"]}
-                        if isinstance(durable_cves_by_id.get(cve_id), dict)
-                        and "kev" in durable_cves_by_id[cve_id]
-                        else {key: value for key, value in entry.items() if key != "kev"}
-                    )
-                    for cve_id, entry in pending_applied.items()
-                },
+                **checkpoint_state["cvesById"],
+                **fortios_notify.with_durable_kev(
+                    pending_applied, checkpoint_state["cvesById"]
+                ),
             }
             checkpoint_health = checkpoint_state["health"]
 
@@ -4150,19 +4171,22 @@ def main(argv: list[str]) -> int:
                     new_cve_events = fortios_notify.derive_new_cve_events(
                         newly_added_cves, notification_settings
                     )
-                    events += new_cve_events
-                    events += fortios_notify.derive_cve_modification_events(
+                    modification_events = fortios_notify.derive_cve_modification_events(
                         checkpoint_cves_by_id,
                         cves_after_by_id,
                         notification_settings,
                     )
+                    events += new_cve_events
+                    events += modification_events
+                    # A CVE already announced this run (new, or escalated) carries its KEV flag
+                    # in that same event: no second section for it.
                     events += fortios_notify.derive_kev_events(
                         checkpoint_cves_by_id,
                         cves_after_by_id,
                         notification_settings,
                         already_notified_ids={
                             event.details["id"]
-                            for event in new_cve_events
+                            for event in (*new_cve_events, *modification_events)
                             if "kev" in event.details
                         },
                     )
@@ -4253,12 +4277,23 @@ def main(argv: list[str]) -> int:
                     "health": health_after,
                 }
             else:
+                # A CVE entering the baseline in this very run without a KEV verdict (KEV feed
+                # unavailable, or a recovery pass) is genuinely new, not history: record it as
+                # "checked, not listed" so the next KEV read can still derive its listing once.
+                # Only the checkpoint gets this baseline, the catalogue keeps the truth (no flag).
                 new_checkpoint = {
                     "versionsByProduct": {
                         product: sorted(versions)
                         for product, versions in versions_by_product(notify_catalog).items()
                     },
-                    "cvesById": cves_after_by_id,
+                    "cvesById": {
+                        cve_id: (
+                            entry
+                            if "kev" in entry or cve_id in checkpoint_cves_by_id
+                            else {**entry, "kev": False}
+                        )
+                        for cve_id, entry in cves_after_by_id.items()
+                    },
                     "health": health_after,
                 }
             claimant = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"

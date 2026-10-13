@@ -112,7 +112,7 @@ Une notification CVE est créée uniquement pour :
 - une CVE existante passant de `High` à `Critical` ;
 - une CVE d’un produit sélectionné que CISA ajoute au catalogue **KEV** (exploitation active confirmée), quelle que soit sa sévérité : transition observée `kev: false` → listée, clé `cve-kev|cisa|<CVE>|listed`, une seule fois.
 
-Une CVE dont le statut KEV n’a jamais été vérifié (clé `kev` absente : premier déploiement, ancien checkpoint, rollback) constitue une référence inconnue et reste silencieuse ; une CVE nouvelle déjà listée est signalée dans son propre événement de nouvelle CVE, ou par l’événement KEV si son seuil de sévérité ne la notifie pas. Un retrait du catalogue KEV ne notifie pas.
+Une CVE dont le statut KEV n’a jamais été vérifié (clé `kev` absente : premier déploiement, ancien checkpoint, rollback) constitue une référence inconnue et reste silencieuse. Une CVE qui entre dans la référence sans verdict KEV (flux CISA indisponible, passe de rattrapage) y est enregistrée « vérifiée, non listée », pour que sa future inscription reste notifiable. Une CVE déjà annoncée dans le même run (nouvelle CVE ou escalade) porte la marque dans cet événement, sans section KEV en double. Une inscription est définitive : un retrait du catalogue KEV ne notifie pas et ne remet pas la marque à `false`. Une correction de maintenance conserve la marque durable de sa CVE.
 
 Ne doivent pas produire de notification CVE :
 

@@ -349,5 +349,105 @@ class CollectionPathTests(unittest.TestCase):
         self.assertEqual(len(coverage["gaps"]), 1)
         self.assertEqual(coverage["continuousSince"], coverage["gaps"][0]["detectedAt"])
 
+    def test_a_cve_added_while_kev_is_down_is_still_notified_when_listed(self) -> None:
+        self.run_collection(kev={"CVE-2026-1": LISTED})
+        self.catalog_cves.append(cve("CVE-2026-3", "medium", FMG))
+        quiet = self.run_collection(kev=fw.KevFeedError("indisponible"))
+        quiet.send_message.assert_not_called()
+        self.assertNotIn(
+            "kev", next(c for c in self.catalog()["cves"] if c["id"] == "CVE-2026-3")
+        )
+        listed = self.run_collection(kev={"CVE-2026-1": LISTED, "CVE-2026-3": LISTED})
+        listed.send_message.assert_called_once()
+        body = listed.send_message.call_args.args[0].get_body(preferencelist=("plain",)).get_content()
+        self.assertIn("CVE-2026-3", body)
+
+class ReviewRegressionTests(unittest.TestCase):
+    """Paths found in review that silently lost a KEV notification or duplicated a CVE."""
+
+    def setUp(self) -> None:
+        self.settings = notify.validate_notification_settings(settings_payload())
+
+    def test_a_consumed_reconciliation_keeps_the_durable_kev_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "notify-history.json"
+            checked = {**cve("CVE-2026-1", "medium", FMG), "kev": False}
+            notify.ensure_checkpoint(
+                path, {"versionsByProduct": {}, "cvesById": {"CVE-2026-1": checked}, "health": {}}
+            )
+            corrected = {**cve("CVE-2026-1", "medium", FMG), "title": "Corrigé"}
+            notify.stage_pending_cve_baseline(path, {"CVE-2026-1": corrected})
+            self.assertEqual(
+                notify.consume_pending_cve_baseline(path, {"CVE-2026-1": corrected}), (1, 0)
+            )
+            durable = notify.load_notify_state(path)["checkpoint"]["cvesById"]["CVE-2026-1"]
+        self.assertEqual(durable["title"], "Corrigé")
+        self.assertIs(durable["kev"], False)
+        events = notify.derive_kev_events(
+            {"CVE-2026-1": durable},
+            {"CVE-2026-1": {**corrected, "kev": LISTED}},
+            self.settings,
+        )
+        self.assertEqual(len(events), 1)
+
+    def test_durable_kev_merge_never_forges_a_baseline(self) -> None:
+        merged = notify.with_durable_kev(
+            {"CVE-2026-1": {"id": "CVE-2026-1", "kev": LISTED}, "CVE-2026-2": {"id": "CVE-2026-2"}},
+            {"CVE-2026-2": {"id": "CVE-2026-2", "kev": False}},
+        )
+        self.assertNotIn("kev", merged["CVE-2026-1"])
+        self.assertIs(merged["CVE-2026-2"]["kev"], False)
+
+    def test_an_escalation_carrying_the_flag_is_the_only_section_for_its_cve(self) -> None:
+        before = {"CVE-2026-1": {**cve("CVE-2026-1", "medium", FMG), "kev": False}}
+        after = {"CVE-2026-1": {**cve("CVE-2026-1", "high", FMG), "kev": LISTED}}
+        escalations = notify.derive_cve_modification_events(before, after, self.settings)
+        self.assertEqual(escalations[0].details["kev"], LISTED)
+        self.assertEqual(
+            notify.derive_kev_events(
+                before, after, self.settings, already_notified_ids={"CVE-2026-1"}
+            ),
+            [],
+        )
+
+    def test_a_document_without_fortinet_entries_is_refused(self) -> None:
+        with self.assertRaises(fw.KevFeedError):
+            fw.parse_cisa_kev(kev_document([]))
+
+    def test_a_listing_is_definitive_so_a_degraded_feed_cannot_replay_it(self) -> None:
+        state = fw.normalize_state({"cves": [{**cve("CVE-2026-1", "medium", FMG), "kev": LISTED}]})
+        self.assertEqual(fw.apply_kev_annotations(state, {"CVE-2026-9": LISTED}), 1)
+        self.assertEqual(state["cves"][0]["kev"], LISTED)
+
+    def test_recovery_retries_a_failed_kev_read_with_its_cve_pass(self) -> None:
+        import scheduled_refresh as refresh
+
+        plan = refresh.build_retry_plan(
+            {"sources": {"cisa-kev": {"status": "error", "consecutiveFailures": 1}}}
+        )
+        self.assertIn("--cve-catalog", plan.catalog_args)
+        self.assertIn("--kev-catalog", plan.catalog_args)
+        psirt_plan = refresh.build_retry_plan(
+            {"sources": {"cve-psirt": {"status": "error", "consecutiveFailures": 1}}}
+        )
+        self.assertIn("--kev-catalog", psirt_plan.catalog_args)
+
+    def test_coverage_is_chained_on_the_record_on_disk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            earlier_gap = {"detectedAt": "T1", "previousCheckAt": "T0"}
+            fw.write_json(
+                path,
+                fw.normalize_state(
+                    {"cveCoverage": {"rssSeenIds": ["A"], "gaps": [earlier_gap],
+                                     "continuousSince": "T1", "lastCheckAt": "T1"}}
+                ),
+            )
+            stale_snapshot = fw.normalize_state({})
+            final = fw.commit_collected_state(path, stale_snapshot, [], [], {}, rss_ids=["A", "B"])
+        self.assertEqual(final["cveCoverage"]["gaps"], [earlier_gap])
+        self.assertEqual(final["cveCoverage"]["continuousSince"], "T1")
+
+
 if __name__ == "__main__":
     unittest.main()

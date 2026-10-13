@@ -2392,6 +2392,26 @@ def stage_pending_cve_baseline(path: Path, cves_by_id: dict[str, Any]) -> int:
     return len(staged)
 
 
+def with_durable_kev(
+    entries: dict[str, Any], durable_by_id: dict[str, Any]
+) -> dict[str, Any]:
+    """Staged corrections as they may enter the checkpoint: with the durable KEV flag.
+
+    A staged correction is a freshly parsed CSAF entry, which never carries ``kev``. Merged as is,
+    it would reset the CVE's KEV baseline to "never checked" and silence a later, genuine KEV
+    listing; carrying any ``kev`` it might hold would instead forge a baseline. The durable flag of
+    the same CVE (when there is one) is therefore the only one kept.
+    """
+    merged: dict[str, Any] = {}
+    for cve_id, entry in entries.items():
+        corrected = {key: value for key, value in entry.items() if key != "kev"}
+        durable = durable_by_id.get(cve_id)
+        if isinstance(durable, dict) and "kev" in durable:
+            corrected["kev"] = durable["kev"]
+        merged[cve_id] = corrected
+    return merged
+
+
 def consume_pending_cve_baseline(
     path: Path, cves_by_id: dict[str, Any]
 ) -> tuple[int, int]:
@@ -2422,7 +2442,8 @@ def consume_pending_cve_baseline(
         if not applied:
             return (0, len(remaining or {}))
         checkpoint = dict(checkpoint)
-        checkpoint["cvesById"] = {**checkpoint.get("cvesById", {}), **applied}
+        durable_cves = checkpoint.get("cvesById", {})
+        checkpoint["cvesById"] = {**durable_cves, **with_durable_kev(applied, durable_cves)}
         state["checkpoint"] = checkpoint
         if remaining:
             state[PENDING_CVE_BASELINE_KEY] = remaining
@@ -3320,8 +3341,9 @@ def derive_kev_events(
     - before ``kev: False`` (checked, not listed) and after a listing: notified once;
     - before without the key (never checked: first deployment, older checkpoint, a rollback that
       dropped the flags) or already listed: silent, so no KEV history is ever replayed;
-    - a CVE new to the checkpoint and already listed is notified, unless its own new-CVE event
-      (``already_notified_ids``) already carries the KEV flag.
+    - a CVE new to the checkpoint and already listed is notified;
+    - in every case, not when another event of the same run for that CVE (new CVE, severity
+      escalation: ``already_notified_ids``) already carries the KEV flag -- one CVE, one section.
 
     A listing that disappears (CISA removal) is silent. The dedup key is stable per CVE.
     """
@@ -3330,11 +3352,10 @@ def derive_kev_events(
     for cve_id, after in cves_after_by_id.items():
         if not isinstance(after.get("kev"), dict):
             continue
+        if cve_id in already_notified_ids:
+            continue
         before = cves_before_by_id.get(cve_id)
-        if before is not None:
-            if before.get("kev", None) is not False:
-                continue
-        elif cve_id in already_notified_ids:
+        if before is not None and before.get("kev", None) is not False:
             continue
         affected = _selected_affected_entries(after, settings)
         if not affected:
