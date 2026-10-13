@@ -411,7 +411,7 @@ def test_select_product_model_version(app_page):
     assert app_page.eval_on_selector("#currentSelect", "el => el.value") == "6.2.4"
     assert app_page.eval_on_selector("#targetSelect", "el => el.value") == "8.0.0"
     # Changing a dropdown must not surface a path on its own (no click yet).
-    expect(app_page.locator("#result")).not_to_contain_text("Recommended path")
+    expect(app_page.locator("#result")).not_to_contain_text("Chemin recommandé")
 
 
 def test_target_versions_only_offer_strict_upgrades_after_source_change(app_page):
@@ -470,6 +470,8 @@ def test_successful_path_fetch_shows_hops_and_builds(app_page, fortios_server):
     expect(app_page.locator(".step-track")).to_contain_text("6.2.4")
     expect(app_page.locator(".step-track")).to_contain_text("7.0.14")
     expect(app_page.locator(".step-track")).to_contain_text("8.0.0")
+    expect(app_page.locator(".step-label")).to_have_text(["Actuelle", "Étape 1", "Cible"])
+    expect(app_page.locator("tr.target-row .badge.target")).to_have_text("Cible")
 
     table = app_page.locator("table").first
     expect(table).to_contain_text("1234")  # build for 6.2.4 from the fixture catalog
@@ -734,6 +736,40 @@ def test_health_dot_is_red_when_compat_matrix_fails_even_if_daily_run_is_ok(app_
 
     app_page.click("#healthDetails summary")
     expect(app_page.locator("#healthTableContainer")).to_contain_text("PDF de compatibilité introuvable")
+
+
+def test_health_dot_is_orange_and_says_so_when_a_source_only_warns(app_page, fortios_server):
+    """A source in warning (e.g. a few PSIRT advisories skipped) does not fail the collection,
+    but the summary must not read as a plain green success: orange dot, the warning count in the
+    text, and the warning message in orange rather than in error red."""
+    import datetime as dt
+
+    recent = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    health_payload = {
+        "sources": {
+            "daily-run": {
+                "status": "warning", "lastAttemptAt": recent,
+                "lastSuccessAt": recent, "consecutiveFailures": 0,
+                "lastError": "Avertissement : cve-psirt", "durationSeconds": 5.0,
+            },
+            "cve-psirt": {
+                "status": "warning", "lastAttemptAt": recent,
+                "lastSuccessAt": recent, "consecutiveFailures": 0,
+                "lastError": "3 advisorie(s) PSIRT ignorée(s) (réseau/parsing)", "durationSeconds": 3.0,
+            },
+        },
+        "updatedAt": recent,
+    }
+    (fortios_server.data_dir / "fortios-health.json").write_text(__import__("json").dumps(health_payload))
+
+    app_page.reload()
+    app_page.wait_for_selector("#healthSummaryText:not(:text('Chargement'))")
+    expect(app_page.locator("#healthSummaryDot")).to_have_class(re.compile("\\bwarning\\b"))
+    expect(app_page.locator("#healthSummaryText")).to_contain_text("réussie avec 1 avertissement")
+
+    app_page.click("#healthDetails summary")
+    expect(app_page.locator("#healthTableContainer td.health-warning-cell").first).to_contain_text("ignorée")
+    expect(app_page.locator("#healthTableContainer td.health-error-cell")).to_have_count(0)
 
 
 def login_cert_admin(page, fortios_server) -> None:

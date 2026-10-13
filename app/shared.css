@@ -471,6 +471,7 @@ a.badge:hover {
 .badge.danger { background: var(--soft-red); color: var(--danger); }
 .badge.ok { background: var(--soft-green); color: var(--ok); }
 .badge.info { background: var(--soft-blue); color: var(--info); }
+.badge.target { background: var(--ink); color: #fff; }
 
 .steps {
   padding: 26px 18px 18px;
@@ -514,8 +515,8 @@ a.badge:hover {
 }
 
 .step.target .step-box {
-  background: var(--brand);
-  border-color: var(--brand);
+  background: var(--ink);
+  border-color: var(--ink);
   color: #fff;
 }
 
@@ -577,7 +578,7 @@ th {
 }
 
 tr:last-child td { border-bottom: 0; }
-tr.target-row { background: var(--soft-red); }
+tr.target-row { background: var(--soft-blue); }
 
 .version-cell {
   font-weight: 800;
@@ -895,6 +896,11 @@ a.note-token:hover {
 
 .health-table td.health-error-cell {
   color: var(--danger);
+  white-space: normal;
+}
+
+.health-table td.health-warning-cell {
+  color: var(--warn);
   white-space: normal;
 }
 
