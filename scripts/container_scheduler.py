@@ -2,7 +2,9 @@
 """Run FortiOS refreshes inside the scheduler container.
 
 Runs the daily jobs at 07:00 (full), 07:45 (targeted recovery), and 15:30 (CVE)
-in Europe/Paris.  The recovery pass retries only sources left in error by the full run.
+in Europe/Paris, plus the weekly CVE history check on Sundays at 06:00 (also run once at start
+while the catalogue has never been checked).  The recovery pass retries only sources left in
+error by the full run.
 Set FORTIOS_RUN_ON_START=1 for a deliberate initial full refresh after migration.
 """
 
@@ -16,12 +18,20 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from scheduled_refresh import run_cve_refresh, run_full_refresh, run_recovery
+from scheduled_refresh import (
+    cve_history_never_checked,
+    run_cve_history_refresh,
+    run_cve_refresh,
+    run_full_refresh,
+    run_recovery,
+)
 
 PARIS = ZoneInfo("Europe/Paris")
 MORNING = (7, 0)
 RECOVERY = (7, 45)
 AFTERNOON = (15, 30)
+HISTORY = (6, 0)
+HISTORY_WEEKDAY = 6  # Sunday
 RECOVERY_ATTEMPT_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "fortios-recovery-attempt.lock"
 )
@@ -29,13 +39,12 @@ RECOVERY_ATTEMPT_PATH = (
 
 def next_job(now: datetime) -> tuple[datetime, str]:
     candidates: list[tuple[datetime, str]] = []
-    for day_offset in range(2):
+    for day_offset in range(8):
         day = (now + timedelta(days=day_offset)).date()
-        for hour, minute, job in (
-            (*MORNING, "full"),
-            (*RECOVERY, "recovery"),
-            (*AFTERNOON, "cve"),
-        ):
+        jobs = [(*MORNING, "full"), (*RECOVERY, "recovery"), (*AFTERNOON, "cve")]
+        if day.weekday() == HISTORY_WEEKDAY:
+            jobs.append((*HISTORY, "cve-history"))
+        for hour, minute, job in jobs:
             scheduled = datetime(
                 day.year, day.month, day.day, hour, minute, tzinfo=PARIS
             )
@@ -105,6 +114,8 @@ def run_scheduled_job(
         result = run_full_refresh()
     elif job == "recovery":
         result = run_recovery_once(now=started, marker_path=marker_path)
+    elif job == "cve-history":
+        result = run_cve_history_refresh()
     else:
         result = run_cve_refresh()
     finished = now_fn()
@@ -138,6 +149,11 @@ def main() -> int:
             "Running missed 07:45 recovery check after scheduler restart.", flush=True
         )
         run_recovery_once(now=now)
+    if cve_history_never_checked():
+        # First deployment of the history check: import the PSIRT history now rather than on
+        # Sunday, so the catalogue stops looking complete while it is not.
+        print("Running initial CVE history check.", flush=True)
+        run_scheduled_job("cve-history")
 
     while True:
         scheduled, job = next_job(datetime.now(PARIS))

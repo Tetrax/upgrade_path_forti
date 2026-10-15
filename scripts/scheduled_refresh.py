@@ -439,6 +439,34 @@ def run_cve_refresh(
         )
 
 
+def run_cve_history_refresh(
+    *, root: Path = ROOT, runner: Runner = subprocess.run, python: str = sys.executable
+) -> int:
+    """Weekly full history check: walk the per-product PSIRT listing and import, silently, every
+    advisory the catalogue lacks (see fortios_watch.collect_cve_catalog(backfill=True)). No KEV
+    read here: a backfill derives no notification, so a KEV listing it observed first would be
+    absorbed silently; the next normal pass flags the imported CVEs."""
+    with refresh_lock(root):
+        return _run(
+            [
+                python,
+                "scripts/fortios_watch.py",
+                "--base",
+                "data/fortios-data.generated.json",
+                "--cve-backfill",
+            ],
+            root=root,
+            runner=runner,
+        )
+
+
+def cve_history_never_checked(root: Path = ROOT) -> bool:
+    """True while the catalogue carries no record of a full history check (first deployment)."""
+    catalogue = read_json(root / "data" / "fortios-data.generated.json", {})
+    coverage = catalogue.get("cveCoverage") if isinstance(catalogue, dict) else None
+    return not (isinstance(coverage, dict) and isinstance(coverage.get("history"), dict))
+
+
 def run_recovery(
     *,
     root: Path = ROOT,

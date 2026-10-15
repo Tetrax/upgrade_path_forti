@@ -1635,16 +1635,27 @@
     function renderCveCoverage() {
       const published = state.cves.map(cve => cve.publishedAt).filter(Boolean).sort();
       const coverage = state.cveCoverage || {};
-      const parts = [`${state.cves.length} CVE issues du flux RSS PSIRT Fortinet (environ 50 derniers bulletins)`];
+      const history = coverage.history && typeof coverage.history === "object" ? coverage.history : null;
+      const unresolved = history && Array.isArray(history.unresolved) ? history.unresolved.filter(item => item && item.id) : [];
+      const parts = [history && history.checkedAt
+        ? `${state.cves.length} CVE PSIRT Fortinet ; historique complet des produits suivis vérifié le ${formatDate(history.checkedAt)} (${history.listedAdvisories || 0} bulletins)`
+        : `${state.cves.length} CVE issues du flux RSS PSIRT Fortinet (environ 50 derniers bulletins)`];
       if (published.length) parts[0] += `, publiées du ${formatDate(published[0])} au ${formatDate(published[published.length - 1])}`;
       if (coverage.continuousSince) parts.push(`suivi continu du flux vérifié depuis le ${formatDate(coverage.continuousSince)}`);
-      let text = `Couverture : ${parts.join(" ; ")}. Un bulletin plus ancien peut manquer : « Aucune » n'est pas une garantie.`;
+      let text = history && history.checkedAt
+        ? `Couverture : ${parts.join(" ; ")}.`
+        : `Couverture : ${parts.join(" ; ")}. Un bulletin plus ancien peut manquer : « Aucune » n'est pas une garantie.`;
+      const unresolvedHtml = unresolved.length
+        ? ` <span class="cve-coverage-gap">⚠ ${unresolved.length} bulletin(s) non analysable(s) automatiquement, à vérifier : ${unresolved.map(item =>
+            `<a href="https://fortiguard.fortinet.com/psirt/${encodeURIComponent(item.id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.id)}</a>${item.reason ? ` (${escapeHtml(item.reason)})` : ""}`
+          ).join(", ")}.</span>`
+        : "";
       const gaps = Array.isArray(coverage.gaps) ? coverage.gaps : [];
       const lastGap = gaps[gaps.length - 1];
       const gapHtml = lastGap && lastGap.detectedAt
         ? ` <span class="cve-coverage-gap">⚠ Trou possible dans le flux détecté le ${escapeHtml(formatDate(lastGap.detectedAt))} : des bulletins ont pu être manqués.</span>`
         : "";
-      return `<p class="cve-coverage muted">${escapeHtml(text)}${gapHtml}</p>`;
+      return `<p class="cve-coverage muted">${escapeHtml(text)}${gapHtml}${unresolvedHtml}</p>`;
     }
 
     function renderCveCallouts(cves, path) {
