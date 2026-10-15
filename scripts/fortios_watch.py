@@ -3820,9 +3820,10 @@ def main(argv: list[str]) -> int:
             # on its own -- retrying seconds later (the per-request backoff in read_url_with_retry)
             # mostly doesn't help with that, so wait for real before giving the still-failing ones
             # another shot. Bounded and spaced out (not "retry forever until green"): an advisory
-            # stay without a usable CSAF link for days (see collect_cve_entries_for_advisory's
-            # docstring), so an unbounded loop would spin on it forever every single day; and hammering PSIRT harder/faster when it's already
-            # struggling only makes the rate limiting worse, not better (observed directly: 1
+            # can stay without a usable CSAF link for days (see collect_cve_entries_for_advisory's
+            # docstring), so an unbounded loop would spin on it forever every single day; and
+            # hammering PSIRT harder/faster when it's already struggling only makes the rate
+            # limiting worse, not better (observed directly: 1
             # skip left completely alone, vs 3 after two manual back-to-back re-runs). An advisory
             # whose genuine page publishes no CSAF export at all is never retried: no wait helps.
             for delay in args.cve_retry_delays_seconds:
