@@ -2236,6 +2236,35 @@ class CsafResolutionError(RuntimeError):
     """
 
 
+class CsafUnavailableError(CsafResolutionError):
+    """The advisory page is genuine but Fortinet publishes no CSAF export for it.
+
+    Older advisories only carry the legacy CVRF export (``/psirt/cvrf/<id>``),
+    deliberately not used as an applicability source (see the PSIRT section
+    comment). Retrying cannot help: the advisory is left untouched like any
+    other unresolved one, but reported as "sans export CSAF", not as a failure.
+    """
+
+
+# Why an advisory stayed unresolved, as shown in the run report and the health message.
+SKIP_REASON_NO_CSAF = "sans export CSAF"
+SKIP_REASON_NO_LINK = "page sans lien CSAF"
+SKIP_REASON_INVALID = "CSAF invalide"
+SKIP_REASON_NETWORK = "réseau"
+
+
+def skip_reason(error: BaseException) -> str:
+    if isinstance(error, CsafUnavailableError):
+        return SKIP_REASON_NO_CSAF
+    if isinstance(error, CsafResolutionError):
+        if "no validated CSAF link" in str(error):
+            return SKIP_REASON_NO_LINK
+        return SKIP_REASON_INVALID
+    if isinstance(error, json.JSONDecodeError):
+        return SKIP_REASON_INVALID
+    return SKIP_REASON_NETWORK
+
+
 def _validated_csaf_url(candidate: str) -> str | None:
     """Return `candidate` restricted to Fortinet's CSAF file host, or None.
 
@@ -2461,6 +2490,35 @@ def _csaf_status_list(advisory_id: str, status: dict[str, Any], key: str) -> lis
     return values
 
 
+def _csaf_product_tree_out_of_scope(doc: dict[str, Any]) -> bool:
+    """True only when the product tree names at least one product, all recognizably
+    untracked Fortinet lines. A tracked or uninterpretable name keeps the export invalid."""
+    names: list[Any] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for child in node:
+                walk(child)
+        elif isinstance(node, dict):
+            if node.get("category") in ("product", "product_name", "product_family"):
+                names.append(node.get("name"))
+            product = node.get("product")
+            if isinstance(product, dict):
+                names.append(product.get("name"))
+            for key in ("branches", "full_product_names"):
+                walk(node.get(key))
+            if "product_id" in node and "name" in node and "category" not in node:
+                names.append(node.get("name"))
+
+    walk(doc.get("product_tree"))
+    if not names:
+        return False
+    try:
+        return all(split_csaf_product_value(name) is None for name in names)
+    except CsafResolutionError:
+        return False
+
+
 def validate_csaf_document(advisory_id: str, doc: Any) -> dict[str, Any]:
     """Refuse anything that is not the tracked advisory's own CSAF export.
 
@@ -2484,6 +2542,10 @@ def validate_csaf_document(advisory_id: str, doc: Any) -> dict[str, Any]:
     publisher = document.get("publisher")
     if not isinstance(publisher, dict) or publisher.get("name") != "Fortinet PSIRT":
         raise CsafResolutionError(f"{advisory_id}: CSAF publisher is not Fortinet PSIRT")
+    if "vulnerabilities" not in doc and _csaf_product_tree_out_of_scope(doc):
+        # Fortinet omits the section on some exports that only name products this tool does
+        # not track (FG-IR-26-144: FortiSOAR only) — a confirmed "nothing tracked here".
+        return doc
     if not isinstance(doc.get("vulnerabilities"), list):
         raise CsafResolutionError(f"{advisory_id}: CSAF vulnerabilities is not a list")
     for vulnerability in doc["vulnerabilities"]:
@@ -2692,6 +2754,15 @@ def collect_cve_entries_for_advisory(
         redirect_validator=_psirt_page_redirect_allowed,
     )
     csaf_url = discover_csaf_url(advisory_id, raw_html)
+    if (
+        csaf_url is None
+        and f"/psirt/cvrf/{advisory_id}" in raw_html
+        and "csaf" not in raw_html.lower()
+    ):
+        # The advisory's own page (it links its legacy CVRF export) that never mentions CSAF: an
+        # older advisory Fortinet never exported to CSAF. An anti-bot page carries no CVRF link,
+        # and a CSAF link that fails validation (moved host, tampered URL) stays a failure.
+        raise CsafUnavailableError(f"{advisory_id}: no CSAF export published")
     if csaf_url is None:
         raise CsafResolutionError(
             f"{advisory_id}: no validated CSAF link on the advisory page"
@@ -2772,6 +2843,8 @@ def collect_cve_catalog(
     backfill: bool = False,
     backfill_max_pages: int = 30,
     reconcile_existing: bool = False,
+    *,
+    reasons: dict[str, str] | None = None,
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
     """Per-advisory CVE entries to reconcile (keyed by advisory_id), plus a skipped-id list.
 
@@ -2819,16 +2892,25 @@ def collect_cve_catalog(
                 [*advisory_ids, *sorted(existing_advisory_ids)]
             )
 
-    return fetch_cve_entries_for_advisories(advisory_ids, timeout)
+    return fetch_cve_entries_for_advisories(advisory_ids, timeout, reasons=reasons)
+
+
+def format_skipped_advisories(advisory_ids: list[str], reasons: dict[str, str]) -> str:
+    """'FG-IR-26-144 (CSAF invalide), FG-IR-26-150 (réseau)' — ids grouped by reason."""
+    by_reason: dict[str, list[str]] = {}
+    for advisory_id in advisory_ids:
+        by_reason.setdefault(reasons.get(advisory_id, SKIP_REASON_NETWORK), []).append(advisory_id)
+    return ", ".join(f"{', '.join(ids)} ({reason})" for reason, ids in by_reason.items())
 
 
 def fetch_cve_entries_for_advisories(
-    advisory_ids: list[str], timeout: int
+    advisory_ids: list[str], timeout: int, *, reasons: dict[str, str] | None = None
 ) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
     """Fetch the definitive CSAF result for each id in `advisory_ids`, split into resolved
     results and a skipped list (see collect_cve_catalog's docstring for what each side means to
     callers). Factored out of collect_cve_catalog() so main() can call it a second time with just
-    the skipped ids after a delay, without re-running RSS/listing discovery.
+    the skipped ids after a delay, without re-running RSS/listing discovery. When given,
+    `reasons` receives each skipped id's SKIP_REASON_* (a resolved id's stale reason is dropped).
     """
     results: dict[str, list[dict[str, Any]]] = {}
     skipped: list[str] = []
@@ -2842,12 +2924,16 @@ def fetch_cve_entries_for_advisories(
             http.client.HTTPException,
             json.JSONDecodeError,
             CsafResolutionError,
-        ):
+        ) as error:
             entries = None
+            if reasons is not None:
+                reasons[advisory_id] = skip_reason(error)
         if entries is None:
             skipped.append(advisory_id)
         else:
             results[advisory_id] = entries
+            if reasons is not None:
+                reasons.pop(advisory_id, None)
         time.sleep(0.2)
     return results, skipped
 
@@ -3060,6 +3146,7 @@ def build_report(
     cve_catalog_enabled: bool = False,
     cve_stats: CveReconciliationStats | None = None,
     skipped_cves: list[str] | None = None,
+    skip_reasons: dict[str, str] | None = None,
 ) -> str:
     before_versions = all_versions(before)
     after_versions = all_versions(after)
@@ -3113,13 +3200,19 @@ def build_report(
         )
     if cve_catalog_enabled:
         skipped_cves = skipped_cves or []
+        skip_reasons = skip_reasons or {}
         stats = cve_stats or CveReconciliationStats()
+        failing = [i for i in skipped_cves if skip_reasons.get(i) != SKIP_REASON_NO_CSAF]
+        no_csaf = [i for i in skipped_cves if skip_reasons.get(i) == SKIP_REASON_NO_CSAF]
         lines.extend(
             [
                 "## CVE PSIRT Fortinet",
                 "",
                 f"- CVE ajoutées : {stats.added} · mises à jour : {stats.updated} · supprimées : {stats.removed}",
-                f"- Advisories PSIRT ignorées (erreur réseau) : {', '.join(skipped_cves) if skipped_cves else 'aucune'}",
+                "- Advisories PSIRT non résolues : "
+                + (format_skipped_advisories(failing, skip_reasons) if failing else "aucune"),
+                "- Advisories sans export CSAF (non analysées, à vérifier sur la page PSIRT) : "
+                + (", ".join(no_csaf) if no_csaf else "aucune"),
                 "",
             ]
         )
@@ -3680,6 +3773,7 @@ def main(argv: list[str]) -> int:
     cve_stats = CveReconciliationStats()
     cve_results_by_advisory: dict[str, list[dict[str, Any]]] = {}
     skipped_cves: list[str] = []
+    skip_reasons: dict[str, str] = {}
     # Set when the maintenance pass cannot make its silence intent durable (see the staging block
     # below): the reconciled results are then withheld from the commit and the health record says
     # so, instead of committing history corrections nothing would keep silent.
@@ -3701,6 +3795,7 @@ def main(argv: list[str]) -> int:
                 backfill=args.cve_backfill,
                 backfill_max_pages=args.cve_backfill_max_pages,
                 reconcile_existing=args.cve_reconcile_existing,
+                reasons=skip_reasons,
             )
             # A handful of advisories failing out of the ~50 fetched daily is almost always a
             # transient PSIRT hiccup (rate limiting, brief outage) that clears up within minutes
@@ -3712,15 +3807,26 @@ def main(argv: list[str]) -> int:
             # indistinguishable here from a real failure, so an unbounded loop would spin on it
             # forever every single day; and hammering PSIRT harder/faster when it's already
             # struggling only makes the rate limiting worse, not better (observed directly: 1
-            # skip left completely alone, vs 3 after two manual back-to-back re-runs).
+            # skip left completely alone, vs 3 after two manual back-to-back re-runs). An advisory
+            # whose genuine page publishes no CSAF export at all is never retried: no wait helps.
             for delay in args.cve_retry_delays_seconds:
-                if not skipped_cves:
+                retryable = [
+                    advisory_id
+                    for advisory_id in skipped_cves
+                    if skip_reasons.get(advisory_id) != SKIP_REASON_NO_CSAF
+                ]
+                if not retryable:
                     break
                 time.sleep(delay)
-                retried_results, skipped_cves = fetch_cve_entries_for_advisories(
-                    skipped_cves, args.timeout
+                retried_results, still_skipped = fetch_cve_entries_for_advisories(
+                    retryable, args.timeout, reasons=skip_reasons
                 )
                 cve_results_by_advisory.update(retried_results)
+                skipped_cves = [
+                    advisory_id
+                    for advisory_id in skipped_cves
+                    if advisory_id not in retryable or advisory_id in still_skipped
+                ]
 
             # Durable silence intent, written BEFORE the catalogue commit further below: the
             # corrected historical entries are declared "not news" on disk first, so even if this
@@ -3767,6 +3873,13 @@ def main(argv: list[str]) -> int:
                 cve_stats += replace_cves_for_advisory(state, advisory_id, entries)
 
             total_considered = len(cve_results_by_advisory) + len(skipped_cves)
+            # Only a real failure turns the source orange: a page without any CSAF export is a
+            # known, permanent state, listed in the run report instead.
+            failing_cves = [
+                advisory_id
+                for advisory_id in skipped_cves
+                if skip_reasons.get(advisory_id) != SKIP_REASON_NO_CSAF
+            ]
             if reconcile_aborted:
                 cve_health_status = HEALTH_STATUS_ERROR
                 cve_health_error = (
@@ -3778,9 +3891,12 @@ def main(argv: list[str]) -> int:
                 cve_health_error = (
                     f"{len(skipped_cves)} advisorie(s) PSIRT injoignable(s)"
                 )
-            elif skipped_cves:
+            elif failing_cves:
                 cve_health_status = HEALTH_STATUS_WARNING
-                cve_health_error = f"{len(skipped_cves)} advisorie(s) PSIRT ignorée(s) (réseau/parsing)"
+                cve_health_error = (
+                    f"{len(failing_cves)} advisorie(s) PSIRT non résolue(s) : "
+                    + format_skipped_advisories(failing_cves, skip_reasons)
+                )
             else:
                 cve_health_status = HEALTH_STATUS_OK
                 cve_health_error = None
@@ -3929,6 +4045,7 @@ def main(argv: list[str]) -> int:
             or args.cve_reconcile_existing,
             cve_stats=cve_stats,
             skipped_cves=skipped_cves,
+            skip_reasons=skip_reasons,
         ),
         encoding="utf-8",
     )
