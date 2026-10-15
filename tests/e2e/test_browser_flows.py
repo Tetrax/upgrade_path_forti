@@ -518,6 +518,51 @@ def test_exploited_cves_are_flagged_and_the_cve_coverage_is_stated(app_page, for
     expect(coverage.locator(".cve-coverage-gap")).to_contain_text("Trou possible")
 
 
+def test_cve_coverage_states_the_checked_history_and_what_could_not_be_read(app_page, fortios_server):
+    """Once the weekly backfill walked the whole PSIRT listing, the coverage line says so (no
+    more "not a guarantee" disclaimer) and links every advisory it could not read."""
+    catalog_path = fortios_server.data_dir / "fortios-data.generated.json"
+    catalog = __import__("json").loads(catalog_path.read_text(encoding="utf-8"))
+    catalog["cveCoverage"] = {
+        "continuousSince": "2026-10-13T05:00:00Z", "lastCheckAt": "2026-10-13T05:00:00Z",
+        "rssSeenIds": [], "gaps": [],
+        "history": {
+            "checkedAt": "2026-10-15T18:00:00Z", "listedAdvisories": 318, "failed": 0,
+            "unresolved": [{"id": "FG-IR-22-059", "reason": "sans export CSAF"}],
+        },
+    }
+    catalog_path.write_text(__import__("json").dumps(catalog), encoding="utf-8")
+    app_page.reload()
+
+    fortios_server.set_mock_path_response(["6.2.4", "7.0.14", "8.0.0"])
+    select_path(app_page, current="6.2.4", target="8.0.0")
+    app_page.click("#goButton")
+
+    coverage = app_page.locator(".cve-coverage")
+    expect(coverage).to_contain_text("historique des produits suivis vérifié en entier le")
+    expect(coverage).to_contain_text("(318 bulletins)")
+    expect(coverage).not_to_contain_text("n'est pas une garantie")
+    link = coverage.locator(".cve-coverage-gap a")
+    expect(link).to_have_text("FG-IR-22-059")
+    expect(link).to_have_attribute("href", "https://fortiguard.fortinet.com/psirt/FG-IR-22-059")
+    expect(coverage.locator(".cve-coverage-gap")).to_contain_text("1 bulletin(s) non analysable(s)")
+
+    # A check that could not read everything says so and keeps the disclaimer.
+    catalog["cveCoverage"]["history"].update({
+        "failed": 12,
+        "unresolved": [{"id": f"FG-IR-24-{index:03d}", "reason": "réseau"} for index in range(12)],
+    })
+    catalog_path.write_text(__import__("json").dumps(catalog), encoding="utf-8")
+    app_page.reload()
+    select_path(app_page, current="6.2.4", target="8.0.0")
+    app_page.click("#goButton")
+    expect(coverage).to_contain_text("vérifié en partie")
+    expect(coverage).to_contain_text("12 non lu(s)")
+    expect(coverage).to_contain_text("n'est pas une garantie")
+    expect(coverage.locator(".cve-coverage-gap a")).to_have_count(10)
+    expect(coverage.locator(".cve-coverage-gap")).to_contain_text("et 2 autre(s)")
+
+
 # 5 & 6. Fortinet unavailable -> fallback to cached path, explicit cache banner ----------
 
 def test_fortinet_unavailable_falls_back_to_cached_path_with_banner(app_page, fortios_server):
