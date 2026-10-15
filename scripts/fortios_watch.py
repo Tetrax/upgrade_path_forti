@@ -3070,7 +3070,9 @@ def is_backfill_history(entry: dict[str, Any], now: dt.datetime) -> bool:
     try:
         published = dt.date.fromisoformat(str(entry.get("publishedAt") or "")[:10])
     except ValueError:
-        return False  # unknown age: never silenced
+        # Unknown age: never silenced -- except an advisory older than Fortinet's CSAF exports,
+        # whose number alone dates it years back.
+        return is_legacy_advisory_id(str(entry.get("advisoryId") or ""))
     return published <= (now - dt.timedelta(days=BACKFILL_HISTORY_MIN_AGE_DAYS)).date()
 
 
@@ -4291,7 +4293,7 @@ def main(argv: list[str]) -> int:
     # consume_pending_cve_baseline() and the notification block below). Outbox, sentKeys,
     # preferences and the version/health baselines (a combined run must still be able to notify
     # them) are untouched.
-    if args.cve_reconcile_existing and notify_checkpoint is not None:
+    if (args.cve_reconcile_existing or args.cve_backfill) and notify_checkpoint is not None:
         try:
             import fortios_notify
 

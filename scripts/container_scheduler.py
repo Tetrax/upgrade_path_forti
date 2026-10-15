@@ -143,6 +143,12 @@ def _recovery_missed_during_restart(now: datetime) -> bool:
 
 
 def main() -> int:
+    if cve_history_never_checked():
+        # First deployment of the history check: import the PSIRT history now rather than on
+        # Sunday, so the catalogue stops looking complete while it is not -- and BEFORE any
+        # normal pass, which would otherwise read republished old advisories as new CVEs.
+        print("Running initial CVE history check.", flush=True)
+        run_scheduled_job("cve-history")
     now = datetime.now(PARIS)
     if os.environ.get("FORTIOS_RUN_ON_START") == "1":
         print("Running requested initial full refresh.", flush=True)
@@ -154,11 +160,6 @@ def main() -> int:
             "Running missed 07:45 recovery check after scheduler restart.", flush=True
         )
         run_recovery_once(now=now)
-    if cve_history_never_checked():
-        # First deployment of the history check: import the PSIRT history now rather than on
-        # Sunday, so the catalogue stops looking complete while it is not.
-        print("Running initial CVE history check.", flush=True)
-        run_scheduled_job("cve-history")
 
     while True:
         scheduled, job = next_job(datetime.now(PARIS))

@@ -249,6 +249,19 @@ IMPORTED_CVE = {
 }
 
 
+class BackfillHistoryAgeTests(unittest.TestCase):
+    NOW = dt.datetime(2026, 10, 15, tzinfo=dt.UTC)
+
+    def test_thirty_days_or_older_is_history(self) -> None:
+        self.assertTrue(fw.is_backfill_history({"publishedAt": "2026-09-15"}, self.NOW))
+        self.assertFalse(fw.is_backfill_history({"publishedAt": "2026-09-16"}, self.NOW))
+
+    def test_unknown_date_is_history_only_for_a_legacy_advisory_number(self) -> None:
+        self.assertTrue(fw.is_backfill_history({"advisoryId": "FG-IR-22-036"}, self.NOW))
+        self.assertTrue(fw.is_backfill_history({"advisoryId": "FG-IR-23-424", "publishedAt": "?"}, self.NOW))
+        self.assertFalse(fw.is_backfill_history({"advisoryId": "FG-IR-26-190"}, self.NOW))
+
+
 class BackfillCrashSilenceTests(unittest.TestCase):
     """The weekly backfill can be killed by any redeploy: one dying right after its catalogue
     commit, before the checkpoint advance, must not make the next normal pass notify history."""
@@ -354,6 +367,17 @@ class BackfillCrashSilenceTests(unittest.TestCase):
             self.run_pass(tmp, ["--cve-catalog"], {})
             self.assertEqual(self.queued_keys(tmp), ["new-cve|psirt|CVE-2026-44444|critical"])
 
+    def test_notifications_off_the_import_still_joins_the_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            self.setup_state(tmp)
+            payload = fn._default_notification_settings_payload()
+            fn.save_notification_settings(tmp / "notification-settings.json", payload)  # all off
+            self.run_pass(tmp, ["--cve-backfill"], {"FG-IR-23-424": [IMPORTED_CVE]})
+            state = fn.load_notify_state(tmp / "history.json")
+            self.assertIn("CVE-2023-46717", state["checkpoint"]["cvesById"])
+            self.assertFalse(state.get(fn.PENDING_CVE_BASELINE_KEY))
+
     def test_crash_after_the_commit_stays_silent(self) -> None:
         self.assertEqual(self.replayed_keys(stage=fn.stage_pending_cve_baseline), [])
 
@@ -379,6 +403,18 @@ class WeeklySchedulerTests(unittest.TestCase):
         with mock.patch.object(scheduler, "run_cve_history_refresh", return_value=0) as history:
             self.assertEqual(scheduler.run_scheduled_job("cve-history", now_fn=lambda: sunday), 0)
         history.assert_called_once_with()
+
+    def test_the_initial_history_check_runs_before_any_normal_pass_at_start(self) -> None:
+        order: list[str] = []
+        with mock.patch.object(scheduler, "cve_history_never_checked", return_value=True), mock.patch.object(
+            scheduler, "run_scheduled_job", side_effect=lambda job, **_k: order.append(job) or 0
+        ), mock.patch.object(
+            scheduler, "run_recovery_once", side_effect=lambda **_k: order.append("recovery") or 0
+        ), mock.patch.object(scheduler, "_recovery_missed_during_restart", return_value=True), mock.patch.object(
+            scheduler, "next_job", side_effect=RuntimeError("stop")
+        ), self.assertRaises(RuntimeError):
+            scheduler.main()
+        self.assertEqual(order, ["cve-history", "recovery"])
 
     def test_a_history_check_overrunning_0745_runs_the_recovery_right_after(self) -> None:
         now_values = iter([
