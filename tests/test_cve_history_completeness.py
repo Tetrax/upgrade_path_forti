@@ -129,7 +129,14 @@ class CsafShapeTests(unittest.TestCase):
     def test_chassis_and_cloud_variants_are_other_products(self) -> None:
         self.assertIsNone(fw.split_csaf_product_value("FortiOS-6K7K 7.0.10"))
         self.assertIsNone(fw.split_csaf_product_value("FortiManager cloud 7.0 all versions"))
+        self.assertIsNone(fw.split_csaf_product_value("FortiOS-6K7K-7.0.10"))
         self.assertEqual(fw.split_csaf_product_value("FortiOS-7.4.4"), ("FortiOS", "-7.4.4"))
+
+    def test_fortiguard_engines_are_untracked_components(self) -> None:
+        self.assertIsNone(fw.split_csaf_product_value("IPS Engine 7.321"))
+        self.assertIsNone(fw.split_csaf_product_value("AV Engine 6.253"))
+        with self.assertRaises(fw.CsafResolutionError):
+            fw.split_csaf_product_value("Linux kernel 6.1")
 
     def test_empty_known_affected_about_untracked_products_is_skipped(self) -> None:
         untracked = make_vulnerability("CVE-2024-48886", not_affected=("FortiSASE/ 24.4 all versions",))

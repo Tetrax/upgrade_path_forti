@@ -2098,6 +2098,8 @@ CSAF_PRODUCT_NAMES = tuple(sorted(CVE_PRODUCT_MAP, key=len, reverse=True))
 # First word after a tracked name that makes it a different product line, whatever its case:
 # "FortiManager cloud 7.0 all versions", "FortiOS-6K7K 7.0.10" (chassis builds, own numbering).
 CSAF_DISTINCT_PRODUCT_WORDS = frozenset({"cloud", "6k7k"})
+# Fortinet components named without the "Forti" prefix, never tracked here (FortiGuard engines).
+CSAF_UNTRACKED_COMPONENT_PREFIXES = ("IPS Engine", "AV Engine")
 
 
 def discover_advisory_ids_from_rss(timeout: int) -> list[str]:
@@ -2404,11 +2406,11 @@ def split_csaf_product_value(value: Any) -> tuple[str, str] | None:
         stripped = rest.strip().lstrip("-/").strip()
         if stripped and (
             stripped[0].isupper()
-            or stripped.split()[0].lower() in CSAF_DISTINCT_PRODUCT_WORDS
+            or re.split(r"[\s-]", stripped, maxsplit=1)[0].lower() in CSAF_DISTINCT_PRODUCT_WORDS
         ):
             return None  # a different product sharing the prefix ("FortiManager Cloud")
         return product_name, rest
-    if compact.startswith("Forti"):
+    if compact.startswith("Forti") or compact.startswith(CSAF_UNTRACKED_COMPONENT_PREFIXES):
         # A recognizable, untracked Fortinet product line (FortiWeb, FortiPAM,
         # FortiProxy...): explicitly out of scope, whatever its version clause.
         return None
