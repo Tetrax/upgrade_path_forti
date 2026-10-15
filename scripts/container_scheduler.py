@@ -120,12 +120,17 @@ def run_scheduled_job(
         result = run_cve_refresh()
     finished = now_fn()
 
-    # A slow 07:00 run can finish after 07:45, by which point next_job() would otherwise skip
-    # today's recovery slot. Run it immediately after the full lock is released instead.
+    # A slow 07:00 run (or a history check started at boot or on Sunday 06:00) can finish after
+    # 07:45, by which point next_job() would otherwise skip today's recovery slot -- and with it
+    # the catch-up of a missed full pass. Run it immediately after the lock is released instead.
     recovery_due = datetime(
         finished.year, finished.month, finished.day, *RECOVERY, tzinfo=PARIS
     )
-    if job == "full" and started.date() == finished.date() and finished >= recovery_due:
+    if (
+        job in ("full", "cve-history")
+        and started.date() == finished.date()
+        and finished >= recovery_due
+    ):
         recovery_result = run_recovery_once(now=finished, marker_path=marker_path)
         if result == 0:
             result = recovery_result

@@ -312,10 +312,13 @@ CVE email. Notification history, sent keys and outbox stay valid in both directi
 No migration and no preferences change. On its first start, the scheduler sees no
 `cveCoverage.history` in the catalogue and runs the history check once (`--cve-backfill`, then
 every Sunday at 06:00): every PSIRT advisory of the tracked products that the catalogue lacks is
-imported silently (2026-10-15 audit: ~230 advisories, ~240 CVEs, about 15 minutes). Nothing is
-notified: the import goes into the notification checkpoint as history, advisories still in the RSS
-window are left to the normal passes, and the imported CVEs carry no `kev` key (unknown baseline)
-until the next normal pass flags them. Expect a larger catalogue and older CVEs on paths through
+imported (2026-10-15 audit: ~230 advisories, ~240 CVEs). Advisories published at least 30 days
+ago are history: staged as `pendingCveBaseline` before the catalogue commit, then absorbed into the
+notification checkpoint without any `kev` key (unknown baseline, flagged by the next normal pass),
+so nothing is notified, even if the pass is killed mid-way. A more recent one stays out of the
+checkpoint and is notified by the next normal pass. The pass only adds its own confirmed imports to
+the checkpoint; it never advances versions, other CVEs or KEV flags. Its health is the new
+`cve-psirt-history` source. Expect a larger catalogue and older CVEs on paths through
 old trains.
 
 Rollback is image-only for the code; the imported CVEs stay valid catalogue entries for an older

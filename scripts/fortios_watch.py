@@ -416,6 +416,9 @@ SOURCE_CVE_PSIRT = "cve-psirt"
 SOURCE_FORTIOS_LIFECYCLE = "fortios-lifecycle"
 SOURCE_COMPAT_MATRIX = "compat-matrix"
 SOURCE_CISA_KEV = "cisa-kev"
+# The weekly --cve-backfill (full PSIRT history check), kept apart from the daily RSS collection
+# so neither can reset the other's failure count or recovery alert.
+SOURCE_CVE_HISTORY = "cve-psirt-history"
 SOURCE_DAILY_RUN = "daily-run"
 
 ALL_HEALTH_SOURCES = (
@@ -428,6 +431,7 @@ ALL_HEALTH_SOURCES = (
     SOURCE_FORTIOS_LIFECYCLE,
     SOURCE_COMPAT_MATRIX,
     SOURCE_CISA_KEV,
+    SOURCE_CVE_HISTORY,
     SOURCE_DAILY_RUN,
 )
 
@@ -441,6 +445,7 @@ HEALTH_SOURCE_LABELS = {
     SOURCE_FORTIOS_LIFECYCLE: "Cycle de vie FortiOS",
     SOURCE_COMPAT_MATRIX: "Matrice de compatibilité EMS/FortiClient",
     SOURCE_CISA_KEV: "CISA KEV (exploitation active)",
+    SOURCE_CVE_HISTORY: "Historique CVE PSIRT (hebdomadaire)",
 }
 
 DEFAULT_HEALTH_PATH = Path("data/fortios-health.json")
@@ -2562,8 +2567,11 @@ def _csaf_status_out_of_scope(status: dict[str, Any]) -> bool:
     if status.get("known_affected") != []:
         return False
     values: list[Any] = []
-    for key in ("known_not_affected", "fixed"):
-        listed = status.get(key, [])
+    # Every other status (known_not_affected, fixed, under_investigation, first_affected...):
+    # one naming a tracked product keeps the entry in scope, hence invalid without known_affected.
+    for key, listed in status.items():
+        if key == "known_affected":
+            continue
         if not isinstance(listed, list):
             return False
         values.extend(listed)
@@ -2858,7 +2866,14 @@ def parse_legacy_cvrf_document(advisory_id: str, raw_xml: str) -> list[dict[str,
             raise CsafResolutionError(f"{advisory_id}: a CVRF vulnerability has no CVE")
         versions: dict[tuple[str, str | None, str], set[str]] = {}
         statuses = _xml_find(vulnerability, "ProductStatuses")
-        for status in _xml_children(statuses, "Status") if statuses is not None else []:
+        status_nodes = _xml_children(statuses, "Status") if statuses is not None else []
+        if not any(status.get("Type") == "Known Affected" for status in status_nodes):
+            # Nothing exact to read for this CVE: never let it silently drop out of a document
+            # whose other vulnerabilities are readable.
+            raise CsafUnavailableError(
+                f"{advisory_id}: CVRF vulnerability {cve_ids[0]} has no Known Affected status"
+            )
+        for status in status_nodes:
             if status.get("Type") != "Known Affected":
                 continue
             for product_ref in _xml_children(status, "ProductID"):
@@ -3045,6 +3060,20 @@ def replace_cves_for_advisory(
     return CveReconciliationStats(added=added, updated=updated, removed=len(stale_ids))
 
 
+# A backfill absorbs silently only what is history: an advisory first published at least this long
+# ago. A more recent one it imports stays out of the notification baseline, so the next normal
+# pass derives and notifies it like any new CVE (it may have been missed by the RSS window).
+BACKFILL_HISTORY_MIN_AGE_DAYS = 30
+
+
+def is_backfill_history(entry: dict[str, Any], now: dt.datetime) -> bool:
+    try:
+        published = dt.date.fromisoformat(str(entry.get("publishedAt") or "")[:10])
+    except ValueError:
+        return False  # unknown age: never silenced
+    return published <= (now - dt.timedelta(days=BACKFILL_HISTORY_MIN_AGE_DAYS)).date()
+
+
 def collect_cve_catalog(
     existing_advisory_ids: set[str],
     timeout: int,
@@ -3079,9 +3108,8 @@ def collect_cve_catalog(
     backfill=True instead walks the paginated, per-product PSIRT listing to seed deep history —
     hundreds of advisories worth of requests, so it's still bounded to genuinely new ids there;
     meant to be run manually/occasionally (the scheduler runs it weekly), not daily. When given,
-    `listed` receives every advisory id the listing returned. Ids still in the RSS window are
-    left to the normal collections: what they bring is news and must be able to notify, while
-    everything a backfill imports is absorbed silently as history.
+    `listed` receives every advisory id the listing returned. What the backfill may absorb
+    silently is decided by the caller from each advisory's age (see is_backfill_history()).
     """
     if backfill:
         advisory_ids: list[str] = []
@@ -3099,11 +3127,10 @@ def collect_cve_catalog(
         advisory_ids = unique_in_order(advisory_ids)
         if listed is not None:
             listed.extend(advisory_ids)
-        rss_window = set(discover_advisory_ids_from_rss(timeout))
         advisory_ids = [
             advisory_id
             for advisory_id in advisory_ids
-            if advisory_id not in existing_advisory_ids and advisory_id not in rss_window
+            if advisory_id not in existing_advisory_ids
         ]
     else:
         advisory_ids = discover_advisory_ids_from_rss(timeout)
@@ -4013,7 +4040,8 @@ def main(argv: list[str]) -> int:
     rss_ids: list[str] | None = None
     if (args.cve_catalog or args.cve_backfill or args.cve_reconcile_existing) and not args.skip_network:
         t0 = time.monotonic()
-        started_at = health_mark_running(args.health_output, SOURCE_CVE_PSIRT)
+        cve_source = SOURCE_CVE_HISTORY if args.cve_backfill else SOURCE_CVE_PSIRT
+        started_at = health_mark_running(args.health_output, cve_source)
         try:
             existing_advisory_ids = {
                 item.get("advisoryId") for item in state.get("cves", [])
@@ -4065,16 +4093,19 @@ def main(argv: list[str]) -> int:
             # fortios_notify.stage_pending_cve_baseline()). If this intent cannot be made durable,
             # the reconciliation is abandoned for this run: committing corrections that nothing
             # would keep silent is exactly the historical-replay window this pass exists to close.
+            # A --cve-backfill import is history too, and the weekly pass can be killed by any
+            # redeploy: the same intent keeps its imported CVEs silent across such a crash.
             # Skipped only when no notification state exists at all — nothing to protect, since a
             # future first activation bootstraps its baseline silently from whatever the catalogue
             # holds then.
-            if args.cve_reconcile_existing and cve_results_by_advisory and (
+            if (args.cve_reconcile_existing or args.cve_backfill) and cve_results_by_advisory and (
                 notify_checkpoint is not None
                 or os.path.lexists(args.notify_history_output)
             ):
                 try:
                     import fortios_notify
 
+                    staging_now = dt.datetime.now(dt.UTC)
                     fortios_notify.stage_pending_cve_baseline(
                         args.notify_history_output,
                         {
@@ -4082,14 +4113,18 @@ def main(argv: list[str]) -> int:
                             for entries in cve_results_by_advisory.values()
                             for entry in entries
                             if entry.get("id")
+                            and (
+                                args.cve_reconcile_existing
+                                or is_backfill_history(entry, staging_now)
+                            )
                         },
                     )
                 except Exception as error:  # noqa: BLE001 - recorded below, never fatal here.
                     reconcile_aborted = True
                     cve_results_by_advisory = {}
                     sys.stderr.write(
-                        "Avertissement : réconciliation CVE abandonnée, intention durable de "
-                        f"silence non enregistrable ({error}) — les corrections historiques de "
+                        "Avertissement : import ou réconciliation CVE abandonné, intention durable "
+                        f"de silence non enregistrable ({error}) — les entrées historiques de "
                         "ce run ne sont pas committées.\n"
                     )
             # Each advisory here got a definitive CVRF result this run: replace (not just upsert)
@@ -4112,7 +4147,7 @@ def main(argv: list[str]) -> int:
             if reconcile_aborted:
                 cve_health_status = HEALTH_STATUS_ERROR
                 cve_health_error = (
-                    "Réconciliation CVE abandonnée : intention durable de silence "
+                    "Import ou réconciliation CVE abandonné : intention durable de silence "
                     "non enregistrable"
                 )
             elif total_considered > 0 and not cve_results_by_advisory and failing_cves:
@@ -4141,13 +4176,16 @@ def main(argv: list[str]) -> int:
                 cve_history = {
                     "checkedAt": utc_now(),
                     "listedAdvisories": len(listed_ids),
+                    # Unresolved for a reason a later pass can fix (network, invalid export...):
+                    # the check is incomplete, not just a few legacy advisories without data.
+                    "failed": len(failing_cves),
                     "unresolved": [
                         {"id": advisory_id, "reason": skip_reasons.get(advisory_id, SKIP_REASON_NETWORK)}
                         for advisory_id in skipped_cves
                     ],
                 }
             record_source(
-                SOURCE_CVE_PSIRT,
+                cve_source,
                 started_at,
                 t0,
                 status=cve_health_status,
@@ -4156,7 +4194,7 @@ def main(argv: list[str]) -> int:
             )
         except Exception as error:  # noqa: BLE001 - recorded, not re-raised.
             record_source(
-                SOURCE_CVE_PSIRT,
+                cve_source,
                 started_at,
                 t0,
                 status=HEALTH_STATUS_ERROR,
@@ -4314,13 +4352,18 @@ def main(argv: list[str]) -> int:
     else:
         daily_run_status = HEALTH_STATUS_OK
         daily_run_error = None
-    health_results[SOURCE_DAILY_RUN] = HealthSourceResult(
-        status=daily_run_status,
-        started_at=utc_now_precise(),
-        duration_seconds=round(time.monotonic() - run_started_at_monotonic, 3),
-        items_collected=count_firmwares(final_state),
-        error=daily_run_error,
+    # The weekly history check alone is not a daily collection: it leaves the daily summary as is.
+    history_check_only = args.cve_backfill and not (
+        args.cve_catalog or args.docs_catalog or args.forticlient_catalog or args.tool_products
     )
+    if not history_check_only:
+        health_results[SOURCE_DAILY_RUN] = HealthSourceResult(
+            status=daily_run_status,
+            started_at=utc_now_precise(),
+            duration_seconds=round(time.monotonic() - run_started_at_monotonic, 3),
+            items_collected=count_firmwares(final_state),
+            error=daily_run_error,
+        )
     # Health tracking is entirely best-effort: a problem writing it (disk full, permissions...)
     # must never be treated as if the actual collection above had failed. ValueError is caught
     # too, defensively: read_health_state()'s validator already rejects a record with a
@@ -4623,7 +4666,9 @@ def main(argv: list[str]) -> int:
                     flush=True,
                 )
 
-            if args.cve_reconcile_existing:
+            if args.cve_reconcile_existing or args.cve_backfill:
+                # A history import (--cve-backfill, weekly) is bound by the same rule: only the
+                # historical entries it staged and the catalogue confirmed join the baseline.
                 # A maintenance pass may only absorb what it actually resolved: the corrections
                 # its own staged intent confirmed against the catalogue it just committed
                 # (checkpoint_cves_by_id = durable baseline + confirmed corrections), plus the
@@ -4647,8 +4692,8 @@ def main(argv: list[str]) -> int:
                 # unavailable, or a recovery pass) is genuinely new, not history: record it as
                 # "checked, not listed" so the next KEV read can still derive its listing once.
                 # Only the checkpoint gets this baseline, the catalogue keeps the truth (no flag).
-                # Never on a --cve-backfill: what it imports IS history, and must stay an unknown
-                # KEV baseline -- otherwise the next KEV read would replay years of listings.
+                # A --cve-backfill never reaches this branch: its history enters the baseline
+                # through the staged intent above, without any KEV flag (unknown baseline).
                 new_checkpoint = {
                     "versionsByProduct": {
                         product: sorted(versions)
@@ -4657,9 +4702,7 @@ def main(argv: list[str]) -> int:
                     "cvesById": {
                         cve_id: (
                             entry
-                            if args.cve_backfill
-                            or "kev" in entry
-                            or cve_id in checkpoint_cves_by_id
+                            if "kev" in entry or cve_id in checkpoint_cves_by_id
                             else {**entry, "kev": False}
                         )
                         for cve_id, entry in cves_after_by_id.items()

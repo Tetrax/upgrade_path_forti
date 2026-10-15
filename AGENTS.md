@@ -134,7 +134,7 @@ Le checkpoint doit représenter une référence durable antérieure à la collec
 
 La première activation initialise silencieusement la référence courante.
 
-Un backfill historique, notamment un `--cve-backfill`, enrichit le catalogue sans notifier les données déjà existantes. Une reconstruction ou une migration d’état ne doit pas transformer l’historique en nouveaux événements.
+Un backfill historique, notamment un `--cve-backfill`, enrichit le catalogue sans notifier les données déjà existantes. Une reconstruction ou une migration d’état ne doit pas transformer l’historique en nouveaux événements. Le backfill hebdomadaire n’absorbe que ses propres imports d’advisories publiés depuis au moins 30 jours, par l’intention durable `pendingCveBaseline` écrite avant le commit du catalogue ; un advisory plus récent qu’il importe reste notifiable par la passe normale suivante, et il n’avance jamais la référence d’une nouveauté, d’une version ou d’une marque KEV qu’il n’a pas lui-même importée.
 
 Les transitions dépendantes du temps, telles que le passage d’une branche en fin de support, conservent leur propre état persistant. La première observation d’un état déjà ancien est silencieuse ; une transition ultérieure est notifiée une seule fois.
 

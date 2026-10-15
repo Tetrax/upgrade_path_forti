@@ -153,8 +153,12 @@
       "cve-psirt": "CVE PSIRT Fortinet",
       "fortios-lifecycle": "Cycle de vie FortiOS",
       "compat-matrix": "Matrice de compatibilité EMS/FortiClient",
+      "cisa-kev": "CISA KEV (exploitation active)",
+      "cve-psirt-history": "Historique CVE PSIRT (hebdomadaire)",
       "daily-run": "Collecte quotidienne (global)"
     };
+    // A weekly source is only stale past a week (plus a day of slack), not after 48h.
+    const HEALTH_SOURCE_MAX_AGE_HOURS = { "cve-psirt-history": 8 * 24 };
     const HEALTH_SOURCE_ORDER = Object.keys(HEALTH_SOURCE_LABELS);
     let healthState = null;
     // Relance manuelle de la collecte (bouton de l'en-tête « État des données »). La page ne
@@ -429,7 +433,7 @@
     // Mirrors classify_source_severity() in scripts/fortios_watch.py — keep the two in sync if
     // the thresholds ever change, since this is the only "shared logic" the browser can't
     // literally share with the Python side.
-    function classifySourceSeverity(record, now) {
+    function classifySourceSeverity(record, now, maxAgeHours = HEALTH_MAX_AGE_HOURS) {
       if (!record) return "warning";
       const consecutiveFailures = record.consecutiveFailures || 0;
       const lastSuccessAt = record.lastSuccessAt;
@@ -441,9 +445,13 @@
       // happens to be its first-ever attempt.
       if (!lastSuccessAt) return status === "error" ? "error" : "warning";
       const ageHours = (now.getTime() - new Date(lastSuccessAt).getTime()) / 3600000;
-      if (ageHours > HEALTH_MAX_AGE_HOURS) return "error";
+      if (ageHours > maxAgeHours) return "error";
       if (status === "warning" || status === "skipped" || consecutiveFailures > 0) return "warning";
       return "ok";
+    }
+
+    function sourceSeverity(id, record, now) {
+      return classifySourceSeverity(record, now, HEALTH_SOURCE_MAX_AGE_HOURS[id] ?? HEALTH_MAX_AGE_HOURS);
     }
 
     function healthStatusLabel(status) {
@@ -476,12 +484,12 @@
       const sources = healthState.sources;
       const dailyRun = sources["daily-run"];
       const erroredSources = HEALTH_SOURCE_ORDER.filter(
-        id => id !== "daily-run" && sources[id] && classifySourceSeverity(sources[id], now) === "error"
+        id => id !== "daily-run" && sources[id] && sourceSeverity(id, sources[id], now) === "error"
       );
       // Same exclusion as erroredSources: daily-run only aggregates the others, so counting it
       // would report one warning twice ("cve-psirt" and the "Avertissement : cve-psirt" it causes).
       const warnedSources = HEALTH_SOURCE_ORDER.filter(
-        id => id !== "daily-run" && sources[id] && classifySourceSeverity(sources[id], now) === "warning"
+        id => id !== "daily-run" && sources[id] && sourceSeverity(id, sources[id], now) === "warning"
       );
 
       // The top-line dot must reflect the TRUE overall health, not just daily-run's own status.
@@ -526,7 +534,7 @@
 
       const rows = HEALTH_SOURCE_ORDER.filter(id => sources[id]).map(id => {
         const record = sources[id];
-        const severity = classifySourceSeverity(record, now);
+        const severity = sourceSeverity(id, record, now);
         const label = escapeHtml(HEALTH_SOURCE_LABELS[id] || id);
         const lastSuccess = record.lastSuccessAt ? formatDateTime(record.lastSuccessAt) : "jamais";
         const failures = record.consecutiveFailures || 0;
@@ -1637,18 +1645,21 @@
       const coverage = state.cveCoverage || {};
       const history = coverage.history && typeof coverage.history === "object" ? coverage.history : null;
       const unresolved = history && Array.isArray(history.unresolved) ? history.unresolved.filter(item => item && item.id) : [];
-      const parts = [history && history.checkedAt
-        ? `${state.cves.length} CVE PSIRT Fortinet ; historique complet des produits suivis vérifié le ${formatDate(history.checkedAt)} (${history.listedAdvisories || 0} bulletins)`
+      const historyChecked = Boolean(history && history.checkedAt);
+      const historyComplete = historyChecked && !(history.failed > 0);
+      const parts = [historyChecked
+        ? `${state.cves.length} CVE PSIRT Fortinet ; historique des produits suivis ${historyComplete ? "vérifié en entier" : "vérifié en partie"} le ${formatDate(history.checkedAt)} (${history.listedAdvisories || 0} bulletins${historyComplete ? "" : `, ${history.failed} non lu(s), nouvel essai à la prochaine vérification`})`
         : `${state.cves.length} CVE issues du flux RSS PSIRT Fortinet (environ 50 derniers bulletins)`];
       if (published.length) parts[0] += `, publiées du ${formatDate(published[0])} au ${formatDate(published[published.length - 1])}`;
       if (coverage.continuousSince) parts.push(`suivi continu du flux vérifié depuis le ${formatDate(coverage.continuousSince)}`);
-      let text = history && history.checkedAt
+      let text = historyComplete
         ? `Couverture : ${parts.join(" ; ")}.`
         : `Couverture : ${parts.join(" ; ")}. Un bulletin plus ancien peut manquer : « Aucune » n'est pas une garantie.`;
+      const shown = unresolved.slice(0, 10);
       const unresolvedHtml = unresolved.length
-        ? ` <span class="cve-coverage-gap">⚠ ${unresolved.length} bulletin(s) non analysable(s) automatiquement, à vérifier : ${unresolved.map(item =>
+        ? ` <span class="cve-coverage-gap">⚠ ${unresolved.length} bulletin(s) non analysable(s) automatiquement, à vérifier : ${shown.map(item =>
             `<a href="https://fortiguard.fortinet.com/psirt/${encodeURIComponent(item.id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.id)}</a>${item.reason ? ` (${escapeHtml(item.reason)})` : ""}`
-          ).join(", ")}.</span>`
+          ).join(", ")}${unresolved.length > shown.length ? ` et ${unresolved.length - shown.length} autre(s)` : ""}.</span>`
         : "";
       const gaps = Array.isArray(coverage.gaps) ? coverage.gaps : [];
       const lastGap = gaps[gaps.length - 1];
