@@ -150,10 +150,29 @@ class SkipReasonTests(unittest.TestCase):
         self.assertEqual(skipped, ["FG-IR-22-059"])
         self.assertEqual(reasons, {"FG-IR-22-059": fw.SKIP_REASON_NO_LINK})
 
+    def test_recent_page_without_csaf_is_a_retryable_failure(self) -> None:
+        # Modern pages also link their CVRF export: a recent advisory whose CSAF is not out yet
+        # must stay orange and retried, never be filed as a legacy "no CSAF" advisory.
+        self.responses["https://fortiguard.fortinet.com/psirt/FG-IR-26-148"] = legacy_page(
+            "FG-IR-26-148"
+        )
+        reasons: dict[str, str] = {}
+        _results, skipped = fw.fetch_cve_entries_for_advisories(
+            ["FG-IR-26-148"], timeout=5, reasons=reasons
+        )
+        self.assertEqual(skipped, ["FG-IR-26-148"])
+        self.assertEqual(reasons, {"FG-IR-26-148": fw.SKIP_REASON_NO_LINK})
+
+    def test_legacy_cutoff_follows_the_advisory_number(self) -> None:
+        self.assertTrue(fw.is_legacy_advisory_id("FG-IR-20-005"))
+        self.assertTrue(fw.is_legacy_advisory_id("FG-IR-23-494"))
+        self.assertFalse(fw.is_legacy_advisory_id("FG-IR-24-001"))
+        self.assertFalse(fw.is_legacy_advisory_id("not-an-id"))
+
     def test_anti_bot_page_is_still_a_retryable_failure(self) -> None:
         with self.assertRaises(fw.CsafResolutionError) as caught:
             fw.collect_cve_entries_for_advisory("FG-IR-26-146", timeout=5)
-        self.assertNotIsInstance(caught.exception, fw.CsafUnavailableError)
+        self.assertIsInstance(caught.exception, fw.CsafLinkMissingError)
 
     def test_each_skipped_advisory_records_its_reason(self) -> None:
         reasons = {"FG-IR-26-144": "stale"}
@@ -260,6 +279,33 @@ class MainRetryAndHealthTests(unittest.TestCase):
         )
         self.assertIn("Advisories PSIRT non résolues : FG-IR-26-145 (CSAF invalide)", report)
         self.assertIn("à vérifier sur la page PSIRT) : FG-IR-22-059", report)
+
+    def test_nothing_resolved_names_every_skip_with_its_reason(self) -> None:
+        def collect(*_args, reasons=None, **_kwargs):
+            reasons.update({"FG-IR-22-059": fw.SKIP_REASON_NO_CSAF, "FG-IR-26-147": fw.SKIP_REASON_NETWORK})
+            return {}, ["FG-IR-22-059", "FG-IR-26-147"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base_path = Path(tmp) / "state.json"
+            fw.write_json(base_path, fw.normalize_state({}))
+            health_path = Path(tmp) / "health.json"
+            with mock.patch.object(fw, "collect_cve_catalog", collect), mock.patch.object(
+                fw, "fetch_cve_entries_for_advisories", lambda ids, _t, *, reasons=None: ({}, list(ids))
+            ), mock.patch.object(fw, "fetch_psirt_versions", lambda *a, **k: set()), mock.patch.object(
+                fw.time, "sleep", lambda _s: None
+            ):
+                fw.main([
+                    "--cve-catalog",
+                    "--base", str(base_path), "--output", str(base_path),
+                    "--report", str(Path(tmp) / "report.md"), "--health-output", str(health_path),
+                ])
+            record = fw.read_json(health_path, {})["sources"][fw.SOURCE_CVE_PSIRT]
+        self.assertEqual(record["status"], fw.HEALTH_STATUS_ERROR)
+        self.assertEqual(
+            record["lastError"],
+            "2 advisorie(s) PSIRT non résolue(s), aucune résolue : "
+            "FG-IR-22-059 (sans export CSAF), FG-IR-26-147 (réseau)",
+        )
 
 
 if __name__ == "__main__":

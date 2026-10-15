@@ -2246,6 +2246,22 @@ class CsafUnavailableError(CsafResolutionError):
     """
 
 
+class CsafLinkMissingError(CsafResolutionError):
+    """The advisory page offers no usable CSAF link (anti-bot page, moved file store, or a
+    recent advisory whose export is not out yet): a real failure, retried."""
+
+
+# Every advisory numbered from this year on has a CSAF export (audit of the 318 PSIRT advisories
+# of the tracked products, 2026-10-15: the 46 without one are FG-IR-20 to FG-IR-23). A newer
+# page without a CSAF link is therefore never "legacy": it stays a retried failure.
+LEGACY_CVRF_ONLY_LAST_YEAR = 23
+
+
+def is_legacy_advisory_id(advisory_id: str) -> bool:
+    match = re.fullmatch(r"FG-IR-(\d{2})-\d+", advisory_id)
+    return bool(match) and int(match.group(1)) <= LEGACY_CVRF_ONLY_LAST_YEAR
+
+
 # Why an advisory stayed unresolved, as shown in the run report and the health message.
 SKIP_REASON_NO_CSAF = "sans export CSAF"
 SKIP_REASON_NO_LINK = "page sans lien CSAF"
@@ -2256,9 +2272,9 @@ SKIP_REASON_NETWORK = "réseau"
 def skip_reason(error: BaseException) -> str:
     if isinstance(error, CsafUnavailableError):
         return SKIP_REASON_NO_CSAF
+    if isinstance(error, CsafLinkMissingError):
+        return SKIP_REASON_NO_LINK
     if isinstance(error, CsafResolutionError):
-        if "no validated CSAF link" in str(error):
-            return SKIP_REASON_NO_LINK
         return SKIP_REASON_INVALID
     if isinstance(error, json.JSONDecodeError):
         return SKIP_REASON_INVALID
@@ -2756,15 +2772,17 @@ def collect_cve_entries_for_advisory(
     csaf_url = discover_csaf_url(advisory_id, raw_html)
     if (
         csaf_url is None
+        and is_legacy_advisory_id(advisory_id)
         and f"/psirt/cvrf/{advisory_id}" in raw_html
         and "csaf" not in raw_html.lower()
     ):
-        # The advisory's own page (it links its legacy CVRF export) that never mentions CSAF: an
-        # older advisory Fortinet never exported to CSAF. An anti-bot page carries no CVRF link,
-        # and a CSAF link that fails validation (moved host, tampered URL) stays a failure.
+        # The advisory's own page (it links its legacy CVRF export) that never mentions CSAF, for
+        # an advisory older than Fortinet's CSAF exports: one that was never exported. An
+        # anti-bot page carries no CVRF link, a CSAF link that fails validation (moved host,
+        # tampered URL) stays a failure, and so does a recent page whose export is not out yet.
         raise CsafUnavailableError(f"{advisory_id}: no CSAF export published")
     if csaf_url is None:
-        raise CsafResolutionError(
+        raise CsafLinkMissingError(
             f"{advisory_id}: no validated CSAF link on the advisory page"
         )
     doc = json.loads(
@@ -3802,10 +3820,8 @@ def main(argv: list[str]) -> int:
             # on its own -- retrying seconds later (the per-request backoff in read_url_with_retry)
             # mostly doesn't help with that, so wait for real before giving the still-failing ones
             # another shot. Bounded and spaced out (not "retry forever until green"): an advisory
-            # can be legitimately without a usable CSAF link (see collect_cve_entries_for_advisory's
-            # docstring),
-            # indistinguishable here from a real failure, so an unbounded loop would spin on it
-            # forever every single day; and hammering PSIRT harder/faster when it's already
+            # stay without a usable CSAF link for days (see collect_cve_entries_for_advisory's
+            # docstring), so an unbounded loop would spin on it forever every single day; and hammering PSIRT harder/faster when it's already
             # struggling only makes the rate limiting worse, not better (observed directly: 1
             # skip left completely alone, vs 3 after two manual back-to-back re-runs). An advisory
             # whose genuine page publishes no CSAF export at all is never retried: no wait helps.
@@ -3889,7 +3905,8 @@ def main(argv: list[str]) -> int:
             elif total_considered > 0 and not cve_results_by_advisory:
                 cve_health_status = HEALTH_STATUS_ERROR
                 cve_health_error = (
-                    f"{len(skipped_cves)} advisorie(s) PSIRT injoignable(s)"
+                    f"{len(skipped_cves)} advisorie(s) PSIRT non résolue(s), aucune résolue : "
+                    + format_skipped_advisories(skipped_cves, skip_reasons)
                 )
             elif failing_cves:
                 cve_health_status = HEALTH_STATUS_WARNING
