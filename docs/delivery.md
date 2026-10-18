@@ -307,6 +307,27 @@ are an unknown baseline again (a KEV listing that happened meanwhile is not noti
 replayed). A pending `cve-kev|…` outbox entry is still delivered by the older image as an ordinary
 CVE email. Notification history, sent keys and outbox stay valid in both directions.
 
+## CVE history check: upgrade and rollback
+
+No migration and no preferences change. On its first start, the scheduler sees no
+`cveCoverage.history` in the catalogue and runs the history check once (`--cve-backfill`, then
+every Sunday at 06:00): every PSIRT advisory of the tracked products that the catalogue lacks is
+imported (2026-10-15 audit: ~230 advisories, ~240 CVEs). Advisories published at least 30 days
+ago are history: staged as `pendingCveBaseline` before the catalogue commit, then absorbed into the
+notification checkpoint without any `kev` key (unknown baseline, flagged by the next normal pass),
+so nothing is notified, even if the pass is killed mid-way. A more recent one stays out of the
+checkpoint and is notified by the next normal pass. The pass only adds its own confirmed imports to
+the checkpoint; it never advances versions, other CVEs or KEV flags. Its health is the new
+`cve-psirt-history` source. Expect a larger catalogue and older CVEs on paths through
+old trains.
+
+Rollback is image-only for the code; the imported CVEs stay valid catalogue entries for an older
+image. To also remove them, restore the catalogue copied before the upgrade, e.g.
+`runtime/rollback/<date>-pre-history/fortios-data.generated.json`; the notification checkpoint
+may keep their ids, which only means they will never be notified as new (they are history). An
+older image drops `cveCoverage.history` on its next RSS write: after a re-upgrade the check runs
+again at start, cheaply, since the catalogue already holds the history.
+
 ## Adding the Microsoft 365 transport
 
 The new image adds an optional Graph transport without replacing SMTP, data

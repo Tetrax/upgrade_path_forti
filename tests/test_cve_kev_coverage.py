@@ -354,7 +354,8 @@ class CollectionPathTests(unittest.TestCase):
 
     def test_a_backfill_never_turns_history_into_kev_notifications(self) -> None:
         self.run_collection(kev={"CVE-2026-1": LISTED})
-        self.catalog_cves.append(cve("CVE-2026-4", "medium", FMG))
+        # History: a backfill only absorbs advisories published at least 30 days ago.
+        self.catalog_cves.append({**cve("CVE-2026-4", "medium", FMG), "publishedAt": "2024-01-09"})
         backfill = self.run_collection(kev={}, passes=("--cve-backfill",))
         backfill.send_message.assert_not_called()
         checkpoint = notify.load_notify_state(self.history)["checkpoint"]["cvesById"]

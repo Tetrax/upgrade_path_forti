@@ -60,6 +60,34 @@ def csaf_without_vulnerabilities(advisory_id: str, *names: str) -> dict:
     return doc
 
 
+def legacy_cvrf(advisory_id: str, *products: str, cve: str = "CVE-2022-0778") -> str:
+    """A pre-CSAF CVRF export: each product one exact version, all "Known Affected"."""
+    tree = "".join(
+        f'<FullProductName ProductID="P{index}">{name}</FullProductName>'
+        for index, name in enumerate(products)
+    )
+    refs = "".join(f"<ProductID>P{index}</ProductID>" for index in range(len(products)))
+    statuses = (
+        f'<ProductStatuses><Status Type="Known Affected">{refs}</Status></ProductStatuses>'
+        if products
+        else ""
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<cvrf:cvrfdoc xmlns:cvrf="http://docs.oasis-open.org/csaf/ns/csaf-cvrf/v1.2/cvrf">'
+        "<cvrf:DocumentTitle>Legacy advisory</cvrf:DocumentTitle>"
+        "<cvrf:DocumentTracking><cvrf:Identification>"
+        f"<cvrf:ID>{advisory_id}</cvrf:ID></cvrf:Identification>"
+        "<cvrf:InitialReleaseDate>2022-04-01T00:00:00</cvrf:InitialReleaseDate>"
+        "<cvrf:CurrentReleaseDate>2026-08-27T00:00:00</cvrf:CurrentReleaseDate>"
+        "</cvrf:DocumentTracking>"
+        f'<ProductTree><Branch Name="Fortinet" Type="Vendor">{tree}</Branch></ProductTree>'
+        f'<Vulnerability Ordinal="1"><cvrf:CVE>{cve}</cvrf:CVE>{statuses}'
+        "<CVSSScoreSets><ScoreSetV3><BaseScoreV3>7.5</BaseScoreV3></ScoreSetV3></CVSSScoreSets>"
+        "</Vulnerability></cvrf:cvrfdoc>"
+    )
+
+
 def legacy_page(advisory_id: str) -> str:
     return (
         "<html><body><table><tr><td>Download</td><td>"
@@ -117,6 +145,8 @@ class SkipReasonTests(unittest.TestCase):
             ),
             bad_url: json.dumps(csaf_without_vulnerabilities("FG-IR-26-145", "FortiOS")),
             "https://fortiguard.fortinet.com/psirt/FG-IR-22-059": legacy_page("FG-IR-22-059"),
+            # Like the real one: the CVRF names no product at all, so nothing can be read.
+            "https://fortiguard.fortinet.com/psirt/cvrf/FG-IR-22-059": legacy_cvrf("FG-IR-22-059"),
             "https://fortiguard.fortinet.com/psirt/FG-IR-26-146": "<html>challenge</html>",
             "https://fortiguard.fortinet.com/psirt/FG-IR-26-147": fw.urllib.error.URLError("down"),
         }
