@@ -2948,6 +2948,210 @@ def parse_legacy_cvrf_document(advisory_id: str, raw_xml: str) -> list[dict[str,
     return list(entries_by_cve.values())
 
 
+# Second, independent reading of an advisory's applicability: the "Affected" table of its public
+# page (or, on pages older than that table, the "Affected Products" text block). Fortinet's
+# exports are sometimes narrower than the page they describe — a train the CSAF never lists
+# (FG-IR-26-123: FortiOS 6.0-7.0), a product it omits (FG-IR-18-292: FortiOS), or an on-prem
+# version it declares "not affected" because the Cloud rows lost their name (FG-IR-24-463,
+# FortiManager 7.2.8). Audit of 2026-10-18: 308 of 317 advisories agree version for version.
+PSIRT_PAGE_SOURCE = "psirt-page"
+_PSIRT_PAGE_TABLE_RE = re.compile(
+    r"<table[^>]*>(?:(?!</table>).)*?Affected(?:(?!</table>).)*?</table>", re.DOTALL | re.IGNORECASE
+)
+
+
+def _psirt_page_text(fragment: str) -> str:
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", fragment)).split())
+
+
+def _psirt_page_rows(raw_html: str) -> list[tuple[str, str, str]] | None:
+    """(tracked product name, train, affected text) for each row naming a tracked product.
+
+    A row label must be exactly "<product> <train>": a qualified label ("FortiOS (only
+    FGT_VM64) 7.4", "FortiOS-6K7K 7.0", "FortiManager Cloud 7.2") is another product or a
+    narrower claim, ignored like CSAF's distinct product lines. None when the page has no
+    affected section at all (anti-bot or changed page).
+    """
+    table = _PSIRT_PAGE_TABLE_RE.search(raw_html)
+    rows: list[tuple[str, str, str]] = []
+    if table:
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table.group(0), re.DOTALL | re.IGNORECASE):
+            cells = [
+                _psirt_page_text(cell)
+                for cell in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.DOTALL | re.IGNORECASE)
+            ]
+            if len(cells) < 2:
+                continue
+            label = re.fullmatch(r"(\S+) (\d+\.\d+)", cells[0])
+            if label and label.group(1) in CVE_PRODUCT_MAP:
+                rows.append((label.group(1), label.group(2), cells[1]))
+        return rows
+    start = raw_html.find("Affected Products")
+    if start < 0:
+        return None
+    end = raw_html.find("Solutions", start)
+    for line in re.split(r"<[^>]+>", raw_html[start : end if end > 0 else start + 8000]):
+        text = " ".join(html.unescape(line).split())
+        legacy = re.fullmatch(r"(\S+) (?:version )?((\d+\.\d+)\b.*)", text)
+        if legacy and legacy.group(1) in CVE_PRODUCT_MAP:
+            rows.append((legacy.group(1), legacy.group(3), legacy.group(2)))
+    return rows
+
+
+def _psirt_page_clause(train: str, text: str) -> dict[str, Any] | None:
+    """{"from", "to"} of one affected cell (both None for the whole train), {} when the train is
+    not affected, None when the wording is not recognized."""
+    claim = re.sub(r"^version ", "", text.strip()).replace(" though ", " through ")
+    # A note is dropped only after a whole-train claim ("6.0 all versions (Need to be
+    # authenticated...)"): nothing is broader. After a bound ("7.4.0 through 7.4.3 (only
+    # FGT_VM64)") it may narrow the claim, so the wording is not recognized.
+    claim = re.sub(r"^(\d+\.\d+ all versions)\s*\([^()]*\)$", r"\1", claim)
+    if re.search(r"\bnot affected\b", claim, re.IGNORECASE) or claim.startswith("Cloud "):
+        # "Cloud 7.4.1 through 7.4.2" in a FortiManager row is about FortiManager Cloud.
+        return {}
+    if re.fullmatch(rf"{re.escape(train)} all versions", claim, re.IGNORECASE):
+        return {"from": None, "to": None}
+    version = rf"{re.escape(train)}(?:\.\d+)?"
+    bounded = re.fullmatch(rf"({version}) through ({version})", claim)
+    if bounded:
+        start = bounded.group(1) if bounded.group(1) != train else f"{train}.0"
+        if bounded.group(2) == train or version_key(start) > version_key(bounded.group(2)):
+            return None
+        return {"from": start, "to": bounded.group(2)}
+    above = re.fullmatch(rf"({re.escape(train)}\.\d+) and above", claim)
+    if above:
+        return {"from": above.group(1), "to": None}
+    exact = re.fullmatch(rf"{re.escape(train)}\.\d+", claim)
+    if exact:
+        return {"from": claim, "to": claim}
+    return None
+
+
+def parse_psirt_page_affected(raw_html: str) -> list[dict[str, Any]] | None:
+    """Affected ranges of the tracked products as the advisory's public page states them.
+
+    None when the page has no affected section or when any row about a tracked product uses a
+    wording this reader does not recognize: the page is then not trusted at all, rather than
+    read partially. An empty list is a page that names no affected tracked product.
+    """
+    rows = _psirt_page_rows(raw_html)
+    if rows is None:
+        return None
+    ranges: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for product_name, train, text in rows:
+        clause = _psirt_page_clause(train, text)
+        if clause is None:
+            return None
+        if not clause:
+            continue
+        product_id, model_id = CVE_PRODUCT_MAP[product_name]
+        key = (product_id, model_id, train, clause["from"], clause["to"])
+        ranges[key] = {
+            "product": product_id,
+            "models": [model_id] if model_id else [],
+            "branch": train,
+            "from": clause["from"],
+            "to": clause["to"],
+        }
+    return sorted(ranges.values(), key=_csaf_range_sort_key)
+
+
+def _range_covers(outer: dict[str, Any], start: str, end: str | None) -> bool:
+    if outer["from"] is not None and version_key(outer["from"]) > version_key(start):
+        return False
+    if outer["to"] is not None and (end is None or version_key(outer["to"]) < version_key(end)):
+        return False
+    # A bounded page claim that names a version the export excludes is the page's explicit word
+    # on that version (FG-IR-24-463): this range does not cover it.
+    return not any(
+        version_key(version) >= version_key(start)
+        and (end is None or version_key(version) <= version_key(end))
+        for version in outer.get("excluded") or []
+    )
+
+
+def merge_psirt_page_ranges(entry: dict[str, Any], page_ranges: list[dict[str, Any]]) -> int:
+    """Add to `entry` the page claims its export-derived ranges do not already cover.
+
+    A train the export never mentions is taken from the page as stated. On a train the export
+    does describe, a page "all versions" claim adds nothing: the export is the precise one there
+    (exact versions enumerated by a CVRF, a fix declared after the page kept its wording --
+    FG-IR-22-255, 6.2.13). A bounded page claim is explicit and is added wherever the export
+    does not cover it, including a version the export excludes. Added ranges carry
+    "source": "psirt-page". Returns the number of ranges added.
+    """
+    added = 0
+    for page_range in page_ranges:
+        same_train = [
+            existing
+            for existing in entry["affected"]
+            if existing["product"] == page_range["product"]
+            and list(existing.get("models") or []) == page_range["models"]
+            and existing["branch"] == page_range["branch"]
+        ]
+        if page_range["from"] is None:
+            if same_train:
+                continue
+        elif any(
+            _range_covers(existing, page_range["from"], page_range["to"])
+            for existing in same_train
+        ):
+            continue
+        entry["affected"].append({**page_range, "source": PSIRT_PAGE_SOURCE})
+        added += 1
+    if added:
+        entry["affected"] = sorted(entry["affected"], key=_csaf_range_sort_key)
+    return added
+
+
+def apply_psirt_page_crosscheck(
+    advisory_id: str,
+    entries: list[dict[str, Any]],
+    raw_html: str,
+    export_cve_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Widen the export-derived entries with what the public page states, when attributable.
+
+    The page has one table per advisory, not per CVE: it is applied only when the export names
+    exactly one CVE in all (untracked products included -- a second CVE about FortiProxy only
+    would otherwise lend its rows to the first) and that CVE is the entry. A page that cannot be
+    read leaves the entries untouched: the export stays the only source, never an advisory
+    failure.
+    """
+    if len(entries) != 1 or export_cve_ids != {entries[0]["id"]}:
+        return entries
+    try:
+        page_ranges = parse_psirt_page_affected(raw_html)
+        if page_ranges is None:
+            print(
+                f"{advisory_id}: page PSIRT non contre-vérifiée (tableau illisible), "
+                "export seul retenu",
+                file=sys.stderr,
+            )
+            return entries
+        widened = json.loads(json.dumps(entries[0]))
+        merge_psirt_page_ranges(widened, page_ranges)
+    except Exception as error:  # noqa: BLE001 -- the export must survive any page surprise.
+        print(
+            f"{advisory_id}: contre-vérification de la page PSIRT ignorée ({type(error).__name__})",
+            file=sys.stderr,
+        )
+        return entries
+    return [widened]
+
+
+def _csaf_cve_ids(doc: dict[str, Any]) -> set[str]:
+    return {
+        str(vulnerability.get("cve"))
+        for vulnerability in doc.get("vulnerabilities") or []
+        if isinstance(vulnerability, dict) and vulnerability.get("cve")
+    }
+
+
+def _cvrf_cve_ids(raw_xml: str) -> set[str]:
+    return set(re.findall(r"<(?:\w+:)?CVE>\s*(CVE-\d+-\d+)\s*</(?:\w+:)?CVE>", raw_xml))
+
+
 def collect_cve_entries_for_advisory(
     advisory_id: str, timeout: int
 ) -> list[dict[str, Any]]:
@@ -2980,13 +3184,16 @@ def collect_cve_entries_for_advisory(
         # anti-bot page carries no CVRF link, a CSAF link that fails validation (moved host,
         # tampered URL) stays a failure, and so does a recent page whose export is not out yet.
         # Its CVRF export is read only when it enumerates exact versions.
-        return parse_legacy_cvrf_document(
+        raw_xml = fetch_text(
+            f"{PSIRT_BASE_URL}/psirt/cvrf/{advisory_id}",
+            timeout,
+            redirect_validator=_psirt_page_redirect_allowed,
+        )
+        return apply_psirt_page_crosscheck(
             advisory_id,
-            fetch_text(
-                f"{PSIRT_BASE_URL}/psirt/cvrf/{advisory_id}",
-                timeout,
-                redirect_validator=_psirt_page_redirect_allowed,
-            ),
+            parse_legacy_cvrf_document(advisory_id, raw_xml),
+            raw_html,
+            _cvrf_cve_ids(raw_xml),
         )
     if csaf_url is None:
         raise CsafLinkMissingError(
@@ -2996,7 +3203,9 @@ def collect_cve_entries_for_advisory(
         fetch_text(csaf_url, timeout, redirect_validator=_csaf_redirect_allowed)
     )
     validate_csaf_document(advisory_id, doc)
-    return parse_csaf_document(advisory_id, doc)
+    return apply_psirt_page_crosscheck(
+        advisory_id, parse_csaf_document(advisory_id, doc), raw_html, _csaf_cve_ids(doc)
+    )
 
 
 def upsert_cve(state: dict[str, Any], item: dict[str, Any]) -> bool:
