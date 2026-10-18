@@ -563,6 +563,34 @@ def test_cve_coverage_states_the_checked_history_and_what_could_not_be_read(app_
     expect(coverage.locator(".cve-coverage-gap")).to_contain_text("et 2 autre(s)")
 
 
+def test_a_range_taken_from_the_psirt_page_is_matched_and_stated(app_page, fortios_server):
+    """A range the collector took from the advisory's public page (the CSAF export omits it)
+    flags the version like any other range, and the coverage line counts such CVEs."""
+    catalog_path = fortios_server.data_dir / "fortios-data.generated.json"
+    catalog = __import__("json").loads(catalog_path.read_text(encoding="utf-8"))
+    catalog["cves"].append({
+        "id": "CVE-2025-53844", "advisoryId": "FG-IR-26-123", "title": "Out-of-bounds in capwap",
+        "severity": "high", "cvssScore": 7.1, "publishedAt": "2026-07-08",
+        "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-123",
+        "affected": [
+            {"product": "fortigate-fortios", "models": [], "branch": "6.2", "from": "6.2.0", "to": "6.2.17", "source": "psirt-page"},
+            {"product": "fortigate-fortios", "models": [], "branch": "7.2", "from": "7.2.0", "to": "7.2.11"},
+        ],
+    })
+    catalog_path.write_text(__import__("json").dumps(catalog), encoding="utf-8")
+    app_page.reload()
+
+    fortios_server.set_mock_path_response(["6.2.4", "7.0.14", "8.0.0"])
+    select_path(app_page, current="6.2.4", target="8.0.0")
+    app_page.click("#goButton")
+
+    current_row = app_page.locator("table").first.locator("tbody tr").first
+    expect(current_row).to_contain_text("CVE-2025-53844")
+    expect(app_page.locator(".cve-coverage")).to_contain_text(
+        "1 CVE élargie(s) d'après la page PSIRT, plus large que l'export Fortinet"
+    )
+
+
 # 5 & 6. Fortinet unavailable -> fallback to cached path, explicit cache banner ----------
 
 def test_fortinet_unavailable_falls_back_to_cached_path_with_banner(app_page, fortios_server):

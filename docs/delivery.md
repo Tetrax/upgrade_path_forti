@@ -328,6 +328,31 @@ may keep their ids, which only means they will never be notified as new (they ar
 older image drops `cveCoverage.history` on its next RSS write: after a re-upgrade the check runs
 again at start, cheaply, since the catalogue already holds the history.
 
+## CVE ranges cross-checked against the PSIRT page: upgrade and rollback
+
+No migration and no preferences change. A catalogue range may now carry an optional
+`"source": "psirt-page"`: a range the advisory's public page states and its CSAF/CVRF export omits
+(see README, « Contre-vérification par la page publique »). Only advisories re-fetched by the new
+image get it: the ~50 of the RSS window on every pass. To repair the entries already stored (the
+2026-10-18 audit found FG-IR-26-123, FG-IR-18-292 and FG-IR-24-463), run the existing silent
+maintenance pass once after the redeploy, as the scheduler's user (`PUID:PGID` of the stack,
+`1000:1000` by default) and under its collection lock (`flock` is in the image):
+
+```bash
+docker exec --user 1000:1000 fortiupgrade-scheduler-1 \
+  flock data/fortios-scheduled-refresh.lock \
+  python scripts/fortios_watch.py --base data/fortios-data.generated.json \
+  --cve-catalog --cve-reconcile-existing
+```
+
+It re-reads every advisory of the catalogue (~320 pages and exports, ~10 min); a widened range is
+a scope change, which never notifies, and the pass stages its results as `pendingCveBaseline`
+before the commit. Copy `runtime/data/fortios-data.generated.json` beforehand.
+
+Rollback is image-only. An older image matches a `psirt-page` range like any other range (it
+ignores the key) and drops it when it re-fetches the advisory; restoring the catalogue copied before
+the pass removes all of them at once. Notification history, sent keys and outbox are untouched.
+
 ## Adding the Microsoft 365 transport
 
 The new image adds an optional Graph transport without replacing SMTP, data

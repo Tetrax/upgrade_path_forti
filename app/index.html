@@ -928,7 +928,8 @@
           ? `${range.branch} : ${range.from || "début"} → ${range.to || "dernière connue"}`
           : `${range.branch} (toutes versions)`;
         const models = Array.isArray(range.models) && range.models.length ? ` — modèles : ${range.models.join(", ")}` : "";
-        return `<li>${escapeHtml(productLabel)} · ${escapeHtml(scope)}${escapeHtml(models)}</li>`;
+        const source = range.source === "psirt-page" ? " — d'après la page PSIRT, plus large que l'export Fortinet" : "";
+        return `<li>${escapeHtml(productLabel)} · ${escapeHtml(scope)}${escapeHtml(models)}${escapeHtml(source)}</li>`;
       }).join("");
       return `
         <article class="callout ${calloutClass(cveSeverityToInternal(cve.severity))}">
@@ -1652,6 +1653,10 @@
         : `${state.cves.length} CVE issues du flux RSS PSIRT Fortinet (environ 50 derniers bulletins)`];
       if (published.length) parts[0] += `, publiées du ${formatDate(published[0])} au ${formatDate(published[published.length - 1])}`;
       if (coverage.continuousSince) parts.push(`suivi continu du flux vérifié depuis le ${formatDate(coverage.continuousSince)}`);
+      // Ranges the collector took from the advisory's public page because Fortinet's export is
+      // narrower (fortios_watch.merge_psirt_page_ranges()).
+      const pageCompleted = state.cves.filter(cve => (cve.affected || []).some(range => range.source === "psirt-page")).length;
+      if (pageCompleted) parts.push(`${pageCompleted} CVE élargie(s) d'après la page PSIRT, plus large que l'export Fortinet`);
       let text = historyComplete
         ? `Couverture : ${parts.join(" ; ")}.`
         : `Couverture : ${parts.join(" ; ")}. Un bulletin plus ancien peut manquer : « Aucune » n'est pas une garantie.`;
