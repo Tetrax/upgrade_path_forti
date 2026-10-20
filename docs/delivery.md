@@ -342,12 +342,14 @@ maintenance pass once after the redeploy, as the scheduler's user (`PUID:PGID` o
 docker exec --user 1000:1000 fortiupgrade-scheduler-1 \
   flock data/fortios-scheduled-refresh.lock \
   python scripts/fortios_watch.py --base data/fortios-data.generated.json \
-  --cve-catalog --cve-reconcile-existing
+  --cve-catalog --cve-reconcile-existing --cve-crosscheck
 ```
 
 It re-reads every advisory of the catalogue (~320 pages and exports, ~10 min); a widened range is
 a scope change, which never notifies, and the pass stages its results as `pendingCveBaseline`
-before the commit. Copy `runtime/data/fortios-data.generated.json` beforehand.
+before the commit. Copy `runtime/data/fortios-data.generated.json` beforehand. Keep
+`--cve-crosscheck` on any manual CVE pass: a CVE re-fetched without it loses its CVE.org widening
+and mark until the next cross-checked pass (see « CVE cross-check with CVE.org and NVD »).
 
 Rollback is image-only. An older image matches a `psirt-page` range like any other range (it
 ignores the key) and drops it when it re-fetches the advisory; restoring the catalogue copied before

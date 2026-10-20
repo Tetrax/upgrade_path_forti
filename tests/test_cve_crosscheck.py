@@ -172,13 +172,32 @@ class CveOrgWideningTests(unittest.TestCase):
             second_opinion=fw.nvd_second_opinion(nvd, {}),
         )
         self.assertEqual(lone_product["affected"], [fmg])
+        # Its FortiManager ranges are already shown: the record still confirms a shown product.
         self.assertEqual(lone_product["cveOrg"], "confirmed")
+        only_other_product = cve("CVE-2023-42791", "high", [rng("7.2", "7.2.0", "7.2.3")])
+        records["CVE-2023-42791"] = cve_org(product("FortiAnalyzer", le("7.2.0", "7.2.3")))
+        fw.apply_cve_org_crosscheck(
+            [only_other_product], 5, fetch=lambda cve_id, _timeout: records[cve_id],
+            second_opinion=fw.nvd_second_opinion(nvd, {}),
+        )
+        self.assertEqual(only_other_product["cveOrg"], "absent")
         self.assertEqual(confirmed_product["affected"], [rng("7.2", "7.2.0", "7.2.7", source="cve-org"), fmg])
+
+    def test_forticlient_platforms_are_distinct_products(self) -> None:
+        windows = rng("7.0", "7.0.0", "7.0.9", product="forticlient", models=["windows"])
+        mac_record = cve_org(product("FortiClientMac", le("7.0.0", "7.0.9")), product("FortiClientWindows", le("7.0.0", "7.0.9")))
+        entry = cve("CVE-1", "medium", [windows])
+        fw.apply_cve_org_crosscheck([entry], 5, fetch=lambda *_: mac_record, second_opinion=lambda _id: set())
+        self.assertEqual(entry["affected"], [windows])
+        any_platform = {("forticlient", None)}  # NVD CPE without target platform
+        entry = cve("CVE-1", "medium", [windows])
+        fw.apply_cve_org_crosscheck([entry], 5, fetch=lambda *_: mac_record, second_opinion=lambda _id: any_platform)
+        self.assertIn(rng("7.0", "7.0.0", "7.0.9", product="forticlient", models=["macos"], source="cve-org"), entry["affected"])
 
     def test_without_nvd_a_product_addition_is_kept_only_if_already_shown(self) -> None:
         previous = cve("CVE-2024-26013", "high", [rng("7.2", "7.2.0", "7.2.7", source="cve-org")])
         opinion = fw.nvd_second_opinion(None, {"CVE-2024-26013": previous})
-        self.assertEqual(opinion("CVE-2024-26013"), {"fortigate-fortios"})
+        self.assertEqual(opinion("CVE-2024-26013"), {("fortigate-fortios", None)})
         self.assertEqual(opinion("CVE-2023-42791"), set())
 
     def test_an_unreachable_record_keeps_what_the_catalogue_held(self) -> None:
@@ -233,8 +252,12 @@ class NvdTests(unittest.TestCase):
                     "CVE-SHOWN",
                     cpe("fortios", versionStartIncluding="7.2.0", versionEndExcluding="7.2.12"),
                     cpe("fortios", versionStartIncluding="7.0.0", versionEndIncluding="7.0.17"),
-                    # Spans 6.4 -> 7.0: too coarse to point at versions, only counted.
+                    # Spans 6.4 -> 7.0, or bounded on one side only, or not at all: too coarse to
+                    # point at versions, only counted.
                     cpe("fortios", versionStartIncluding="6.4.0", versionEndIncluding="7.0.16"),
+                    cpe("fortios", versionEndIncluding="6.4.15"),
+                    cpe("fortios", versionStartIncluding="7.0.0"),
+                    cpe("fortios"),
                 ),
                 nvd_cve("CVE-MISSING", cpe("fortios", version="7.2.12"), severity="CRITICAL"),
                 nvd_cve("CVE-OTHER-VERSIONS", cpe("fortios", version="5.6.3")),
@@ -253,7 +276,7 @@ class NvdTests(unittest.TestCase):
                 "missing": [
                     {"id": "CVE-MISSING", "published": "2024-05-01", "severity": "critical", "products": ["fortigate-fortios"]}
                 ],
-                "crossTrainIgnored": 1,
+                "crossTrainIgnored": 4,
             },
         )
         # Nothing NVD alone says is shown.
@@ -388,6 +411,54 @@ class CollectionPathTests(unittest.TestCase):
         self.assertIn("1 fiche(s) CVE.org non lue(s)", self.source()["lastError"])
         psirt = json.loads(self.health.read_text(encoding="utf-8"))["sources"]["cve-psirt"]
         self.assertEqual(psirt["status"], "ok")
+
+    def test_a_crosscheck_failure_never_reaches_psirt_nor_the_silence_intent(self) -> None:
+        """A weekly backfill whose cross-check breaks mid-way still stages and commits the PSIRT
+        results exactly as collected, and only the cross-check source reports it."""
+        imported = cve("CVE-2019-1", "high", [rng("6.2", "6.2.0", "6.2.4")])
+        imported["advisoryId"] = "FG-IR-19-001"
+        imported["publishedAt"] = "2019-06-01"
+        record = cve_org(product("FortiOS", le("6.2.0", "6.2.4"), le("6.0.0", "6.0.9")))
+        nvd = fw.parse_nvd_fortinet(nvd_pages(nvd_cve("CVE-2019-1", cpe("fortios", version="6.2.4"))))
+
+        def broken(*_args: Any, **_kwargs: Any) -> int:
+            raise KeyError("branch")
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(fw, "collect_cve_catalog", return_value=({"FG-IR-19-001": [json.loads(json.dumps(imported))]}, [])),
+            patch.object(fw, "fetch_psirt_versions", return_value=set()),
+            patch.object(fw, "fetch_cve_org_record", return_value=record),
+            patch.object(fw, "fetch_nvd_fortinet", return_value=nvd),
+            patch.object(fw, "merge_psirt_page_ranges", side_effect=broken),
+            patch.object(notify, "stage_pending_cve_baseline", wraps=notify.stage_pending_cve_baseline) as staged,
+        ):
+            exit_code = fw.main(
+                [
+                    "--cve-backfill",
+                    "--cve-crosscheck",
+                    "--base", str(self.base),
+                    "--output", str(self.base),
+                    "--report", str(self.root / "report.md"),
+                    "--health-output", str(self.health),
+                    "--notify-history-output", str(self.history),
+                    "--notification-settings-output", str(self.settings),
+                    "--official-paths-csv", str(self.root / "none.csv"),
+                    "--advisories-csv", str(self.root / "none-advisories.csv"),
+                    "--upgrade-exports", str(self.root / "none-exports"),
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        staged.assert_called_once()
+        self.assertIn("CVE-2019-1", staged.call_args.args[1])
+        committed = {item["id"]: item for item in self.catalog()["cves"]}
+        self.assertEqual(committed["CVE-2019-1"]["affected"], imported["affected"])
+        self.assertNotIn("cveOrg", committed["CVE-2019-1"])
+        sources = json.loads(self.health.read_text(encoding="utf-8"))["sources"]
+        self.assertEqual(sources["cve-psirt-history"]["status"], "ok")
+        self.assertEqual(sources["cve-crosscheck"]["status"], "warning")
+        self.assertIn("contre-vérification interrompue (KeyError", sources["cve-crosscheck"]["lastError"])
+        self.assertIn("CVE-2019-1", notify.load_notify_state(self.history)["checkpoint"]["cvesById"])
 
     def test_without_the_flag_nothing_is_fetched(self) -> None:
         with (

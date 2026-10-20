@@ -3312,7 +3312,7 @@ def apply_cve_org_crosscheck(
     timeout: int,
     fetch: Callable[[str, int], Any] | None = None,
     *,
-    second_opinion: Callable[[str], set[str]] | None = None,
+    second_opinion: Callable[[str], set[tuple[str, str | None]]] | None = None,
 ) -> list[str]:
     """Widen each entry with its CVE.org record; returns the CVE ids CVE.org could not answer.
 
@@ -3333,28 +3333,47 @@ def apply_cve_org_crosscheck(
         except Exception:  # noqa: BLE001 -- one record must never fail the advisory.
             failed.append(entry["id"])
             continue
-        entry["cveOrg"] = status
-        named = {item["product"] for item in entry["affected"]}
+        named = {_cve_product_key(item) for item in entry["affected"]}
         confirmed = second_opinion(entry["id"]) if second_opinion else set()
-        ranges = [item for item in ranges if item["product"] in named or item["product"] in confirmed]
-        if ranges:
-            merge_psirt_page_ranges(entry, ranges, CVE_ORG_SOURCE)
+        kept = [
+            item
+            for item in ranges
+            if _cve_product_key(item) in named
+            or _cve_product_key(item) in confirmed
+            or (item["product"], None) in confirmed
+        ]
+        # "confirmed" only when the record speaks about a product actually shown.
+        if status == CVE_ORG_STATUS_CONFIRMED and not kept:
+            status = CVE_ORG_STATUS_ABSENT
+        entry["cveOrg"] = status
+        if kept:
+            merge_psirt_page_ranges(entry, kept, CVE_ORG_SOURCE)
     return failed
+
+
+def _cve_product_key(item: dict[str, Any]) -> tuple[str, str | None]:
+    """(product, FortiClient platform): FortiClientMac and FortiClientWindows are distinct
+    Fortinet products for the "product the PSIRT does not name" rule."""
+    if item.get("product") == FORTICLIENT_PRODUCT_ID:
+        models = list(item.get("models") or [])
+        return FORTICLIENT_PRODUCT_ID, models[0] if len(models) == 1 else None
+    return str(item.get("product")), None
 
 
 def nvd_second_opinion(
     nvd_by_id: dict[str, dict[str, Any]] | None, previous_by_id: dict[str, dict[str, Any]]
-) -> Callable[[str], set[str]]:
+) -> Callable[[str], set[tuple[str, str | None]]]:
     """Products a CVE.org-only product addition may use: those NVD states for the CVE or, when
     NVD could not be read this run, those such an addition already brought to the catalogue."""
 
-    def products(cve_id: str) -> set[str]:
+    def products(cve_id: str) -> set[tuple[str, str | None]]:
         if nvd_by_id is not None:
             record = nvd_by_id.get(str(cve_id).upper())
-            return {claim["product"] for claim in record["claims"]} if record else set()
+            # A FortiClient CPE without target platform covers every platform: (product, None).
+            return {(claim["product"], claim.get("platform")) for claim in record["claims"]} if record else set()
         previous = previous_by_id.get(cve_id) or {}
         return {
-            item.get("product")
+            _cve_product_key(item)
             for item in previous.get("affected") or []
             if isinstance(item, dict) and item.get("source") == CVE_ORG_SOURCE
         }
@@ -3466,9 +3485,13 @@ def fetch_nvd_fortinet(timeout: int) -> dict[str, dict[str, Any]]:
 
 
 def _nvd_claim_single_train(claim: dict[str, Any]) -> bool:
+    """An exact version, or both bounds within one train. "<= 6.2.0", ">= 7.0.0", "*" alone or
+    "6.4.0 -> 7.0.16" reach every older (or newer) train: too coarse to point at versions."""
+    if claim.get("version"):
+        return True
     low = claim.get("versionStartIncluding") or claim.get("versionStartExcluding")
     high = claim.get("versionEndIncluding") or claim.get("versionEndExcluding")
-    return not (low and high and csaf_branch(low) != csaf_branch(high))
+    return bool(low and high) and csaf_branch(low) == csaf_branch(high)
 
 
 def nvd_claim_matches(claim: dict[str, Any], product: str, platform: str | None, version: str) -> bool:
@@ -3497,7 +3520,9 @@ def cve_shows_version(cve: dict[str, Any], product: str, platform: str | None, v
         if not isinstance(item, dict) or item.get("product") != product:
             continue
         models = [model for model in item.get("models") or [] if model != FORTICLIENT_EMS_MODEL_ID]
-        if models and platform not in models:
+        # FortiClient ranges are per platform; a FortiOS range restricted to some models
+        # (FGT_VM64...) is shown for those models, so the version counts as shown.
+        if models and platform is not None and platform not in models:
             continue
         if csaf_branch(version) != item.get("branch") or version in (item.get("excluded") or []):
             continue
@@ -4764,25 +4789,35 @@ def main(argv: list[str]) -> int:
             # could not give keeps what the catalogue already held from it.
             if args.cve_crosscheck:
                 cross_t0 = time.monotonic()
-                cross_started_at = health_mark_running(args.health_output, SOURCE_CVE_CROSSCHECK)
+                # Isolated from the PSIRT pass: whatever goes wrong here, the PSIRT results stay
+                # exactly as collected and still reach the silence intent and the commit below.
+                untouched = json.loads(json.dumps(cve_results_by_advisory))
                 try:
-                    nvd_by_id = fetch_nvd_fortinet(args.timeout)
-                except Exception as error:  # noqa: BLE001 - recorded below, marks on disk kept.
-                    nvd_by_id = None
-                    cross_problems.append(f"NVD indisponible ({type(error).__name__}: {error})")
-            if args.cve_crosscheck and cve_results_by_advisory:
-                previous_by_id = {item.get("id"): item for item in state.get("cves", [])}
-                second_opinion = nvd_second_opinion(nvd_by_id, previous_by_id)
-                for entries in cve_results_by_advisory.values():
-                    failed = apply_cve_org_crosscheck(
-                        entries, args.timeout, second_opinion=second_opinion
+                    cross_started_at = health_mark_running(args.health_output, SOURCE_CVE_CROSSCHECK)
+                    try:
+                        nvd_by_id = fetch_nvd_fortinet(args.timeout)
+                    except Exception as error:  # noqa: BLE001 - recorded below, marks on disk kept.
+                        nvd_by_id = None
+                        cross_problems.append(f"NVD indisponible ({type(error).__name__}: {error})")
+                    previous_by_id = {item.get("id"): item for item in state.get("cves", [])}
+                    second_opinion = nvd_second_opinion(nvd_by_id, previous_by_id)
+                    for entries in cve_results_by_advisory.values():
+                        failed = apply_cve_org_crosscheck(
+                            entries, args.timeout, second_opinion=second_opinion
+                        )
+                        for entry in entries:
+                            if entry["id"] in failed:
+                                restore_cve_org_crosscheck(entry, previous_by_id.get(entry["id"]))
+                            if any(item.get("source") == CVE_ORG_SOURCE for item in entry["affected"]):
+                                cve_org_widened += 1
+                        cve_org_failed.extend(failed)
+                except Exception as error:  # noqa: BLE001 - the PSIRT results are restored.
+                    cve_results_by_advisory = untouched
+                    cve_org_widened = 0
+                    cross_problems.append(
+                        f"contre-vérification interrompue ({type(error).__name__}: {error})"
                     )
-                    for entry in entries:
-                        if entry["id"] in failed:
-                            restore_cve_org_crosscheck(entry, previous_by_id.get(entry["id"]))
-                        if any(item.get("source") == CVE_ORG_SOURCE for item in entry["affected"]):
-                            cve_org_widened += 1
-                    cve_org_failed.extend(failed)
+                    cross_started_at = cross_started_at or utc_now_precise()
 
             # Durable silence intent, written BEFORE the catalogue commit further below: the
             # corrected historical entries are declared "not news" on disk first, so even if this

@@ -652,8 +652,10 @@ l'heure de Paris (CET/CEST géré automatiquement), toutes via le même runner
 
 ```bash
 python3 scripts/import_forticlient_compat.py --commit
-python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog --cve-catalog
+python3 scripts/fortios_watch.py --base data/fortios-data.generated.json --docs-catalog --tool-products fortianalyzer,fortimanager --forticlient-catalog --cve-catalog --kev-catalog --cve-crosscheck
 ```
+
+`--kev-catalog --cve-crosscheck` reprennent ce que fait la passe planifiée : sans `--cve-crosscheck`, une CVE relue perd son élargissement CVE.org et sa marque jusqu'à la passe contre-vérifiée suivante.
 
 La collecte détecte automatiquement les nouvelles versions FortiOS publiées dans un train déjà connu et les nouveaux modèles FortiGate/FortiWiFi apparus dans les release notes publiques `docs.fortinet.com`, les nouveaux modèles/versions FortiAnalyzer et FortiManager via les endpoints de l'Upgrade Path Tool, les nouvelles versions FortiClient/FortiClient EMS via leurs release notes publiques, et les nouvelles CVE PSIRT (voir ci-dessus). L'import, lancé juste avant, réimporte la grille de compatibilité officielle EMS ↔ FortiClient (voir plus haut). Le résultat est fusionné dans `data/fortios-data.generated.json` (les chemins déjà récupérés via l'app ne sont pas perdus) et un rapport est écrit dans `docs/last_report.md`.
 
