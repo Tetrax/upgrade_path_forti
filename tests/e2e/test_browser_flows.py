@@ -591,6 +591,55 @@ def test_a_range_taken_from_the_psirt_page_is_matched_and_stated(app_page, forti
     )
 
 
+def test_cve_sources_and_the_nvd_crosscheck_report_are_stated(app_page, fortios_server):
+    """A CVE confirmed by CVE.org and NVD says so; a range from its CVE.org record flags the
+    version; what NVD alone states is only listed in the coverage report, never on the path."""
+    catalog_path = fortios_server.data_dir / "fortios-data.generated.json"
+    catalog = __import__("json").loads(catalog_path.read_text(encoding="utf-8"))
+    catalog["cves"].append({
+        "id": "CVE-2026-71408", "advisoryId": "FG-IR-26-162", "title": "Train missing from PSIRT",
+        "severity": "high", "cvssScore": 7.5, "publishedAt": "2026-09-08",
+        "url": "https://fortiguard.fortinet.com/psirt/FG-IR-26-162",
+        "affected": [
+            {"product": "fortigate-fortios", "models": [], "branch": "6.2", "from": "6.2.0", "to": "6.2.4", "source": "cve-org"},
+            {"product": "fortigate-fortios", "models": [], "branch": "7.2", "from": None, "to": None},
+        ],
+        "cveOrg": "confirmed", "nvd": "confirmed",
+    })
+    catalog["cveCoverage"] = {
+        "continuousSince": "2026-10-13T05:00:00Z", "lastCheckAt": "2026-10-13T05:00:00Z", "rssSeenIds": [], "gaps": [],
+        "crossCheck": {
+            "checkedAt": "2026-10-20T05:00:00Z", "crossTrainIgnored": 3,
+            "missingCount": 1,
+            "missing": [{"id": "CVE-2023-42790", "published": "2024-03-12", "severity": "high", "products": ["fortigate-fortios"]}],
+            "nvdOnlyCount": 1,
+            "nvdOnly": [{"id": "CVE-2026-71408", "versionCount": 1, "versions": ["fortigate-fortios 6.0.9"]}],
+        },
+    }
+    catalog_path.write_text(__import__("json").dumps(catalog), encoding="utf-8")
+    app_page.reload()
+
+    fortios_server.set_mock_path_response(["6.2.4", "7.0.14", "8.0.0"])
+    select_path(app_page, current="6.2.4", target="8.0.0")
+    app_page.click("#goButton")
+
+    current_row = app_page.locator("table").first.locator("tbody tr").first
+    expect(current_row).to_contain_text("CVE-2026-71408")
+    expect(current_row).not_to_contain_text("CVE-2023-42790")
+    card = app_page.locator(".callout", has_text="Train missing from PSIRT").first
+    expect(card).to_contain_text("Sources : PSIRT · CVE.org · NVD")
+    coverage = app_page.locator(".cve-coverage")
+    expect(coverage).to_contain_text("1 CVE élargie(s) d'après leur fiche CVE.org")
+    report = app_page.locator("details.cve-crosscheck")
+    expect(report.locator("summary")).to_contain_text(
+        "1 CVE connue(s) de NVD seulement, 1 CVE avec d'autres versions selon NVD — non affichées"
+    )
+    report.locator("summary").click()
+    link = report.locator("a", has_text="CVE-2023-42790")
+    expect(link).to_have_attribute("href", "https://nvd.nist.gov/vuln/detail/CVE-2023-42790")
+    expect(report).to_contain_text("fortigate-fortios 6.0.9")
+
+
 # 5 & 6. Fortinet unavailable -> fallback to cached path, explicit cache banner ----------
 
 def test_fortinet_unavailable_falls_back_to_cached_path_with_banner(app_page, fortios_server):

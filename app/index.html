@@ -155,6 +155,7 @@
       "compat-matrix": "Matrice de compatibilité EMS/FortiClient",
       "cisa-kev": "CISA KEV (exploitation active)",
       "cve-psirt-history": "Historique CVE PSIRT (hebdomadaire)",
+      "cve-crosscheck": "Contre-vérification CVE (CVE.org, NVD)",
       "daily-run": "Collecte quotidienne (global)"
     };
     // A weekly source is only stale past a week (plus a day of slack), not after 48h.
@@ -928,7 +929,7 @@
           ? `${range.branch} : ${range.from || "début"} → ${range.to || "dernière connue"}`
           : `${range.branch} (toutes versions)`;
         const models = Array.isArray(range.models) && range.models.length ? ` — modèles : ${range.models.join(", ")}` : "";
-        const source = range.source === "psirt-page" ? " — d'après la page PSIRT, plus large que l'export Fortinet" : "";
+        const source = CVE_RANGE_SOURCE_LABELS[range.source] || "";
         return `<li>${escapeHtml(productLabel)} · ${escapeHtml(scope)}${escapeHtml(models)}${escapeHtml(source)}</li>`;
       }).join("");
       return `
@@ -937,7 +938,7 @@
             <h4 class="callout-title">${escapeHtml(cve.title)}</h4>
             <span class="badge ${cveBadgeClass(cve.severity)}">${escapeHtml(cve.id)} · ${escapeHtml(cveSeverityLabel(cve.severity))}${scoreLabel}</span>
           </div>
-          <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a></p>
+          <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a>${cveSourcesLabel(cve) ? ` <span class="muted">· ${escapeHtml(cveSourcesLabel(cve))}</span>` : ""}</p>
           ${affectedItems ? `<ul class="cve-affected-list">${affectedItems}</ul>` : ""}
         </article>
       `;
@@ -1627,6 +1628,22 @@
       return Boolean(cve && cve.kev && typeof cve.kev === "object");
     }
 
+    // Which references state this CVE on a tracked product (collector --cve-crosscheck): PSIRT
+    // always, CVE.org (Fortinet's CVE record) and NVD when they confirm it. Absent marks = never
+    // cross-checked, nothing is claimed.
+    function cveSourcesLabel(cve) {
+      const sources = ["PSIRT"];
+      if (cve.cveOrg === "confirmed") sources.push("CVE.org");
+      if (cve.nvd === "confirmed") sources.push("NVD");
+      if (!("cveOrg" in cve) && !("nvd" in cve)) return "";
+      return `Sources : ${sources.join(" · ")}`;
+    }
+
+    const CVE_RANGE_SOURCE_LABELS = {
+      "psirt-page": " — d'après la page PSIRT, plus large que l'export Fortinet",
+      "cve-org": " — d'après la fiche CVE.org de Fortinet, plus large que le PSIRT"
+    };
+
     function kevLabel(cve) {
       const added = cve.kev.dateAdded ? `, ajoutée le ${formatDate(cve.kev.dateAdded)}` : "";
       const ransomware = cve.kev.ransomware ? " — rançongiciel" : "";
@@ -1657,6 +1674,8 @@
       // narrower (fortios_watch.merge_psirt_page_ranges()).
       const pageCompleted = state.cves.filter(cve => (cve.affected || []).some(range => range.source === "psirt-page")).length;
       if (pageCompleted) parts.push(`${pageCompleted} CVE élargie(s) d'après la page PSIRT, plus large que l'export Fortinet`);
+      const cveOrgCompleted = state.cves.filter(cve => (cve.affected || []).some(range => range.source === "cve-org")).length;
+      if (cveOrgCompleted) parts.push(`${cveOrgCompleted} CVE élargie(s) d'après leur fiche CVE.org`);
       let text = historyComplete
         ? `Couverture : ${parts.join(" ; ")}.`
         : `Couverture : ${parts.join(" ; ")}. Un bulletin plus ancien peut manquer : « Aucune » n'est pas une garantie.`;
@@ -1671,7 +1690,36 @@
       const gapHtml = lastGap && lastGap.detectedAt
         ? ` <span class="cve-coverage-gap">⚠ Trou possible dans le flux détecté le ${escapeHtml(formatDate(lastGap.detectedAt))} : des bulletins ont pu être manqués.</span>`
         : "";
-      return `<p class="cve-coverage muted">${escapeHtml(text)}${gapHtml}${unresolvedHtml}</p>`;
+      return `<p class="cve-coverage muted">${escapeHtml(text)}${gapHtml}${unresolvedHtml}</p>${renderCveCrossCheck(coverage.crossCheck)}`;
+    }
+
+    // NVD cross-check report (collector apply_nvd_crosscheck()): what NVD alone states is never
+    // shown on a path, only listed here for an engineer to check against the Fortinet advisory.
+    function renderCveCrossCheck(report) {
+      if (!report || typeof report !== "object" || !report.checkedAt) return "";
+      const missing = Array.isArray(report.missing) ? report.missing.filter(item => item && item.id) : [];
+      const nvdOnly = Array.isArray(report.nvdOnly) ? report.nvdOnly.filter(item => item && item.id) : [];
+      const missingCount = Number(report.missingCount) || 0;
+      const nvdOnlyCount = Number(report.nvdOnlyCount) || 0;
+      const nvdLink = id => `<a href="https://nvd.nist.gov/vuln/detail/${encodeURIComponent(id)}" target="_blank" rel="noopener noreferrer">${escapeHtml(id)}</a>`;
+      if (!missingCount && !nvdOnlyCount) {
+        return `<p class="cve-crosscheck muted">Contre-vérification NVD du ${escapeHtml(formatDate(report.checkedAt))} : aucun écart avec les sources Fortinet.</p>`;
+      }
+      const missingItems = missing.map(item =>
+        `<li>${nvdLink(item.id)} · ${escapeHtml(cveSeverityLabel(item.severity))}${item.published ? ` · publiée le ${escapeHtml(formatDate(item.published))}` : ""}${Array.isArray(item.products) ? ` · ${escapeHtml(item.products.map(id => state.products.find(product => product.id === id)?.label || id).join(", "))}` : ""}</li>`
+      ).join("");
+      const nvdOnlyItems = nvdOnly.map(item =>
+        `<li>${nvdLink(item.id)} · ${escapeHtml(String(item.versionCount || 0))} version(s) : ${escapeHtml((item.versions || []).join(", "))}${(item.versionCount || 0) > (item.versions || []).length ? "…" : ""}</li>`
+      ).join("");
+      return `
+        <details class="cve-crosscheck">
+          <summary class="muted">Contre-vérification NVD du ${escapeHtml(formatDate(report.checkedAt))} : ${missingCount} CVE connue(s) de NVD seulement, ${nvdOnlyCount} CVE avec d'autres versions selon NVD — non affichées, à vérifier sur la fiche Fortinet</summary>
+          ${missingItems ? `<p class="muted">CVE absentes des sources Fortinet :</p><ul>${missingItems}</ul>` : ""}
+          ${missingCount > missing.length ? `<p class="muted">… et ${missingCount - missing.length} autre(s).</p>` : ""}
+          ${nvdOnlyItems ? `<p class="muted">Versions signalées par NVD seul :</p><ul>${nvdOnlyItems}</ul>` : ""}
+          ${nvdOnlyCount > nvdOnly.length ? `<p class="muted">… et ${nvdOnlyCount - nvdOnly.length} autre(s).</p>` : ""}
+        </details>
+      `;
     }
 
     function renderCveCallouts(cves, path) {
@@ -1709,7 +1757,7 @@
               : `<span class="badge danger">⚠ Toujours vulnérable après ce chemin</span>`}
             ${isKev(cve) ? `<span class="badge kev">⚠ ${escapeHtml(kevLabel(cve))}</span>` : ""}
           </div>
-          <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a></p>
+          <p><a href="${escapeAttr(cve.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(cve.advisoryId)} — fiche PSIRT Fortinet ↗</a>${cveSourcesLabel(cve) ? ` <span class="muted">· ${escapeHtml(cveSourcesLabel(cve))}</span>` : ""}</p>
         </article>
       `;
     }

@@ -447,7 +447,7 @@ class WeeklySchedulerTests(unittest.TestCase):
             self.assertEqual(refresh.run_cve_history_refresh(root=Path(tmp), runner=runner, python="py"), 0)
         self.assertEqual(
             calls,
-            [["py", "scripts/fortios_watch.py", "--base", "data/fortios-data.generated.json", "--cve-backfill"]],
+            [["py", "scripts/fortios_watch.py", "--base", "data/fortios-data.generated.json", "--cve-backfill", "--cve-crosscheck"]],
         )
 
     def test_never_checked_until_a_history_record_exists(self) -> None:

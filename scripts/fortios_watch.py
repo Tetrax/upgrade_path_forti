@@ -419,6 +419,9 @@ SOURCE_CISA_KEV = "cisa-kev"
 # The weekly --cve-backfill (full PSIRT history check), kept apart from the daily RSS collection
 # so neither can reset the other's failure count or recovery alert.
 SOURCE_CVE_HISTORY = "cve-psirt-history"
+# CVE.org and NVD cross-check of the PSIRT data (--cve-crosscheck), its own record so an outage of
+# either reference never turns the PSIRT collection itself orange.
+SOURCE_CVE_CROSSCHECK = "cve-crosscheck"
 SOURCE_DAILY_RUN = "daily-run"
 
 ALL_HEALTH_SOURCES = (
@@ -432,6 +435,7 @@ ALL_HEALTH_SOURCES = (
     SOURCE_COMPAT_MATRIX,
     SOURCE_CISA_KEV,
     SOURCE_CVE_HISTORY,
+    SOURCE_CVE_CROSSCHECK,
     SOURCE_DAILY_RUN,
 )
 
@@ -446,6 +450,7 @@ HEALTH_SOURCE_LABELS = {
     SOURCE_COMPAT_MATRIX: "Matrice de compatibilité EMS/FortiClient",
     SOURCE_CISA_KEV: "CISA KEV (exploitation active)",
     SOURCE_CVE_HISTORY: "Historique CVE PSIRT (hebdomadaire)",
+    SOURCE_CVE_CROSSCHECK: "Contre-vérification CVE (CVE.org, NVD)",
 }
 
 DEFAULT_HEALTH_PATH = Path("data/fortios-health.json")
@@ -2237,6 +2242,8 @@ def update_cve_coverage(
     }
     if isinstance(prev.get("history"), dict):
         coverage["history"] = prev["history"]  # owned by the backfill (see commit below)
+    if isinstance(prev.get("crossCheck"), dict):
+        coverage["crossCheck"] = prev["crossCheck"]  # owned by the NVD cross-check (commit below)
     return coverage, gap_detected
 
 
@@ -3070,15 +3077,20 @@ def _range_covers(outer: dict[str, Any], start: str, end: str | None) -> bool:
     )
 
 
-def merge_psirt_page_ranges(entry: dict[str, Any], page_ranges: list[dict[str, Any]]) -> int:
+def merge_psirt_page_ranges(
+    entry: dict[str, Any], page_ranges: list[dict[str, Any]], source: str = PSIRT_PAGE_SOURCE
+) -> int:
     """Add to `entry` the page claims its export-derived ranges do not already cover.
+
+    Also used for the CVE.org record (`source` = "cve-org"), which only ever states bounded
+    ranges: the same precedences apply.
 
     A train the export never mentions is taken from the page as stated. On a train the export
     does describe, a page "all versions" claim adds nothing: the export is the precise one there
     (exact versions enumerated by a CVRF, a fix declared after the page kept its wording --
     FG-IR-22-255, 6.2.13). A bounded page claim is explicit and is added wherever the export
     does not cover it, including a version the export excludes. Added ranges carry
-    "source": "psirt-page". Returns the number of ranges added.
+    "source": `source`. Returns the number of ranges added.
     """
     added = 0
     for page_range in page_ranges:
@@ -3097,7 +3109,7 @@ def merge_psirt_page_ranges(entry: dict[str, Any], page_ranges: list[dict[str, A
             for existing in same_train
         ):
             continue
-        entry["affected"].append({**page_range, "source": PSIRT_PAGE_SOURCE})
+        entry["affected"].append({**page_range, "source": source})
         added += 1
     if added:
         entry["affected"] = sorted(entry["affected"], key=_csaf_range_sort_key)
@@ -3150,6 +3162,454 @@ def _csaf_cve_ids(doc: dict[str, Any]) -> set[str]:
 
 def _cvrf_cve_ids(raw_xml: str) -> set[str]:
     return set(re.findall(r"<(?:\w+:)?CVE>\s*(CVE-\d+-\d+)\s*</(?:\w+:)?CVE>", raw_xml))
+
+
+# Cross-check of the PSIRT data with the two other public references (`--cve-crosscheck`).
+# Audit of 2026-10-20 (331 CVEs, version by version): the CVE.org record, written by Fortinet as
+# CNA but published through another channel than its CSAF, filled real PSIRT gaps on 20 CVEs
+# (CVE-2024-26013: no FortiOS range at all in the CSAF; CVE-2026-71408: only the maintained
+# trains); NVD, an independent analysis, agrees on 85 % of the versions but two thirds of what
+# it alone reports comes from ranges spanning several trains ("6.4.0 -> 7.0.16"). Hence: CVE.org
+# widens what is shown, like the advisory page; NVD only confirms and feeds the coverage report,
+# a version NVD alone reports is never shown.
+CVE_ORG_SOURCE = "cve-org"
+CVE_ORG_API_URL = "https://cveawg.mitre.org/api/cve/{cve_id}"
+NVD_FORTINET_URL = (
+    "https://services.nvd.nist.gov/rest/json/cves/2.0"
+    "?sourceIdentifier=psirt%40fortinet.com&resultsPerPage={per_page}&startIndex={start}"
+)
+NVD_PAGE_SIZE = 2000
+# Fortinet had ~1970 CVEs in NVD on 2026-10-20: far fewer is a filtered or substituted answer.
+NVD_MIN_FORTINET_CVES = 1000
+# NVD asks clients without an API key for ~6 s between requests.
+NVD_PAGE_DELAY_SECONDS = 6
+CVE_ORG_STATUS_CONFIRMED = "confirmed"  # structured ranges for a tracked product
+CVE_ORG_STATUS_UNSTRUCTURED = "unstructured"  # names a tracked product in free text only
+CVE_ORG_STATUS_ABSENT = "absent"  # no record, or no tracked product in it
+NVD_STATUS_CONFIRMED = "confirmed"
+NVD_STATUS_ABSENT = "absent"
+# Report lists stay bounded in the catalogue; the counts stay exact.
+CVE_CROSSCHECK_MAX_LISTED = 200
+CVE_CROSSCHECK_MAX_VERSIONS = 8
+_CVE_ORG_PRODUCTS = {name.lower(): name for name in CVE_PRODUCT_MAP}
+# CPE product names NVD uses for the tracked products, and its FortiClient target platforms.
+NVD_CPE_PRODUCTS: dict[str, str] = {
+    "fortios": DEFAULT_PRODUCT_ID,
+    "fortimanager": "fortimanager",
+    "fortianalyzer": "fortianalyzer",
+    "forticlient": FORTICLIENT_PRODUCT_ID,
+    "forticlient_enterprise_management_server": FORTICLIENT_EMS_PRODUCT_ID,
+    "forticlient_endpoint_management_server": FORTICLIENT_EMS_PRODUCT_ID,
+    "forticlientems": FORTICLIENT_EMS_PRODUCT_ID,
+}
+NVD_CPE_PLATFORMS = {"windows": "windows", "mac_os": "macos", "mac_os_x": "macos", "macos": "macos", "linux": "linux"}
+_EXACT_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+
+
+class NvdFeedError(RuntimeError):
+    """The NVD answer cannot be trusted as Fortinet's complete CVE list."""
+
+
+def _cve_org_product(name: Any) -> str | None:
+    compact = re.sub(r"^Fortinet\s+", "", str(name or "").strip()).replace(" ", "").lower()
+    return _CVE_ORG_PRODUCTS.get(compact)
+
+
+def _names_tracked_product(name: Any) -> bool:
+    """A free-text product list naming a tracked product ("Fortinet FortiOS, FortiProxy")."""
+    compact = str(name or "").lower().replace(" ", "")
+    for product in ("fortios", "fortimanager", "fortianalyzer", "forticlient"):
+        for match in re.finditer(product, compact):
+            following = compact[match.end() : match.end() + 8]
+            # "FortiManager Cloud", "FortiOS-6K7K", "FortiAnalyzer-BigData", "FortiClientiOS"...
+            if not re.match(r"(cloud|-6k7k|-bigdata|ios|android)", following):
+                return True
+    return False
+
+
+def _cve_org_range(entry: dict[str, Any]) -> tuple[str, str] | None:
+    """(from, to) of one structured "affected" version entry, None when not exactly readable."""
+    start = str(entry.get("version") or "").strip()
+    if not _EXACT_VERSION_RE.fullmatch(start):
+        return None
+    if entry.get("lessThanOrEqual") is not None:
+        end = str(entry["lessThanOrEqual"]).strip()
+    elif entry.get("lessThan") is not None:
+        bound = str(entry["lessThan"]).strip()
+        if not _EXACT_VERSION_RE.fullmatch(bound):
+            return None
+        major, minor, patch = (int(part) for part in bound.split("."))
+        if patch == 0:
+            return None  # "< 7.4.0" says nothing exact about the 7.2 train it ends
+        end = f"{major}.{minor}.{patch - 1}"
+    else:
+        end = start
+    if not _EXACT_VERSION_RE.fullmatch(end) or csaf_branch(start) != csaf_branch(end):
+        return None
+    if version_key(start) > version_key(end):
+        return None
+    return start, end
+
+
+def parse_cve_org_record(doc: Any) -> tuple[str, list[dict[str, Any]]]:
+    """(status, ranges) of the tracked products in one CVE.org record (CVE JSON 5).
+
+    Only the CNA container (Fortinet's own statement) is read. A product entry is used only when
+    it names exactly one tracked product and each affected version is exact or an exact range
+    within one train; free-text records ("6.0.10 and below, 6.2.2 and below", common before
+    2022) are reported as unstructured, never interpreted.
+    """
+    containers = doc.get("containers") if isinstance(doc, dict) else None
+    cna = containers.get("cna") if isinstance(containers, dict) else None
+    if not isinstance(cna, dict):
+        return CVE_ORG_STATUS_ABSENT, []
+    ranges: dict[tuple[Any, ...], dict[str, Any]] = {}
+    unstructured = False
+    for product_entry in cna.get("affected") or []:
+        if not isinstance(product_entry, dict):
+            continue
+        product_name = _cve_org_product(product_entry.get("product"))
+        if product_name is None:
+            unstructured = unstructured or _names_tracked_product(product_entry.get("product"))
+            continue
+        product_id, model_id = CVE_PRODUCT_MAP[product_name]
+        for version_entry in product_entry.get("versions") or []:
+            if not isinstance(version_entry, dict) or version_entry.get("status") != "affected":
+                continue
+            bounds = _cve_org_range(version_entry)
+            if bounds is None:
+                unstructured = True
+                continue
+            key = (product_id, model_id, *bounds)
+            ranges[key] = {
+                "product": product_id,
+                "models": [model_id] if model_id else [],
+                "branch": csaf_branch(bounds[0]),
+                "from": bounds[0],
+                "to": bounds[1],
+            }
+    if ranges:
+        return CVE_ORG_STATUS_CONFIRMED, sorted(ranges.values(), key=_csaf_range_sort_key)
+    return (CVE_ORG_STATUS_UNSTRUCTURED if unstructured else CVE_ORG_STATUS_ABSENT), []
+
+
+def fetch_cve_org_record(cve_id: str, timeout: int) -> Any:
+    """The CVE.org record, or None when CVE.org has none (404). Network errors raise."""
+    request = urllib.request.Request(
+        CVE_ORG_API_URL.format(cve_id=urllib.parse.quote(cve_id)),
+        headers={"User-Agent": "sns-fortios-upgrade-watch/0.1", "Accept": "application/json"},
+    )
+    try:
+        return json.loads(read_url_with_retry(request, timeout))
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def apply_cve_org_crosscheck(
+    entries: list[dict[str, Any]],
+    timeout: int,
+    fetch: Callable[[str, int], Any] | None = None,
+    *,
+    second_opinion: Callable[[str], set[tuple[str, str | None]]] | None = None,
+) -> list[str]:
+    """Widen each entry with its CVE.org record; returns the CVE ids CVE.org could not answer.
+
+    Per CVE, so no attribution problem across an advisory. A train CVE.org adds to a product the
+    PSIRT already names is taken as is (CVE-2026-71408: PSIRT lists the maintained trains only).
+    A product the PSIRT does not name at all is taken only if `second_opinion(cve_id)` (the
+    products NVD states for that CVE) also names it: CVE-2024-26013's FortiOS is confirmed, while
+    CVE-2023-42791's FortiAnalyzer -- in the structured record only, not in its own description,
+    the advisory page nor NVD -- is not shown. An entry CVE.org could not answer keeps no
+    "cveOrg" key: the caller restores what the catalogue already holds for it
+    (restore_cve_org_crosscheck()), so an outage never removes a range shown before.
+    """
+    fetch = fetch or fetch_cve_org_record
+    failed: list[str] = []
+    for entry in entries:
+        try:
+            status, ranges = parse_cve_org_record(fetch(entry["id"], timeout))
+        except Exception:  # noqa: BLE001 -- one record must never fail the advisory.
+            failed.append(entry["id"])
+            continue
+        named = {_cve_product_key(item) for item in entry["affected"]}
+        confirmed = second_opinion(entry["id"]) if second_opinion else set()
+        kept = [
+            item
+            for item in ranges
+            if _cve_product_key(item) in named
+            or _cve_product_key(item) in confirmed
+            or (item["product"], None) in confirmed
+        ]
+        # "confirmed" only when the record speaks about a product actually shown.
+        if status == CVE_ORG_STATUS_CONFIRMED and not kept:
+            status = CVE_ORG_STATUS_ABSENT
+        entry["cveOrg"] = status
+        if kept:
+            merge_psirt_page_ranges(entry, kept, CVE_ORG_SOURCE)
+    return failed
+
+
+def _cve_product_key(item: dict[str, Any]) -> tuple[str, str | None]:
+    """(product, FortiClient platform): FortiClientMac and FortiClientWindows are distinct
+    Fortinet products for the "product the PSIRT does not name" rule."""
+    if item.get("product") == FORTICLIENT_PRODUCT_ID:
+        models = list(item.get("models") or [])
+        return FORTICLIENT_PRODUCT_ID, models[0] if len(models) == 1 else None
+    return str(item.get("product")), None
+
+
+def nvd_second_opinion(
+    nvd_by_id: dict[str, dict[str, Any]] | None, previous_by_id: dict[str, dict[str, Any]]
+) -> Callable[[str], set[tuple[str, str | None]]]:
+    """Products a CVE.org-only product addition may use: those NVD states for the CVE or, when
+    NVD could not be read this run, those such an addition already brought to the catalogue."""
+
+    def products(cve_id: str) -> set[tuple[str, str | None]]:
+        if nvd_by_id is not None:
+            record = nvd_by_id.get(str(cve_id).upper())
+            # A FortiClient CPE without target platform covers every platform: (product, None).
+            return {(claim["product"], claim.get("platform")) for claim in record["claims"]} if record else set()
+        previous = previous_by_id.get(cve_id) or {}
+        return {
+            _cve_product_key(item)
+            for item in previous.get("affected") or []
+            if isinstance(item, dict) and item.get("source") == CVE_ORG_SOURCE
+        }
+
+    return products
+
+
+def restore_cve_org_crosscheck(entry: dict[str, Any], previous: dict[str, Any] | None) -> None:
+    """Give an entry CVE.org could not answer this run what the catalogue held from it."""
+    if not isinstance(previous, dict) or "cveOrg" not in previous:
+        return
+    entry["cveOrg"] = previous["cveOrg"]
+    kept = [
+        dict(item)
+        for item in previous.get("affected") or []
+        if isinstance(item, dict) and item.get("source") == CVE_ORG_SOURCE
+    ]
+    if kept:
+        merge_psirt_page_ranges(
+            entry, [{key: value for key, value in item.items() if key != "source"} for item in kept],
+            CVE_ORG_SOURCE,
+        )
+
+
+def _nvd_claims(cve: dict[str, Any]) -> list[dict[str, Any]]:
+    claims = []
+    for configuration in cve.get("configurations") or []:
+        for node in configuration.get("nodes") or []:
+            for match in node.get("cpeMatch") or []:
+                if not match.get("vulnerable"):
+                    continue
+                parts = str(match.get("criteria") or "").split(":")
+                if len(parts) < 11 or parts[4] not in NVD_CPE_PRODUCTS:
+                    continue
+                product = NVD_CPE_PRODUCTS[parts[4]]
+                platform = None
+                if product == FORTICLIENT_PRODUCT_ID and parts[10] not in ("*", "-"):
+                    platform = NVD_CPE_PLATFORMS.get(parts[10])
+                    if platform is None:
+                        continue  # iOS, Android...: untracked FortiClient platforms
+                claims.append(
+                    {
+                        "product": product,
+                        "platform": platform,
+                        "version": parts[5] if parts[5] not in ("*", "-") else None,
+                        **{
+                            key: match[key]
+                            for key in (
+                                "versionStartIncluding",
+                                "versionStartExcluding",
+                                "versionEndIncluding",
+                                "versionEndExcluding",
+                            )
+                            if match.get(key)
+                        },
+                    }
+                )
+    return claims
+
+
+def parse_nvd_fortinet(pages: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """{cve id: {"claims", "published", "severity"}} for the tracked products, from NVD pages."""
+    total = pages[0].get("totalResults") if pages else None
+    vulnerabilities = [item for page in pages for item in page.get("vulnerabilities") or []]
+    if not isinstance(total, int) or total < NVD_MIN_FORTINET_CVES or len(vulnerabilities) < total:
+        raise NvdFeedError(
+            f"liste NVD Fortinet incomplète ({len(vulnerabilities)} sur {total!r})"
+        )
+    tracked: dict[str, dict[str, Any]] = {}
+    for item in vulnerabilities:
+        cve = item.get("cve") if isinstance(item, dict) else None
+        if not isinstance(cve, dict) or not cve.get("id"):
+            continue
+        claims = _nvd_claims(cve)
+        if not claims:
+            continue
+        severity = None
+        for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV40"):
+            for metric in (cve.get("metrics") or {}).get(key) or []:
+                if metric.get("type") == "Primary":
+                    severity = str(metric.get("cvssData", {}).get("baseSeverity") or "").lower() or None
+                    break
+            if severity:
+                break
+        tracked[str(cve["id"]).upper()] = {
+            "claims": claims,
+            "published": str(cve.get("published") or "")[:10],
+            "severity": severity,
+        }
+    return tracked
+
+
+def fetch_nvd_fortinet(timeout: int) -> dict[str, dict[str, Any]]:
+    """Every Fortinet-assigned CVE NVD knows (one request per 2000), kept for tracked products."""
+    pages: list[dict[str, Any]] = []
+    start = 0
+    while True:
+        request = urllib.request.Request(
+            NVD_FORTINET_URL.format(per_page=NVD_PAGE_SIZE, start=start),
+            headers={"User-Agent": "sns-fortios-upgrade-watch/0.1"},
+        )
+        page = json.loads(read_url_with_retry(request, timeout))
+        pages.append(page)
+        start += NVD_PAGE_SIZE
+        if start >= int(page.get("totalResults") or 0):
+            break
+        time.sleep(NVD_PAGE_DELAY_SECONDS)
+    return parse_nvd_fortinet(pages)
+
+
+def _nvd_claim_single_train(claim: dict[str, Any]) -> bool:
+    """An exact version, or both bounds within one train. "<= 6.2.0", ">= 7.0.0", "*" alone or
+    "6.4.0 -> 7.0.16" reach every older (or newer) train: too coarse to point at versions."""
+    if claim.get("version"):
+        return True
+    low = claim.get("versionStartIncluding") or claim.get("versionStartExcluding")
+    high = claim.get("versionEndIncluding") or claim.get("versionEndExcluding")
+    return bool(low and high) and csaf_branch(low) == csaf_branch(high)
+
+
+def nvd_claim_matches(claim: dict[str, Any], product: str, platform: str | None, version: str) -> bool:
+    if claim["product"] != product or (claim.get("platform") and claim["platform"] != platform):
+        return False
+    try:
+        key = version_key(version)
+        if claim.get("version"):
+            return version_key(claim["version"]) == key
+        if claim.get("versionStartIncluding") and key < version_key(claim["versionStartIncluding"]):
+            return False
+        if claim.get("versionStartExcluding") and key <= version_key(claim["versionStartExcluding"]):
+            return False
+        if claim.get("versionEndIncluding") and key > version_key(claim["versionEndIncluding"]):
+            return False
+        if claim.get("versionEndExcluding") and key >= version_key(claim["versionEndExcluding"]):
+            return False
+    except ValueError:
+        return False  # "6.0.0-b1234"-style CPE versions: not comparable, not claimed here
+    return True
+
+
+def cve_shows_version(cve: dict[str, Any], product: str, platform: str | None, version: str) -> bool:
+    """Whether the interface shows `cve` on this version (same rule as cveMatchesVersion())."""
+    for item in cve.get("affected") or []:
+        if not isinstance(item, dict) or item.get("product") != product:
+            continue
+        models = [model for model in item.get("models") or [] if model != FORTICLIENT_EMS_MODEL_ID]
+        # FortiClient ranges are per platform; a FortiOS range restricted to some models
+        # (FGT_VM64...) is shown for those models, so the version counts as shown.
+        if models and platform is not None and platform not in models:
+            continue
+        if csaf_branch(version) != item.get("branch") or version in (item.get("excluded") or []):
+            continue
+        if item.get("from") and version_key(version) < version_key(item["from"]):
+            continue
+        if item.get("to") and version_key(version) > version_key(item["to"]):
+            continue
+        return True
+    return False
+
+
+def _catalogue_versions(state: dict[str, Any]) -> list[tuple[str, str | None, str]]:
+    versions: set[tuple[str, str | None, str]] = set()
+    for product in state.get("products") or []:
+        for model in product.get("models") or []:
+            platform = model.get("id") if product.get("id") == FORTICLIENT_PRODUCT_ID else None
+            for firmware in model.get("firmwares") or []:
+                version = str(firmware.get("version") or "")
+                if _EXACT_VERSION_RE.fullmatch(version):
+                    versions.add((product.get("id"), platform, version))
+    return sorted(versions)
+
+
+def apply_nvd_crosscheck(
+    state: dict[str, Any], nvd_by_id: dict[str, dict[str, Any]], now: str
+) -> dict[str, Any]:
+    """Mark each catalogued CVE confirmed (or not) by NVD; return the coverage report.
+
+    Nothing NVD alone states is shown. The report lists, against the catalogue's real versions:
+    CVEs whose NVD ranges reach versions no Fortinet source declares affected ("nvdOnly"), and
+    NVD CVEs of a tracked product missing from the catalogue ("missing"). NVD ranges spanning
+    several trains ("6.4.0 -> 7.0.16") are too coarse to point at versions: only counted.
+    """
+    versions = _catalogue_versions(state)
+    catalogued = set()
+    nvd_only: list[dict[str, Any]] = []
+    cross_train = 0
+    for cve in state.get("cves") or []:
+        cve_id = str(cve.get("id") or "").upper()
+        catalogued.add(cve_id)
+        record = nvd_by_id.get(cve_id)
+        cve["nvd"] = NVD_STATUS_CONFIRMED if record else NVD_STATUS_ABSENT
+        if not record:
+            continue
+        usable = [claim for claim in record["claims"] if _nvd_claim_single_train(claim)]
+        cross_train += len(record["claims"]) - len(usable)
+        only = sorted(
+            {
+                (product, platform, version)
+                for product, platform, version in versions
+                if any(nvd_claim_matches(claim, product, platform, version) for claim in usable)
+                and not cve_shows_version(cve, product, platform, version)
+            }
+        )
+        if only:
+            labels = [f"{product}{'/' + platform if platform else ''} {version}" for product, platform, version in only]
+            nvd_only.append(
+                {"id": cve_id, "versionCount": len(labels), "versions": labels[:CVE_CROSSCHECK_MAX_VERSIONS]}
+            )
+    missing = []
+    for cve_id, record in nvd_by_id.items():
+        if cve_id in catalogued:
+            continue
+        usable = [claim for claim in record["claims"] if _nvd_claim_single_train(claim)]
+        products = sorted(
+            {
+                product
+                for product, platform, version in versions
+                if any(nvd_claim_matches(claim, product, platform, version) for claim in usable)
+            }
+        )
+        if products:
+            missing.append(
+                {"id": cve_id, "published": record["published"], "severity": record["severity"], "products": products}
+            )
+    severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    missing.sort(key=lambda item: item["published"], reverse=True)
+    missing.sort(key=lambda item: severity_rank.get(item["severity"] or "", 4))
+    nvd_only.sort(key=lambda item: item["id"])
+    return {
+        "checkedAt": now,
+        "nvdOnlyCount": len(nvd_only),
+        "nvdOnly": nvd_only[:CVE_CROSSCHECK_MAX_LISTED],
+        "missingCount": len(missing),
+        "missing": missing[:CVE_CROSSCHECK_MAX_LISTED],
+        "crossTrainIgnored": cross_train,
+    }
 
 
 def collect_cve_entries_for_advisory(
@@ -3216,6 +3676,9 @@ def upsert_cve(state: dict[str, Any], item: dict[str, Any]) -> bool:
             # a re-fetch neither erases it nor counts as an update by itself.
             if "kev" not in item and "kev" in existing:
                 item = {**item, "kev": existing["kev"]}
+            # Same for the NVD confirmation mark, refreshed only by a run that read NVD.
+            if "nvd" not in item and "nvd" in existing:
+                item = {**item, "nvd": existing["nvd"]}
             if existing == item:
                 return False
             state["cves"][index] = item
@@ -3758,6 +4221,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Avec une passe CVE, marquer les CVE du catalogue listées par CISA KEV (exploitation active confirmée).",
     )
     parser.add_argument(
+        "--cve-crosscheck",
+        action="store_true",
+        help=(
+            "Avec une passe CVE, compléter les plages par la fiche CVE.org de chaque CVE collectée "
+            "et contre-vérifier tout le catalogue avec NVD (rapport de couverture, jamais affiché)."
+        ),
+    )
+    parser.add_argument(
         "--cve-backfill",
         action="store_true",
         help="Backfill historique complet des CVE PSIRT via la liste paginée par produit (usage ponctuel, plus lent que --cve-catalog).",
@@ -3826,6 +4297,7 @@ def commit_collected_state(
     kev_by_id: dict[str, dict[str, Any]] | None = None,
     rss_ids: list[str] | None = None,
     history: dict[str, Any] | None = None,
+    nvd_by_id: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Merge this run's collected deltas into the catalogue under the process lock.
 
@@ -3850,6 +4322,9 @@ def commit_collected_state(
       their observations instead of the last one erasing a gap the other detected.
     - ``history``, from a backfill that walked the whole per-product PSIRT listing, replaces the
       record of that verification (``cveCoverage.history``); the RSS record is left as is.
+    - ``nvd_by_id``, when this run read NVD, marks every CVE of the merged result confirmed or
+      not by NVD and replaces the cross-check report (``cveCoverage.crossCheck``), computed on
+      the merged catalogue itself (apply_nvd_crosscheck()).
     """
     with cross_process_lock(output_path):
         latest_from_disk = normalize_state(read_json(output_path, {}))
@@ -3875,6 +4350,9 @@ def commit_collected_state(
             )
         if history is not None:
             final_state["cveCoverage"] = {**(final_state.get("cveCoverage") or {}), "history": history}
+        if nvd_by_id is not None:
+            report = apply_nvd_crosscheck(final_state, nvd_by_id, utc_now())
+            final_state["cveCoverage"] = {**(final_state.get("cveCoverage") or {}), "crossCheck": report}
         final_state["generatedAt"] = utc_now()
         write_json(output_path, final_state)
     return final_state
@@ -4251,6 +4729,14 @@ def main(argv: list[str]) -> int:
     # catalogue already holds (feed unavailable, or not observed by this kind of run).
     kev_by_id: dict[str, dict[str, Any]] | None = None
     rss_ids: list[str] | None = None
+    # NVD's Fortinet CVEs for the final commit (--cve-crosscheck); None = not read this run, the
+    # marks and report already on disk are kept.
+    nvd_by_id: dict[str, dict[str, Any]] | None = None
+    cve_org_failed: list[str] = []
+    cve_org_widened = 0
+    cross_problems: list[str] = []
+    cross_started_at: str | None = None
+    cross_t0 = 0.0
     if (args.cve_catalog or args.cve_backfill or args.cve_reconcile_existing) and not args.skip_network:
         t0 = time.monotonic()
         cve_source = SOURCE_CVE_HISTORY if args.cve_backfill else SOURCE_CVE_PSIRT
@@ -4297,6 +4783,41 @@ def main(argv: list[str]) -> int:
                     for advisory_id in skipped_cves
                     if advisory_id not in retryable or advisory_id in still_skipped
                 ]
+
+            # CVE.org widens each definitive result before anything is staged or committed, so the
+            # silence intent and the commit both carry the cross-checked entries. A record CVE.org
+            # could not give keeps what the catalogue already held from it.
+            if args.cve_crosscheck:
+                cross_t0 = time.monotonic()
+                # Isolated from the PSIRT pass: whatever goes wrong here, the PSIRT results stay
+                # exactly as collected and still reach the silence intent and the commit below.
+                untouched = json.loads(json.dumps(cve_results_by_advisory))
+                try:
+                    cross_started_at = health_mark_running(args.health_output, SOURCE_CVE_CROSSCHECK)
+                    try:
+                        nvd_by_id = fetch_nvd_fortinet(args.timeout)
+                    except Exception as error:  # noqa: BLE001 - recorded below, marks on disk kept.
+                        nvd_by_id = None
+                        cross_problems.append(f"NVD indisponible ({type(error).__name__}: {error})")
+                    previous_by_id = {item.get("id"): item for item in state.get("cves", [])}
+                    second_opinion = nvd_second_opinion(nvd_by_id, previous_by_id)
+                    for entries in cve_results_by_advisory.values():
+                        failed = apply_cve_org_crosscheck(
+                            entries, args.timeout, second_opinion=second_opinion
+                        )
+                        for entry in entries:
+                            if entry["id"] in failed:
+                                restore_cve_org_crosscheck(entry, previous_by_id.get(entry["id"]))
+                            if any(item.get("source") == CVE_ORG_SOURCE for item in entry["affected"]):
+                                cve_org_widened += 1
+                        cve_org_failed.extend(failed)
+                except Exception as error:  # noqa: BLE001 - the PSIRT results are restored.
+                    cve_results_by_advisory = untouched
+                    cve_org_widened = 0
+                    cross_problems.append(
+                        f"contre-vérification interrompue ({type(error).__name__}: {error})"
+                    )
+                    cross_started_at = cross_started_at or utc_now_precise()
 
             # Durable silence intent, written BEFORE the catalogue commit further below: the
             # corrected historical entries are declared "not news" on disk first, so even if this
@@ -4438,8 +4959,29 @@ def main(argv: list[str]) -> int:
                     status=HEALTH_STATUS_ERROR,
                     error=error,
                 )
+        # CVE.org (read above, per CVE) and NVD (one bulk read here) never decide what PSIRT
+        # collected: their own health record, and an outage keeps what the catalogue holds.
+        if args.cve_crosscheck and cross_started_at is not None:
+            problems = list(cross_problems)
+            if cve_org_failed:
+                problems.append(
+                    f"{len(cve_org_failed)} fiche(s) CVE.org non lue(s) : "
+                    + ", ".join(sorted(cve_org_failed)[:10])
+                )
+            record_source(
+                SOURCE_CVE_CROSSCHECK,
+                cross_started_at,
+                cross_t0,
+                status=HEALTH_STATUS_WARNING if problems else HEALTH_STATUS_OK,
+                items=cve_org_widened,
+                error="; ".join(problems) or None,
+            )
     elif args.skip_network:
-        skipped_sources = [SOURCE_CVE_PSIRT] + ([SOURCE_CISA_KEV] if args.kev_catalog else [])
+        skipped_sources = (
+            [SOURCE_CVE_PSIRT]
+            + ([SOURCE_CISA_KEV] if args.kev_catalog else [])
+            + ([SOURCE_CVE_CROSSCHECK] if args.cve_crosscheck else [])
+        )
         for skipped_source in skipped_sources:
             record_source(
                 skipped_source,
@@ -4466,6 +5008,7 @@ def main(argv: list[str]) -> int:
         kev_by_id=kev_by_id,
         rss_ids=rss_ids,
         history=cve_history,
+        nvd_by_id=nvd_by_id,
     )
     coverage = final_state.get("cveCoverage") or {}
     last_gap = (coverage.get("gaps") or [{}])[-1]
