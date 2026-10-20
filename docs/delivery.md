@@ -380,6 +380,37 @@ until its next RSS write (the RSS record it rebuilds does not know the key). Res
 copied before the pass removes everything at once. Notification history, sent keys and outbox are
 untouched.
 
+## Recovery of CVEs missing from the PSIRT export: upgrade and rollback
+
+No migration, no preferences change, no scheduler change: the weekly history pass (Sunday 06:00,
+`--cve-backfill --cve-crosscheck`) also recovers the CVEs NVD places on a catalogued version that
+no PSIRT pass ever collected (`fortios_watch.recover_missing_cves()`). An advisory whose export
+reads exactly is imported as is; for an older one, a CVE is added only when Fortinet's own
+statements (structured CVE.org record, advisory page read in full) and NVD agree on a catalogued
+version. New optional key `"recovered": true` on the CVEs added by such an agreement (those of an
+exact export are ordinary PSIRT entries). Same silence rule as the backfill: an
+advisory published 30 days ago or more joins the notification baseline through
+`pendingCveBaseline`; a more recent one stays notifiable by the next normal pass.
+
+To recover right after the redeploy instead of waiting for Sunday, copy
+`runtime/data/fortios-data.generated.json` and `runtime/data/fortios-notify-history.json` aside,
+then run the weekly pass by hand (`PUID:PGID` of the stack, a few minutes; NVD, then one CVE.org
+record and one PSIRT page per candidate). Never add `--cve-reconcile-existing`: that pass absorbs
+everything it stages, a recent recovered CVE included, and the collector skips the recovery then.
+
+```bash
+docker exec --user 1000:1000 fortiupgrade-scheduler-1 \
+  flock data/fortios-scheduled-refresh.lock \
+  python scripts/fortios_watch.py --base data/fortios-data.generated.json \
+  --cve-backfill --cve-crosscheck
+```
+
+Rollback is image-only. An older image shows a recovered CVE like any other (it ignores the
+`recovered` key) and keeps it: no older pass re-fetches an advisory without exact export. To remove
+them all, restore the catalogue copied before the pass (the advisories imported from an exact
+export carry no mark); their ids stay in the notification baseline, which only silences them.
+Notification history, sent keys and outbox are untouched.
+
 ## Adding the Microsoft 365 transport
 
 The new image adds an optional Graph transport without replacing SMTP, data
