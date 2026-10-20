@@ -353,6 +353,31 @@ Rollback is image-only. An older image matches a `psirt-page` range like any oth
 ignores the key) and drops it when it re-fetches the advisory; restoring the catalogue copied before
 the pass removes all of them at once. Notification history, sent keys and outbox are untouched.
 
+## CVE cross-check with CVE.org and NVD: upgrade and rollback
+
+No migration and no preferences change. The scheduler adds `--cve-crosscheck` to every CVE pass
+(07:00, 07:45 retry, 15:30, weekly history check): each collected CVE also gets its CVE.org record
+(one request per CVE) and the pass reads NVD's Fortinet CVE list once. New optional keys: per CVE
+`cveOrg` and `nvd` marks, ranges with `"source": "cve-org"`, and `cveCoverage.crossCheck` (NVD
+report, never shown on a path). New health source `cve-crosscheck`. Nothing is notified.
+
+Only CVEs re-fetched by a pass get their CVE.org widening; to cross-check the whole catalogue at
+once, run the existing silent maintenance pass with the new flag after the redeploy (same command
+as above, `PUID:PGID` of the stack, ~10 min):
+
+```bash
+docker exec --user 1000:1000 fortiupgrade-scheduler-1 \
+  flock data/fortios-scheduled-refresh.lock \
+  python scripts/fortios_watch.py --base data/fortios-data.generated.json \
+  --cve-catalog --cve-reconcile-existing --cve-crosscheck
+```
+
+Rollback is image-only. An older image ignores the marks and the report, matches a `cve-org` range
+like any other range and drops it when it re-fetches the advisory; it keeps `cveCoverage.crossCheck`
+until its next RSS write (the RSS record it rebuilds does not know the key). Restoring the catalogue
+copied before the pass removes everything at once. Notification history, sent keys and outbox are
+untouched.
+
 ## Adding the Microsoft 365 transport
 
 The new image adds an optional Graph transport without replacing SMTP, data
