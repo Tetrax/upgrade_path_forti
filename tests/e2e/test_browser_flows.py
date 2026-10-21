@@ -640,6 +640,38 @@ def test_cve_sources_and_the_nvd_crosscheck_report_are_stated(app_page, fortios_
     expect(report).to_contain_text("fortigate-fortios 6.0.9")
 
 
+def test_a_recovered_cve_is_shown_and_says_where_it_comes_from(app_page, fortios_server):
+    """A CVE no PSIRT export gives, recovered because Fortinet's CVE record and NVD agree,
+    flags its versions, says it is absent from the export, and is counted apart from widenings."""
+    catalog_path = fortios_server.data_dir / "fortios-data.generated.json"
+    catalog = __import__("json").loads(catalog_path.read_text(encoding="utf-8"))
+    catalog["cves"].append({
+        "id": "CVE-2020-12819", "advisoryId": "FG-IR-20-082", "title": "Heap buffer overflow in IPsec",
+        "severity": "high", "cvssScore": 7.5, "publishedAt": "2020-09-24", "updatedAt": "2020-09-24",
+        "url": "https://fortiguard.fortinet.com/psirt/FG-IR-20-082",
+        "affected": [
+            {"product": "fortigate-fortios", "models": [], "branch": "6.2", "from": "6.2.0", "to": "6.2.4", "source": "cve-org"},
+        ],
+        "recovered": True, "cveOrg": "confirmed", "nvd": "confirmed",
+    })
+    catalog_path.write_text(__import__("json").dumps(catalog), encoding="utf-8")
+    app_page.reload()
+
+    fortios_server.set_mock_path_response(["6.2.4", "7.0.14", "8.0.0"])
+    select_path(app_page, current="6.2.4", target="8.0.0")
+    app_page.click("#goButton")
+
+    current_row = app_page.locator("table").first.locator("tbody tr").first
+    expect(current_row).to_contain_text("CVE-2020-12819")
+    card = app_page.locator(".callout", has_text="Heap buffer overflow in IPsec").first
+    expect(card).to_contain_text(
+        "Sources : page PSIRT · CVE.org · NVD — absente de l'export PSIRT, ajoutée car Fortinet et NVD concordent"
+    )
+    coverage = app_page.locator(".cve-coverage")
+    expect(coverage).to_contain_text("1 CVE absente(s) de l'export PSIRT, ajoutée(s) car Fortinet et NVD concordent")
+    expect(coverage).not_to_contain_text("élargie(s) d'après leur fiche CVE.org")
+
+
 # 5 & 6. Fortinet unavailable -> fallback to cached path, explicit cache banner ----------
 
 def test_fortinet_unavailable_falls_back_to_cached_path_with_banner(app_page, fortios_server):

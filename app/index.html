@@ -929,7 +929,7 @@
           ? `${range.branch} : ${range.from || "début"} → ${range.to || "dernière connue"}`
           : `${range.branch} (toutes versions)`;
         const models = Array.isArray(range.models) && range.models.length ? ` — modèles : ${range.models.join(", ")}` : "";
-        const source = CVE_RANGE_SOURCE_LABELS[range.source] || "";
+        const source = (cve.recovered ? RECOVERED_CVE_RANGE_SOURCE_LABELS : CVE_RANGE_SOURCE_LABELS)[range.source] || "";
         return `<li>${escapeHtml(productLabel)} · ${escapeHtml(scope)}${escapeHtml(models)}${escapeHtml(source)}</li>`;
       }).join("");
       return `
@@ -1630,18 +1630,25 @@
 
     // Which references state this CVE on a tracked product (collector --cve-crosscheck): PSIRT
     // always, CVE.org (Fortinet's CVE record) and NVD when they confirm it. Absent marks = never
-    // cross-checked, nothing is claimed.
+    // cross-checked, nothing is claimed. A recovered CVE (fortios_watch.recover_missing_cves())
+    // has no exact PSIRT export: its versions come from Fortinet's page or CVE record, confirmed
+    // by NVD.
     function cveSourcesLabel(cve) {
-      const sources = ["PSIRT"];
+      const sources = [cve.recovered ? "page PSIRT" : "PSIRT"];
       if (cve.cveOrg === "confirmed") sources.push("CVE.org");
       if (cve.nvd === "confirmed") sources.push("NVD");
       if (!("cveOrg" in cve) && !("nvd" in cve)) return "";
-      return `Sources : ${sources.join(" · ")}`;
+      const recovered = cve.recovered ? " — absente de l'export PSIRT, ajoutée car Fortinet et NVD concordent" : "";
+      return `Sources : ${sources.join(" · ")}${recovered}`;
     }
 
     const CVE_RANGE_SOURCE_LABELS = {
       "psirt-page": " — d'après la page PSIRT, plus large que l'export Fortinet",
       "cve-org": " — d'après la fiche CVE.org de Fortinet, plus large que le PSIRT"
+    };
+    const RECOVERED_CVE_RANGE_SOURCE_LABELS = {
+      "psirt-page": " — d'après la page PSIRT",
+      "cve-org": " — d'après la fiche CVE.org de Fortinet"
     };
 
     function kevLabel(cve) {
@@ -1672,10 +1679,14 @@
       if (coverage.continuousSince) parts.push(`suivi continu du flux vérifié depuis le ${formatDate(coverage.continuousSince)}`);
       // Ranges the collector took from the advisory's public page because Fortinet's export is
       // narrower (fortios_watch.merge_psirt_page_ranges()).
-      const pageCompleted = state.cves.filter(cve => (cve.affected || []).some(range => range.source === "psirt-page")).length;
+      const widened = state.cves.filter(cve => !cve.recovered);
+      const pageCompleted = widened.filter(cve => (cve.affected || []).some(range => range.source === "psirt-page")).length;
       if (pageCompleted) parts.push(`${pageCompleted} CVE élargie(s) d'après la page PSIRT, plus large que l'export Fortinet`);
-      const cveOrgCompleted = state.cves.filter(cve => (cve.affected || []).some(range => range.source === "cve-org")).length;
+      const cveOrgCompleted = widened.filter(cve => (cve.affected || []).some(range => range.source === "cve-org")).length;
       if (cveOrgCompleted) parts.push(`${cveOrgCompleted} CVE élargie(s) d'après leur fiche CVE.org`);
+      // CVEs no PSIRT export gives, added because Fortinet's page or CVE record and NVD agree.
+      const recovered = state.cves.length - widened.length;
+      if (recovered) parts.push(`${recovered} CVE absente(s) de l'export PSIRT, ajoutée(s) car Fortinet et NVD concordent`);
       let text = historyComplete
         ? `Couverture : ${parts.join(" ; ")}.`
         : `Couverture : ${parts.join(" ; ")}. Un bulletin plus ancien peut manquer : « Aucune » n'est pas une garantie.`;
