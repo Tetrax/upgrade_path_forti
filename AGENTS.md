@@ -229,6 +229,8 @@ Toute évolution de ce domaine doit conserver un retour à la paire précédente
 
 ## Données persistantes et déploiement
 
+L’accès HTTPS à `fortiupgrade.valdev.me` est limité par allowlist IP (firewall du fournisseur VPS + allowlist Nginx globale `/etc/nginx/conf.d/00-application-access.conf`). Ne pas élargir cette allowlist ni exposer les ports des conteneurs hors loopback sans décision de Valentin.
+
 Le catalogue, les données acquises, l’état de santé, les préférences, l’état des notifications, les alertes, les certificats et les autres états applicatifs persistants ne sont pas des artefacts jetables du conteneur.
 
 Une reconstruction d’image ou un redéploiement ne doit pas réinitialiser ces données ni repartir silencieusement du catalogue d’exemple.
